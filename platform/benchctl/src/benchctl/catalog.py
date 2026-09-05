@@ -16,8 +16,14 @@ Integrity checks, and the level each one is reported at:
   error   unknown ``class`` -- no defaults could be resolved
   error   duplicate ``id`` -- two files claim the same identifier, scores would
           silently merge
-  error   id prefix disagrees with ``app`` (BENCH-SHOP-0001 must live in an app
-          whose key starts with "shop"), or one prefix used for two apps
+  error   id prefix disagrees with the prefix ``catalog/roadmap.yaml`` declares for
+          the app. The roadmap is the authority: a four-letter prefix cannot be
+          derived from an app name (``admin`` is ``ADMN``, ``legacy`` is ``LEGY``),
+          so nothing here derives one when the roadmap has an answer
+  error   an id claims a prefix the roadmap assigns to a different app
+  warning the app is absent from ``catalog/roadmap.yaml``; the prefix is then checked
+          against a derivation from the app name, and a disagreement is reported as
+          ``id-app-mismatch-unverified`` -- a guess must not be published as a fact
   error   ``requires_prereq`` referencing an unknown id, or a prerequisite cycle
   error   duplicate ``oracle.canary_token`` -- an OOB callback could not be
           attributed to a single vulnerability
@@ -48,6 +54,7 @@ from .routes import normalize_route
 
 __all__ = [
     "Issue",
+    "Roadmap",
     "Entrypoint",
     "Discovery",
     "Oracle",
@@ -152,6 +159,36 @@ class Vuln:
 
 
 @dataclass(frozen=True)
+class Roadmap:
+    """``catalog/roadmap.yaml``: the build plan, and the authority on id prefixes.
+
+    Prefixes are declared per app precisely because they are not derivable
+    (``admin`` -> ``ADMN``, ``legacy`` -> ``LEGY``). The quota and class list are the
+    contribution queue that ``bench catalog stats`` diffs against the catalog.
+    """
+
+    apps: Mapping[str, Mapping[str, Any]]
+
+    def prefix_for(self, app: str) -> str | None:
+        entry = self.apps.get(app)
+        return str(entry["prefix"]) if entry and entry.get("prefix") else None
+
+    def app_for_prefix(self, prefix: str) -> str | None:
+        for app, entry in self.apps.items():
+            if str(entry.get("prefix", "")).upper() == prefix.upper():
+                return app
+        return None
+
+    def quota_for(self, app: str) -> int | None:
+        entry = self.apps.get(app)
+        return int(entry["quota"]) if entry and entry.get("quota") is not None else None
+
+    def classes_for(self, app: str) -> tuple[str, ...]:
+        entry = self.apps.get(app) or {}
+        return tuple(entry.get("classes") or ())
+
+
+@dataclass(frozen=True)
 class Taxonomy:
     editions: Mapping[str, Mapping[str, str]]
     families: tuple[str, ...]
@@ -169,6 +206,7 @@ class Catalog:
     taxonomy: Taxonomy
     issues: tuple[Issue, ...] = ()
     root: Path | None = None
+    roadmap: Roadmap = field(default_factory=lambda: Roadmap(apps={}))
 
     by_id: dict[str, Vuln] = field(init=False, repr=False)
     by_token: dict[str, Vuln] = field(init=False, repr=False)
@@ -287,6 +325,33 @@ def _load_taxonomy(path: Path, issues: list[Issue]) -> Taxonomy:
     return Taxonomy(editions=editions, families=families, classes=classes)
 
 
+def _load_roadmap(path: Path, issues: list[Issue]) -> Roadmap:
+    if not path.is_file():
+        # The roadmap is optional for a synthetic or partial checkout; every check
+        # that depends on it degrades to the derived, clearly-labelled fallback.
+        return Roadmap(apps={})
+    data = _load_yaml(path) or {}
+    apps = {str(k): dict(v or {}) for k, v in (data.get("apps") or {}).items()}
+    by_prefix: dict[str, str] = {}
+    for app, entry in apps.items():
+        prefix = str(entry.get("prefix") or "")
+        if not prefix:
+            issues.append(
+                Issue("error", "roadmap-missing-prefix",
+                      f"app {app!r} declares no id prefix", source=str(path))
+            )
+            continue
+        if prefix in by_prefix:
+            issues.append(
+                Issue("error", "roadmap-duplicate-prefix",
+                      f"prefix {prefix!r} is claimed by both {by_prefix[prefix]!r} and "
+                      f"{app!r}; ids would be ambiguous", source=str(path))
+            )
+        else:
+            by_prefix[prefix] = app
+    return Roadmap(apps=apps)
+
+
 def _alnum(s: str) -> str:
     return "".join(ch for ch in s.casefold() if ch.isalnum())
 
@@ -361,6 +426,7 @@ def load_catalog(
     vulns_dir: Path | str | None = None,
     taxonomy_path: Path | str | None = None,
     schema_path: Path | str | None = None,
+    roadmap_path: Path | str | None = None,
 ) -> Catalog:
     """Load, validate and resolve the whole catalog.
 
@@ -373,16 +439,19 @@ def load_catalog(
     tpath = Path(taxonomy_path) if taxonomy_path else root_path / "catalog" / "taxonomy.yaml"
     spath = Path(schema_path) if schema_path else root_path / "catalog" / "schema.json"
 
+    rpath = Path(roadmap_path) if roadmap_path else root_path / "catalog" / "roadmap.yaml"
+
     issues: list[Issue] = []
     taxonomy = _load_taxonomy(tpath, issues)
+    roadmap = _load_roadmap(rpath, issues)
     validator = Draft202012Validator(json.loads(Path(spath).read_text(encoding="utf-8")))
 
     vulns: list[Vuln] = []
-    seen_ids: dict[str, str] = {}
+    seen_ids: dict[str, tuple[str, str]] = {}
     prefix_to_app: dict[str, str] = {}
     entrypoints: dict[tuple[str, str, str], list[str]] = {}
     tokens: dict[str, str] = {}
-    signals: dict[str, str] = {}
+    signals: dict[str, tuple[str, str]] = {}
 
     for path in sorted(vdir.glob("*.yaml")) if vdir.is_dir() else []:
         source = str(path)
@@ -407,12 +476,18 @@ def load_catalog(
 
         vid = raw["id"]
         if vid in seen_ids:
+            # Several targets write the catalog concurrently, so a collision is a
+            # real conflict between two teams, never a transient: two entries under
+            # one id silently merge into one score.
+            other_path, other_app = seen_ids[vid]
             issues.append(
                 Issue("error", "duplicate-id",
-                      f"id already defined in {seen_ids[vid]}", vuln_id=vid, source=source)
+                      f"id already defined for app {other_app!r} in {other_path}; two "
+                      "entries under one id would silently share a single score",
+                      vuln_id=vid, source=source)
             )
             continue
-        seen_ids[vid] = source
+        seen_ids[vid] = (source, raw.get("app", ""))
 
         cls = raw.get("class", "")
         spec = taxonomy.classes.get(cls)
@@ -424,25 +499,55 @@ def load_catalog(
             )
             spec = {}
 
-        # id prefix vs app: BENCH-SHOP-0001 must belong to an app key starting with
-        # "shop". Keeps ids greppable and stops a copy-pasted file from scoring
-        # against the wrong target.
+        # id prefix vs app. The roadmap declares the prefix per app and is the only
+        # authority: four letters cannot be derived from an app name (admin -> ADMN,
+        # legacy -> LEGY), and deriving one produced a false rejection of every
+        # correctly-named entry in those apps. Derivation survives solely as a
+        # clearly-labelled fallback for apps the roadmap does not know.
         prefix = vid.split(_ID_PREFIX_SEP)[1] if vid.count(_ID_PREFIX_SEP) >= 2 else ""
         app = raw.get("app", "")
-        if prefix and app and not _alnum(app).startswith(_alnum(prefix)):
-            issues.append(
-                Issue("error", "id-app-mismatch",
-                      f"id prefix {prefix!r} does not match app {app!r}",
-                      vuln_id=vid, source=source)
-            )
-        elif prefix:
-            known = prefix_to_app.setdefault(prefix, app)
-            if known != app:
+        expected = roadmap.prefix_for(app) if app else None
+        if prefix and expected:
+            if prefix.upper() != expected.upper():
                 issues.append(
-                    Issue("error", "id-prefix-collision",
-                          f"prefix {prefix!r} is already used by app {known!r}",
+                    Issue("error", "id-app-mismatch",
+                          f"id prefix {prefix!r} disagrees with app {app!r}, which the "
+                          f"roadmap assigns BENCH-{expected}-",
                           vuln_id=vid, source=source)
                 )
+        elif prefix and app:
+            owner = roadmap.app_for_prefix(prefix)
+            if roadmap.apps:
+                issues.append(
+                    Issue("warning", "app-not-in-roadmap",
+                          f"app {app!r} is not declared in catalog/roadmap.yaml, so its id "
+                          "prefix cannot be verified against the build plan",
+                          vuln_id=vid, source=source)
+                )
+            if owner and owner != app:
+                issues.append(
+                    Issue("error", "id-prefix-collision",
+                          f"prefix {prefix!r} is assigned to app {owner!r} by the roadmap",
+                          vuln_id=vid, source=source)
+                )
+            elif not _alnum(app).startswith(_alnum(prefix)):
+                # A guess, and reported as one: with no roadmap entry we cannot tell
+                # a deliberate abbreviation from a copy-paste error.
+                issues.append(
+                    Issue("warning", "id-app-mismatch-unverified",
+                          f"id prefix {prefix!r} does not look like app {app!r}, but the "
+                          "app is absent from the roadmap so this is a derivation, not a "
+                          "verified mismatch",
+                          vuln_id=vid, source=source)
+                )
+            else:
+                known = prefix_to_app.setdefault(prefix, app)
+                if known != app:
+                    issues.append(
+                        Issue("error", "id-prefix-collision",
+                              f"prefix {prefix!r} is already used by app {known!r}",
+                              vuln_id=vid, source=source)
+                    )
 
         vuln = _build_vuln(raw, spec, source)
         vulns.append(vuln)
@@ -467,13 +572,14 @@ def load_catalog(
             if signal in signals:
                 issues.append(
                     Issue("error", "duplicate-signal",
-                          f"signal {signal!r} is already emitted by {signals[signal]}; "
-                          "signal -> vulnerability must be a function, otherwise a "
-                          "trigger could not be attributed to one entry",
+                          f"signal {signal!r} is already emitted by {signals[signal][0]} "
+                          f"(app {signals[signal][1]!r}); signals are unique corpus-wide, "
+                          "and two entries sharing one would split the credit for a "
+                          "single planted flaw between them",
                           vuln_id=vid, source=source)
                 )
             else:
-                signals[signal] = vid
+                signals[signal] = (vid, vuln.app)
         elif vuln.oracle.kind != "oob":
             # Targets emit signals, never catalog ids, so an entry without one can
             # only ever be credited by a platform-side emitter. That is an integrity
@@ -529,7 +635,8 @@ def load_catalog(
             )
 
     return Catalog(
-        vulns=tuple(vulns), taxonomy=taxonomy, issues=tuple(issues), root=root_path
+        vulns=tuple(vulns), taxonomy=taxonomy, issues=tuple(issues), root=root_path,
+        roadmap=roadmap,
     )
 
 
@@ -556,6 +663,37 @@ def _find_cycles(graph: Mapping[str, Sequence[str]]) -> list[str]:
         if colour[node] == WHITE:
             visit(node, [])
     return sorted(bad)
+
+
+def _roadmap_gap(catalog: Catalog) -> dict[str, Any]:
+    """Planted vs promised, per app: the contribution queue in its rawest form."""
+    planted_by_app: dict[str, int] = {}
+    classes_by_app: dict[str, set[str]] = {}
+    for v in catalog.vulns:
+        planted_by_app[v.app] = planted_by_app.get(v.app, 0) + 1
+        classes_by_app.setdefault(v.app, set()).add(v.cls)
+
+    apps: dict[str, Any] = {}
+    for app, entry in sorted(catalog.roadmap.apps.items()):
+        quota = catalog.roadmap.quota_for(app) or 0
+        planted = planted_by_app.get(app, 0)
+        promised = catalog.roadmap.classes_for(app)
+        apps[app] = {
+            "prefix": entry.get("prefix"),
+            "quota": quota,
+            "planted": planted,
+            "remaining": max(quota - planted, 0),
+            "classes_promised": len(promised),
+            "classes_missing": sorted(set(promised) - classes_by_app.get(app, set())),
+        }
+    return {
+        "apps": apps,
+        "quota_total": sum(a["quota"] for a in apps.values()),
+        "planted_total": sum(a["planted"] for a in apps.values()),
+        # An app planting vulnerabilities without a roadmap entry is either a new
+        # target nobody declared or a typo in `app`; either way it needs a decision.
+        "apps_not_in_roadmap": sorted(set(planted_by_app) - set(catalog.roadmap.apps)),
+    }
 
 
 def coverage_stats(catalog: Catalog) -> dict[str, Any]:
@@ -625,6 +763,7 @@ def coverage_stats(catalog: Catalog) -> dict[str, Any]:
             "with_poc": sum(1 for v in catalog.vulns if v.oracle.poc),
             "without_poc": sorted(v.id for v in catalog.vulns if not v.oracle.poc),
         },
+        "roadmap": _roadmap_gap(catalog),
         "deception": {
             # The cover story is what stops a reviewer shipping an implausible flaw;
             # missing ones are a queue item like any empty OWASP cell.

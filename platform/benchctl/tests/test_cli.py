@@ -183,7 +183,7 @@ def test_score_reports_crawl_coverage_and_weak_attributions(run_root, tmp_path, 
     events = write_json(tmp_path / "e.json", [
         http_event(params=[param("q", "x'")]),
         trigger_event("BENCH-SHOP-0001"),
-        oob_event(signal="shop.synthetic.0002.anomaly", attribution="container-window"),
+        oob_event(signal="shop.synthetic.shop_0002.anomaly", attribution="container-window"),
     ])
     out = tmp_path / "score.json"
     assert main(["--root", str(run_root), "score", "--run", "r1", "--events", events,
@@ -221,3 +221,20 @@ def test_catalog_stats_json_carries_oracle_and_surface_queues(run_root, capsys):
     assert stats["oracles"]["with_signal"] == 2
     assert stats["oracles"]["without_signal"] == []
     assert stats["surface"]["routes"] == 0
+
+
+def test_catalog_stats_prints_the_roadmap_gap(run_root, capsys):
+    assert main(["--root", str(run_root), "catalog", "stats"]) == 0
+    out = capsys.readouterr().out
+    assert "roadmap (" in out
+    # The prefix column is the roadmap's, so a non-derivable one must appear as it
+    # is written there rather than as a derivation from the app name.
+    assert "admin        ADMN" in out
+    assert "to go" in out
+
+
+def test_validate_accepts_a_non_derivable_prefix(make_catalog, capsys):
+    root = make_catalog([vuln_entry(id="BENCH-ADMN-0001", app="admin",
+                                    **{"class": "el_injection"}, severity="critical")])
+    assert main(["--root", str(root), "validate"]) == 0
+    assert "id-app-mismatch" not in capsys.readouterr().err

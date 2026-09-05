@@ -158,6 +158,9 @@ class Attribution:
     kind: str  # token | signal-correlation | declared-id | container-window | unattributed
     confidence: str  # "high" | "low"
     app: str | None = None  # resolved from the run's container/address map
+    # Informational: did the callback's source address also agree with the
+    # registration? Never a downgrade -- see _is_weak.
+    source_match: bool | None = None
     channel: str | None = None
     destination_host: str | None = None
     request_id: str | None = None
@@ -174,6 +177,7 @@ class Attribution:
             "kind": self.kind,
             "confidence": self.confidence,
             "app": self.app,
+            "source_match": self.source_match,
             "channel": self.channel,
             "destination_host": self.destination_host,
             "request_id": self.request_id,
@@ -227,6 +231,15 @@ class Outcome:
 
 
 def _is_weak(ev: OobEvent) -> bool:
+    """Only an explicit flag from the resolver demotes an attribution.
+
+    Deliberately does NOT look at ``source_match``: the resolver reports a host
+    match as high confidence unconditionally, because a target's outbound address
+    legitimately differs from the address its correlation hint was registered from
+    (targets are dual-homed). Treating address disagreement as a downgrade would
+    publish every genuine match as second-rate. It travels to the report as
+    information instead.
+    """
     marker = (ev.attribution or "").strip().lower()
     return (
         ev.low_confidence
@@ -332,6 +345,7 @@ def attribute_oob(
     source_app = _resolve_source_app(ev, catalog, addresses)
     common = {
         "app": source_app,
+        "source_match": ev.source_match,
         "channel": ev.channel,
         "destination_host": ev.destination_host,
         "request_id": ev.request_id,

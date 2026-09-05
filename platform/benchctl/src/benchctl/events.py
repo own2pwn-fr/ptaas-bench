@@ -147,6 +147,13 @@ class OobEvent(Event):
     ``confidence``/``low_confidence``/``attribution`` carry that flag; all three
     spellings are accepted because the sinkhole and the collector are separate
     components and this scorer must not break when one of them is upgraded first.
+
+    ``source_match`` is informational only. The resolver reports a host match as
+    high confidence unconditionally and records separately whether the callback's
+    source address also agreed; using that agreement as a downgrade would publish
+    every genuine match as second-rate, because a target's outbound address differs
+    from the one its correlation hint was registered from. So it is carried through
+    to the report as a fact about the observation, never as a reason to discount it.
     """
 
     token: str = ""
@@ -156,6 +163,7 @@ class OobEvent(Event):
     source_ip: str | None = None
     attribution: str | None = None
     confidence: str | None = None
+    source_match: bool | None = None
     low_confidence: bool = False
     destination_host: str | None = None
     request_id: str | None = None
@@ -369,6 +377,8 @@ def event_from_dict(d: Mapping[str, Any]) -> Event:
             source_ip=d.get("source_ip"),
             attribution=(d.get("attribution") or d.get("attribution_kind") or None),
             confidence=(d.get("confidence") or None),
+            source_match=(None if d.get("source_match") is None
+                          else _as_bool(d.get("source_match"))),
             low_confidence=_as_bool(d.get("low_confidence", False)),
             destination_host=(d.get("destination_host") or d.get("host") or None),
             request_id=(d.get("request_id") or None),

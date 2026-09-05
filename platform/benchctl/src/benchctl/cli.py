@@ -254,6 +254,16 @@ def cmd_catalog_stats(args: argparse.Namespace) -> int:
         print(f"\n{axis[3:]}")
         for key, count in stats[axis].items():
             print(f"  {key:<20} {count:>4}")
+    plan = stats["roadmap"]
+    if plan["apps"]:
+        print(f"\nroadmap ({plan['planted_total']}/{plan['quota_total']} planted)")
+        for app, gap in plan["apps"].items():
+            missing = f"  missing classes: {', '.join(gap['classes_missing'])}" if gap["classes_missing"] else ""
+            print(f"  {app:<12} {gap['prefix']:<5} {gap['planted']:>3}/{gap['quota']:<3}"
+                  f" ({gap['remaining']} to go){missing}")
+        if plan["apps_not_in_roadmap"]:
+            print("  not in the roadmap: " + ", ".join(plan["apps_not_in_roadmap"]))
+
     surface = stats["surface"]
     if surface["routes"]:
         ratio = surface["safe_per_planted"]

@@ -20,6 +20,7 @@ import yaml
 REPO_ROOT = Path(__file__).resolve().parents[3]
 REAL_SCHEMA = REPO_ROOT / "catalog" / "schema.json"
 REAL_TAXONOMY = REPO_ROOT / "catalog" / "taxonomy.yaml"
+REAL_ROADMAP = REPO_ROOT / "catalog" / "roadmap.yaml"
 
 
 def sha(value: str) -> str:
@@ -59,8 +60,11 @@ def vuln_entry(**overrides: Any) -> dict[str, Any]:
     # `oracle: {"signal": None}` opts out, for the tests that need that case.
     signal = entry["oracle"].get("signal", "__derive__")
     if signal == "__derive__":
+        # Derived from the whole id, not just its number: two apps share numbering
+        # (BENCH-SHOP-0001 and BENCH-ADMN-0001 both exist) and signals are unique
+        # corpus-wide.
         entry["oracle"]["signal"] = "shop.synthetic.{}.anomaly".format(
-            entry["id"].split("-")[-1]
+            entry["id"].replace("BENCH-", "").replace("-", "_").lower()
         )
     elif signal is None:
         entry["oracle"].pop("signal")
@@ -71,7 +75,12 @@ def vuln_entry(**overrides: Any) -> dict[str, Any]:
 def make_catalog(tmp_path: Path):
     """Materialise a catalog root from a list of entry dicts."""
 
-    def _make(entries: Sequence[Mapping[str, Any]], *, taxonomy: Mapping[str, Any] | None = None) -> Path:
+    def _make(
+        entries: Sequence[Mapping[str, Any]],
+        *,
+        taxonomy: Mapping[str, Any] | None = None,
+        roadmap: Mapping[str, Any] | None = None,
+    ) -> Path:
         root = tmp_path / f"repo{len(list(tmp_path.iterdir()))}"
         (root / "catalog" / "vulns").mkdir(parents=True)
         shutil.copy(REAL_SCHEMA, root / "catalog" / "schema.json")
@@ -79,6 +88,13 @@ def make_catalog(tmp_path: Path):
             shutil.copy(REAL_TAXONOMY, root / "catalog" / "taxonomy.yaml")
         else:
             (root / "catalog" / "taxonomy.yaml").write_text(yaml.safe_dump(taxonomy), encoding="utf-8")
+        if roadmap is None:
+            # The real roadmap is the authority on id prefixes, so synthetic
+            # catalogs are checked against the same one the corpus uses.
+            shutil.copy(REAL_ROADMAP, root / "catalog" / "roadmap.yaml")
+        elif roadmap:
+            (root / "catalog" / "roadmap.yaml").write_text(
+                yaml.safe_dump(dict(roadmap)), encoding="utf-8")
         for i, entry in enumerate(entries):
             name = entry.get("id", f"entry-{i}") if isinstance(entry, Mapping) else f"entry-{i}"
             (root / "catalog" / "vulns" / f"{name}.yaml").write_text(
@@ -119,7 +135,8 @@ def param(name: str, value: str | None, location: str = "query") -> dict[str, An
 
 def signal_of(vuln_id: str) -> str:
     """The signal `vuln_entry` derives for an id, mirroring the target side."""
-    return "shop.synthetic.{}.anomaly".format(vuln_id.split("-")[-1])
+    return "shop.synthetic.{}.anomaly".format(
+        vuln_id.replace("BENCH-", "").replace("-", "_").lower())
 
 
 def trigger_event(for_vuln: str | None = None, **overrides: Any) -> dict[str, Any]:

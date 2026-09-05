@@ -971,6 +971,13 @@
             "null"
           ],
           "description": "Target resolved from the run's container/address map, never inferred from the address itself."
+        },
+        "source_match": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "Informational: whether the callback's source address also agreed with the correlation registration. A host match is high confidence regardless \u2014 a target's outbound address legitimately differs from the one its hint was registered from \u2014 so `false` here is a fact about the observation, never a reason to discount the match."
         }
       }
     },

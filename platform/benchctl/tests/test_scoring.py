@@ -396,7 +396,7 @@ def test_trigger_is_credited_from_the_opaque_signal(make_catalog):
     entry = vuln_entry()
     root = make_catalog([entry])
     ev = {"type": "trigger", "app": "shopfront", "ts": 2.0,
-          "signal": "shop.synthetic.0001.anomaly"}
+          "signal": "shop.synthetic.shop_0001.anomaly"}
     assert outcome(entry, [http_event(), ev], root).trigger is True
     assert outcome(entry, [http_event(), ev], root).trigger_source == "signal"
 
@@ -404,7 +404,7 @@ def test_trigger_is_credited_from_the_opaque_signal(make_catalog):
 def test_another_entrys_signal_does_not_credit_this_one(make_catalog):
     entry = vuln_entry()
     root = make_catalog([entry])
-    ev = {"type": "trigger", "app": "shopfront", "signal": "shop.synthetic.9999.anomaly"}
+    ev = {"type": "trigger", "app": "shopfront", "signal": "shop.synthetic.ghost_9999.anomaly"}
     assert outcome(entry, [http_event(), ev], root).trigger is False
 
 
@@ -501,10 +501,10 @@ def test_current_and_legacy_sink_event_names_are_both_accepted(make_catalog):
     entry = vuln_entry()
     root = make_catalog([entry])
     current = {"type": "signal", "app": "shopfront", "ts": 2.0,
-               "signal": "shop.synthetic.0001.anomaly",
+               "signal": "shop.synthetic.shop_0001.anomaly",
                "attributes": {"payload": "x' UNION SELECT", "detail": "extra table"}}
     legacy = {"type": "trigger", "app": "shopfront", "ts": 2.0,
-              "signal": "shop.synthetic.0001.anomaly",
+              "signal": "shop.synthetic.shop_0001.anomaly",
               "evidence": {"payload": "x' UNION SELECT", "detail": "extra table"}}
     for ev in (current, legacy):
         out = outcome(entry, [http_event(), ev], root)
@@ -528,7 +528,7 @@ def test_oracle_kind_comes_from_the_catalog_not_from_the_event(make_catalog):
     catalog = load_catalog(make_catalog([vuln_entry()]))  # class sqli_union -> kind sink
     doc = score_run(catalog, events_from_iterable([
         http_event(),
-        {"type": "signal", "app": "shopfront", "signal": "shop.synthetic.0001.anomaly",
+        {"type": "signal", "app": "shopfront", "signal": "shop.synthetic.shop_0001.anomaly",
          "oracle_kind": "timing"},
     ]))
     assert doc["vulns"][0]["oracle_kind"] == "sink"
@@ -541,7 +541,7 @@ def test_scoring_is_independent_of_event_order(make_catalog):
         http_event(params=[param("q", "x'")]),
         trigger_event("BENCH-SHOP-0001"),
         http_event(route="/api/orders/{id}", params=[param("id", "1002", "path")]),
-        oob_event(signal="shop.synthetic.0003.anomaly", destination_host="a.oast.fun"),
+        oob_event(signal="shop.synthetic.shop_0003.anomaly", destination_host="a.oast.fun"),
     ]
 
     def score(order):

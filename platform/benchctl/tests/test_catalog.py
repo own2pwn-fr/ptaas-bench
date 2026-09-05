@@ -59,8 +59,11 @@ def test_duplicate_id_is_an_error(tmp_path, make_catalog):
         yaml.safe_dump(vuln_entry()), encoding="utf-8"
     )
     catalog = load_catalog(root)
-    assert "duplicate-id" in codes(catalog, "error")
-    assert len(catalog) == 1
+    dupes = [i for i in catalog.issues if i.code == "duplicate-id"]
+    assert len(dupes) == 1 and len(catalog) == 1
+    # Several targets write the catalog concurrently: name the other side so the
+    # collision is actionable rather than a mystery.
+    assert "shopfront" in dupes[0].message
 
 
 def test_id_prefix_must_agree_with_app(make_catalog):
@@ -72,6 +75,79 @@ def test_id_prefix_may_abbreviate_the_app(make_catalog):
     # BENCH-SHOP-* living in app "shopfront" is the shipped convention.
     catalog = load_catalog(make_catalog([vuln_entry(app="shopfront")]))
     assert catalog.errors == ()
+
+
+def test_prefix_comes_from_the_roadmap_not_from_the_app_name(make_catalog):
+    # `admin` is BENCH-ADMN-, not BENCH-ADMI-: a four-letter prefix cannot be
+    # derived from an app name, so the roadmap is the authority. Deriving one
+    # rejected every correctly-named entry in those apps.
+    entries = [
+        vuln_entry(id="BENCH-ADMN-0001", app="admin",
+                   **{"class": "el_injection"}, severity="critical"),
+        vuln_entry(id="BENCH-LEGY-0001", app="legacy",
+                   **{"class": "cmdi"}, severity="critical"),
+        vuln_entry(id="BENCH-INTR-0001", app="intranet",
+                   **{"class": "csrf"}, severity="medium"),
+    ]
+    catalog = load_catalog(make_catalog(entries))
+    assert catalog.errors == ()
+    assert "app-not-in-roadmap" not in codes(catalog, "warning")
+
+
+def test_the_derived_prefix_is_rejected_when_the_roadmap_disagrees(make_catalog):
+    # BENCH-ADMI- is exactly what a derivation from "admin" would produce.
+    catalog = load_catalog(make_catalog([vuln_entry(
+        id="BENCH-ADMI-0001", app="admin", **{"class": "el_injection"},
+        severity="critical")]))
+    errors = [i for i in catalog.issues if i.code == "id-app-mismatch"]
+    assert len(errors) == 1
+    assert "BENCH-ADMN-" in errors[0].message
+
+
+def test_an_app_outside_the_roadmap_is_reported_as_such(make_catalog):
+    # Falling back to a derivation is allowed here, but the honest headline is that
+    # the app is not in the build plan, and a derived disagreement is a guess.
+    catalog = load_catalog(make_catalog([
+        vuln_entry(id="BENCH-BANK-0001", app="bank"),
+        vuln_entry(id="BENCH-XYZ-0002", app="bank"),
+    ]))
+    warnings = codes(catalog, "warning")
+    assert "app-not-in-roadmap" in warnings
+    assert "id-app-mismatch-unverified" in warnings
+    assert catalog.errors == ()
+
+
+def test_an_id_cannot_borrow_another_apps_roadmap_prefix(make_catalog):
+    catalog = load_catalog(make_catalog([vuln_entry(id="BENCH-ADMN-0001", app="bank")]))
+    collisions = [i for i in catalog.issues if i.code == "id-prefix-collision"]
+    assert collisions and "admin" in collisions[0].message
+
+
+def test_roadmap_gap_is_the_contribution_queue(make_catalog):
+    stats = coverage_stats(load_catalog(make_catalog([
+        vuln_entry(id="BENCH-SHOP-0001", app="shopfront")])))
+    plan = stats["roadmap"]
+    assert plan["apps"]["shopfront"]["prefix"] == "SHOP"
+    assert plan["apps"]["admin"]["prefix"] == "ADMN"
+    assert plan["apps"]["shopfront"]["planted"] == 1
+    assert plan["apps"]["shopfront"]["remaining"] == plan["apps"]["shopfront"]["quota"] - 1
+    assert "sqli_error" in plan["apps"]["shopfront"]["classes_missing"]
+    assert plan["apps_not_in_roadmap"] == []
+
+
+def test_apps_absent_from_the_roadmap_are_listed(make_catalog):
+    stats = coverage_stats(load_catalog(make_catalog([
+        vuln_entry(id="BENCH-BANK-0001", app="bank")])))
+    assert stats["roadmap"]["apps_not_in_roadmap"] == ["bank"]
+
+
+def test_roadmap_prefix_collisions_are_caught_in_the_plan_itself(make_catalog):
+    broken = {"apps": {"one": {"prefix": "SAME", "quota": 1, "classes": []},
+                       "two": {"prefix": "SAME", "quota": 1, "classes": []},
+                       "three": {"quota": 1, "classes": []}}}
+    catalog = load_catalog(make_catalog([], roadmap=broken))
+    assert "roadmap-duplicate-prefix" in codes(catalog, "error")
+    assert "roadmap-missing-prefix" in codes(catalog, "error")
 
 
 def test_one_prefix_cannot_serve_two_apps(make_catalog):
@@ -132,7 +208,24 @@ def test_duplicate_signal_is_an_error(make_catalog):
         vuln_entry(id="BENCH-SHOP-0002", oracle={"signal": "shop.catalog.query.plan_anomaly"}),
     ]
     catalog = load_catalog(make_catalog(entries))
-    assert "duplicate-signal" in codes(catalog, "error")
+    dupes = [i for i in catalog.issues if i.code == "duplicate-signal"]
+    assert len(dupes) == 1
+    assert "split the credit" in dupes[0].message
+
+
+def test_a_signal_collision_across_two_apps_is_reported(make_catalog):
+    # Signals are unique corpus-wide, not per app: two apps sharing one would split
+    # the credit for a single planted flaw.
+    entries = [
+        vuln_entry(id="BENCH-SHOP-0001", app="shopfront",
+                   oracle={"signal": "shared.query.plan.anomaly"}),
+        vuln_entry(id="BENCH-ADMN-0001", app="admin", **{"class": "el_injection"},
+                   severity="critical", oracle={"signal": "shared.query.plan.anomaly"}),
+    ]
+    catalog = load_catalog(make_catalog(entries))
+    dupes = [i for i in catalog.issues if i.code == "duplicate-signal"]
+    # Whichever file loads first names the other; both apps must be identifiable.
+    assert dupes and ("shopfront" in dupes[0].message or "admin" in dupes[0].message)
 
 
 def test_signal_index_maps_back_to_the_entry(make_catalog):

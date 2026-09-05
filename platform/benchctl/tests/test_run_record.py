@@ -201,3 +201,34 @@ def test_full_record_score_document_matches_the_schema(make_catalog):
     )
     schema = json.loads((REPO_ROOT / "results" / "schema" / "score.schema.json").read_text())
     assert sorted(e.message for e in Draft202012Validator(schema).iter_errors(doc)) == []
+
+
+def test_source_match_false_does_not_discount_a_host_match(make_catalog):
+    # The resolver reports a host match as high confidence unconditionally and
+    # records address agreement separately. A target's outbound address legitimately
+    # differs from the one its correlation hint came from, so treating disagreement
+    # as a downgrade would publish every genuine match as second-rate.
+    catalog = load_catalog(make_catalog([
+        ssrf_entry("BENCH-SHOP-0031", "shopfront", "shop.imports.fetch.external")]))
+    ev = oob_event(signal="shop.imports.fetch.external", channel="dns",
+                   attribution="host-match", confidence="high",
+                   source_match=False, source_ip="10.88.0.9")
+    doc = score_run(catalog, events_from_iterable([ev]), run=RUN)
+    row = doc["vulns"][0]
+    assert row["trigger"] is True
+    att = row["attributions"][0]
+    assert att["confidence"] == "high"
+    # ...and the disagreement travels as information, not as a verdict.
+    assert att["source_match"] is False
+    assert doc["low_confidence_triggers"]["count"] == 0
+    assert not any(w["code"] == "low-confidence-trigger" for w in doc["warnings"])
+
+
+def test_an_explicit_low_confidence_flag_still_demotes(make_catalog):
+    catalog = load_catalog(make_catalog([
+        ssrf_entry("BENCH-SHOP-0031", "shopfront", "shop.imports.fetch.external")]))
+    ev = oob_event(signal="shop.imports.fetch.external", confidence="low",
+                   source_match=True)
+    doc = score_run(catalog, events_from_iterable([ev]), run=RUN)
+    assert doc["vulns"][0]["trigger"] is False
+    assert doc["vulns"][0]["attributions"][0]["source_match"] is True
