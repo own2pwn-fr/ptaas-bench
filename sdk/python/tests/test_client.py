@@ -123,6 +123,30 @@ def test_signal_names_must_be_metric_shaped(telemetry, collector):
     assert telemetry.stats()["invalid_signals"] == 6
 
 
+def test_a_two_segment_name_is_rejected_here_rather_than_downstream(telemetry, collector):
+    """The catalog's pattern requires at least three segments, and so does this.
+
+    A two-segment name used to pass validation here and then be discarded by the
+    correlation endpoint, with nothing anywhere saying so: the planted flaw it belonged
+    to would have scored as missed by every tool, and the cause would have been
+    invisible. Rejected at the boundary, it fails where the author can see it.
+    """
+    telemetry.signal("shop.query", {"payload": "x"})
+    telemetry.outbound("http://f00d.oob.example/x", signal="shop.query", param="source_url")
+    telemetry.flush()
+    correlation = collector.wait_for_correlations()[0]
+
+    assert collector.of_type("signal") == []
+    # The link still goes out -- the destination is worth registering -- but without a
+    # name the receiving side would refuse, so the counter is the only warning there is.
+    assert "signal" not in correlation
+    assert telemetry.stats()["invalid_signals"] == 2
+
+    telemetry.signal("shop.catalog.query.plan_anomaly", {"payload": "x"})
+    telemetry.flush()
+    assert [e["signal"] for e in collector.wait_for(1)] == ["shop.catalog.query.plan_anomaly"]
+
+
 def test_an_explicit_request_id_in_attributes_wins(telemetry, collector):
     telemetry.signal("shop.orders.subject.mismatch", {"payload": "1002", "request_id": "earlier"})
     telemetry.flush()
@@ -136,7 +160,7 @@ def test_outbound_accepts_a_bare_host_and_odd_urls(telemetry, collector):
         ("ftp://[2001:db8::1]:21/x", "2001:db8::1"),
         ("evil.example:9000/x", "evil.example"),
     ):
-        telemetry.outbound(destination, signal="s")
+        telemetry.outbound(destination, signal="shop.imports.fetch.external")
     assert [c["destination_host"] for c in collector.wait_for_correlations(4)] == [
         "evil.example",
         "evil.example",

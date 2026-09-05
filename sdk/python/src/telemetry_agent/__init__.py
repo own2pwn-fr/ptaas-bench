@@ -51,9 +51,9 @@ Three properties this agent must not lose:
    ``/api/orders/<int:id>`` on Flask, ``<unmatched>`` when nothing matched, with the
    concrete path kept alongside.
 
-Signal names are metric names, validated against
-``^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$``; a name that does not match is counted and
-dropped rather than raised.
+Signal names are metric names -- lower case, at least three dot-separated segments --
+validated against ``^[a-z][a-z0-9]*(\.[a-z0-9_]+){2,}$``. A name that does not match is
+counted and dropped rather than raised.
 
 Environment: ``TELEMETRY_SERVICE``, ``TELEMETRY_ENDPOINT``, ``TELEMETRY_ENABLED``,
 ``TELEMETRY_SYNTHETIC_CIDRS`` (peer networks whose traffic is generated rather than

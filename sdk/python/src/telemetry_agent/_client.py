@@ -34,9 +34,11 @@ from ._params import ParamCollector, describe_param, flatten_json, graphql_param
 
 ATTRIBUTE_MAX = 1024
 
-# Signal names are metric names: dotted, lower case, no free text. Validating them here
-# keeps one typo from creating a new time series that silently never matches a chart.
-SIGNAL_NAME = re.compile(r"^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$")
+# Signal names are metric names: lower case, at least three dot-separated segments
+# (service.area.condition). The pattern is the one the receiving side enforces, and it
+# is enforced here as well so a malformed name fails where the author can see it rather
+# than being dropped downstream, where nothing would ever say so.
+SIGNAL_NAME = re.compile(r"^[a-z][a-z0-9]*(\.[a-z0-9_]+){2,}$")
 
 # Dependency-link dispatch is separate from the record queue and is bounded on its own,
 # so a burst of request-controlled destinations cannot evict queued records.
