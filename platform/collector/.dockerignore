@@ -1,0 +1,6 @@
+tests/
+.venv/
+__pycache__/
+*.pyc
+*.db
+openapi.yaml

@@ -1,0 +1,148 @@
+name: ci
+
+# The benchmark's credibility rests on two things being continuously true: the catalog
+# is internally consistent, and the isolation between the tool under test and the answer
+# key holds. Both are asserted here, not just in review.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  catalog:
+    name: catalog integrity
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12"}
+      - run: pip install jsonschema pyyaml
+      - name: Validate every vulnerability against the schema and the taxonomy
+        run: |
+          python - <<'PY'
+          import glob, json, sys, yaml, jsonschema
+          schema = json.load(open('catalog/schema.json'))
+          tax = yaml.safe_load(open('catalog/taxonomy.yaml'))
+          plan = yaml.safe_load(open('catalog/roadmap.yaml'))
+          errors, seen = [], {}
+          for path in sorted(glob.glob('catalog/vulns/*.yaml')):
+              d = yaml.safe_load(open(path))
+              try:
+                  jsonschema.validate(d, schema)
+              except jsonschema.ValidationError as e:
+                  errors.append(f"{path}: {e.message}"); continue
+              if d['class'] not in tax['classes']:
+                  errors.append(f"{path}: unknown class {d['class']}")
+              if d['id'] in seen:
+                  errors.append(f"{path}: duplicate id, also in {seen[d['id']]}")
+              seen[d['id']] = path
+              if d['app'] not in plan['apps']:
+                  errors.append(f"{path}: app {d['app']} is not in the roadmap")
+              else:
+                  prefix = plan['apps'][d['app']]['prefix']
+                  if not d['id'].startswith(f"BENCH-{prefix}-"):
+                      errors.append(f"{path}: id prefix disagrees with app {d['app']} (expected BENCH-{prefix}-)")
+              # An oracle that fires on a payload rather than on an effect would let a tool
+              # score by spraying, so the condition text is required to be substantial.
+              if len(d['oracle']['condition'].split()) < 15:
+                  errors.append(f"{path}: oracle.condition is too thin to be auditable")
+          # The roadmap is a promise; CI reports the gap rather than letting it rot silently.
+          for app, meta in plan['apps'].items():
+              got = sum(1 for p in seen.values() if f"-{meta['prefix']}-" in p)
+              print(f"{app:10s} {got:3d}/{meta['quota']:3d} planted")
+          print(f"total planted: {len(seen)}")
+          if errors:
+              print("\n".join(errors), file=sys.stderr); sys.exit(1)
+          PY
+
+  collector:
+    name: collector
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12"}
+      - run: pip install -e './platform/collector[dev]'
+      - run: pytest platform/collector/tests -q
+
+  benchctl:
+    name: scoring engine
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12"}
+      - run: pip install -e './platform/benchctl[dev]'
+      - run: pytest platform/benchctl -q
+      - name: The catalog must score cleanly end to end
+        run: bench validate
+
+  oob:
+    name: oob canary
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12"}
+      - run: pip install -e './platform/oob[dev]'
+      - run: pytest platform/oob -q
+
+  sdk-python:
+    name: sdk (python)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12"}
+      - run: pip install -e './sdk/python[dev]'
+      - run: pytest sdk/python -q
+
+  sdk-node:
+    name: sdk (node)
+    runs-on: ubuntu-latest
+    defaults: {run: {working-directory: sdk/node}}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: {node-version: "22"}
+      - run: npm ci || npm install
+      - run: npm test
+
+  runners:
+    name: tool runners
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12"}
+      - run: pip install -r runners/requirements-dev.txt || pip install pytest pyyaml
+      - run: pytest runners -q
+
+  compose:
+    name: compose topology
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: The full stack must at least resolve
+        run: docker compose config -q
+      - name: The tool under test must never be able to reach the collector
+        run: |
+          python - <<'PY'
+          import subprocess, json, sys
+          cfg = json.loads(subprocess.run(
+              ['docker','compose','config','--format','json'],
+              capture_output=True, text=True, check=True).stdout)
+          nets = cfg.get('networks', {})
+          assert nets.get('bench-internal', {}).get('internal') is True, \
+              "bench-internal must be internal: true — otherwise a scanner could reach the answer key"
+          for name in ('collector', 'collector-db'):
+              svc = cfg['services'][name]
+              attached = set(svc.get('networks') or {})
+              assert attached == {'bench-internal'}, f"{name} is attached to {attached}"
+              assert not svc.get('ports'), f"{name} must not publish ports"
+          print("isolation holds across", len(cfg['services']), "services")
+          PY
