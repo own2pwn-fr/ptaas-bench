@@ -7,8 +7,9 @@
 # -----
 # The console answers on two names and they are not interchangeable. On the customer
 # network it is `meridian.calderwood.example`, which is the name in the bookmark bar and
-# the name anything outside the estate uses. On the estate network it is `web01`, which
-# is what the monitoring, the backup job and the restore procedure use. Keeping the two
+# the name anything outside the estate uses. On the estate network it is `web01` in this
+# estate's own domain, which the monitoring, the backup job and the restore procedure
+# use. Keeping the two
 # distinct matters beyond tidiness: a single name that resolved on both networks would
 # make the estate's own traffic indistinguishable from a customer's in every record the
 # console produces.
@@ -83,7 +84,11 @@ services:
           - meridian.${ADMIN_SITE_DOMAIN:-calderwood.example}
           - admin.${ADMIN_SITE_DOMAIN:-calderwood.example}
       bench-internal:
-        aliases: [web01]
+        # Qualified with the estate's own domain because the name is claimed on a shared
+        # network: two other estates rack a `web01` as well, and a bare name would have
+        # the monitoring, the backup job and the restore procedure landing on whichever
+        # of the three the resolver happened to put first.
+        aliases: ["web01.${ADMIN_SITE_DOMAIN:-calderwood.example}"]
     # The resolver for the network this container serves. It answers every name, which
     # is what lets a document or an interface check that points somewhere unexpected
     # resolve at all instead of hanging for the resolver timeout.
@@ -140,7 +145,12 @@ services:
   # systems, which is why it is a directory rather than a table.
   # ---------------------------------------------------------------------------
   admin-directory:
-    image: bitnami/openldap:2.6.8
+    # Same image, same tag, different namespace: the publisher stopped issuing versioned
+    # tags under the short name in 2025 and moved every existing one across, so the short
+    # name now resolves only to a moving `latest`. Pinning to the moved copy keeps the
+    # directory's behaviour exactly what this deployment was written against -- including
+    # how it stores a password supplied on a bulk load, which two entries here depend on.
+    image: bitnamilegacy/openldap:2.6.8
     container_name: meridian-directory
     hostname: directory
     profiles: [targets, admin]

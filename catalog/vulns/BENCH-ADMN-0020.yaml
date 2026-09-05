@@ -10,7 +10,7 @@ entrypoint:
   auth: none
   param: reference
   param_in: json
-  default_value: CW-40118
+  default_value: CWF-1042
   content_type: application/json
 discovery:
   render: spa-angular
@@ -28,7 +28,7 @@ oracle:
     the driver actually sent carried SQL structure introduced by this parameter AND the server spent more
     than four seconds executing it. A payload that fails to parse, or one that returns promptly, never
     raises it.
-  poc: POST /api/auth/recover {"reference":"CW-40118' AND (SELECT SLEEP(6)) AND 'a'='a"}
+  poc: POST /api/auth/recover {"reference":"CWF-1042' AND (SELECT SLEEP(6)) AND 'a'='a"}
   signal: console.recovery.lookup.statement_stall
 tags:
 - rest

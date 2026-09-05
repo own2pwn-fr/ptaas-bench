@@ -28,7 +28,7 @@ oracle:
     actually issued while the password submitted does not match the one stored for the entry that was
     matched, i.e. structure introduced by the identifier made the filter match without the password ever
     being compared. A correct sign-in, and a refused one, never raise it.
-  poc: POST /api/auth/login {"email":"d.wolstenholme@calderwood.example)(|(uid=*","password":"anything"}
+  poc: POST /api/auth/login {"email":"d.wolstenholme@calderwood.example)(|(uid=*","password":"anything)"}
   signal: console.session.bind_filter_widened
 tags:
 - rest

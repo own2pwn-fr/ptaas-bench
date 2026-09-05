@@ -26,7 +26,7 @@ oracle:
     carried SQL structure introduced by this parameter AND the server spent more than four seconds executing
     that single statement, which means an injected sleep really ran. A payload that is echoed back, that
     fails to parse, or that returns promptly never raises it.
-  poc: GET /api/reports/ledger?window=last-30-days' AND (SELECT SLEEP(6)) AND 'a'='a
+  poc: GET /api/reports/ledger?window=freight_charge' AND (SELECT SLEEP(6)) AND 'a' LIKE 'a
   signal: console.reporting.ledger.statement_stall
 tags:
 - rest

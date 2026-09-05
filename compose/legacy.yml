@@ -90,7 +90,11 @@ services:
           - www.${LEGACY_SITE_DOMAIN:-braithwaite-tool.net}
           - ${LEGACY_SITE_DOMAIN:-braithwaite-tool.net}
       bench-internal:
-        aliases: [web01]
+        # Qualified with the estate's own domain because the name is claimed on a shared
+        # network: two other estates rack a `web01` as well, and a bare name would have
+        # the monitoring, the backup job and the restore procedure landing on whichever
+        # of the three the resolver happened to put first.
+        aliases: ["web01.${LEGACY_SITE_DOMAIN:-braithwaite-tool.net}"]
     # The resolver for the customer-facing network. It answers every name, which is what
     # lets a callback aimed at any domain be captured, and it is why the outbound
     # declaration the agent makes just before a request-controlled fetch is worth making.
@@ -154,7 +158,7 @@ services:
       - /bin/sh
       - -c
       - |
-        printf 'events {}\nhttp {\n  server {\n    listen 80;\n    location / {\n      proxy_pass http://web01:80;\n      proxy_set_header Host www.%s;\n    }\n  }\n}\n' "${LEGACY_SITE_DOMAIN:-braithwaite-tool.net}" > /etc/nginx/nginx.conf
+        printf 'events {}\nhttp {\n  server {\n    listen 80;\n    location / {\n      proxy_pass http://web01.%s:80;\n      proxy_set_header Host www.%s;\n    }\n  }\n}\n' "${LEGACY_SITE_DOMAIN:-braithwaite-tool.net}" "${LEGACY_SITE_DOMAIN:-braithwaite-tool.net}" > /etc/nginx/nginx.conf
         exec nginx -g 'daemon off;'
     ports:
       - "8280:80"
