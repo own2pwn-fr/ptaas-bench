@@ -171,6 +171,14 @@ class NucleiDriver(BaseDriver):
             )
         return invocations
 
+    def drives_a_browser(self, ctx: RunContext, invocations: list[Invocation]) -> tuple[bool, str]:
+        # The image bundles chromium, but it is only used by headless templates, and
+        # this driver does not enable them: with the full template set the cost is
+        # large enough to distort the budget. Reported as it is, not as it could be.
+        if any("-headless" in inv.args for inv in invocations):
+            return True, "-headless: chromium templates enabled"
+        return False, "chromium is present in the image but -headless was not passed"
+
     def normalise(self, raw_dir: Path, table: CweTable | None = None, **_: Any) -> NormaliseResult:
         out = NormaliseResult()
         for path in sorted(raw_dir.glob("nuclei-*.jsonl")):

@@ -110,7 +110,10 @@ class WapitiDriver(BaseDriver):
         for path in list(getattr(app, "exclude_paths", []) or []):
             args += ["--exclude", f"{base}{path}"]
         creds = ctx.creds_for(app.key)
-        for path in (creds.logout_paths if creds else []):
+        # Prefixes, not templates: `--exclude` matches a URL, and a literal `{id}` in
+        # one matches nothing at all -- which reads as an exclusion that is present
+        # and working right up until the scanner deletes its own session.
+        for path in (creds.logout_prefixes() if creds else []):
             args += ["--exclude", f"{base}{path}"]
         return args
 

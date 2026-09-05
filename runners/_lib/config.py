@@ -168,6 +168,17 @@ class Credentials:
         route, not ours.
         """
         doc = _expand(yaml.safe_load(path.read_text(encoding="utf-8")) or {})
+        return cls.from_target_doc(doc, path, role=role, base_url_override=base_url_override)
+
+    @classmethod
+    def from_target_doc(
+        cls,
+        doc: dict[str, Any],
+        path: Path,
+        *,
+        role: str = "user",
+        base_url_override: str | None = None,
+    ) -> Credentials:
         app = str(doc.get("app") or path.parent.name)
         login = doc.get("login") or {}
         session = doc.get("session") or {}
@@ -238,6 +249,35 @@ class Credentials:
             verify_url=_resolve(base, self.verify_path),
         )
 
+    def logout_regexes(self) -> list[str]:
+        """Excluded paths as regexes, with route templates expanded.
+
+        The contract writes them as route templates -- `/api/account/sessions/{id}` --
+        and a template is not a regex: `{id}` is an invalid repetition in Java, which
+        is what ZAP compiles with, so a context carrying it verbatim is rejected and
+        the whole plan fails to load. Expanded to a single path segment instead.
+        """
+        out = []
+        for path in self.logout_paths:
+            pattern = "".join(
+                "[^/]+" if part.startswith("{") and part.endswith("}") else re.escape(part)
+                for part in re.split(r"(\{[^}]+\})", path)
+                if part
+            )
+            out.append(f".*{pattern}.*")
+        return out
+
+    def logout_prefixes(self) -> list[str]:
+        """Excluded paths as literal prefixes, for tools that match on substrings.
+
+        Truncated at the first template segment: `/api/account/sessions/{id}` becomes
+        `/api/account/sessions`. That excludes a little more than asked, which is the
+        right direction -- the cost of over-excluding is a missed endpoint, the cost
+        of under-excluding is a scanner deleting its own session mid-run and finishing
+        the scan anonymously while still being reported as authenticated.
+        """
+        return [path.split("{", 1)[0].rstrip("/") or "/" for path in self.logout_paths]
+
     def login_body(self) -> dict[str, str]:
         body = {self.username_field: self.username, self.password_field: self.password}
         body.update(self.extra_fields)
@@ -290,8 +330,31 @@ class TargetCredentialsFile:
     def for_role(self, role: str, *, base_url_override: str | None = None) -> Credentials | None:
         if self.declares_no_login:
             return None
-        return Credentials.from_target_file(
-            self.path, role=role, base_url_override=base_url_override
+        return Credentials.from_target_doc(
+            self.raw, self.path, role=role, base_url_override=base_url_override
+        )
+
+    def merged_with(self, emitted: dict[str, Any]) -> TargetCredentialsFile:
+        """Overlay the identities the target just printed for the deployment in front of us.
+
+        The committed file belongs to one DEPLOY_SEED. Where the running target
+        disagrees with it, the running target is right: e-mail addresses and
+        passwords move with the seed, while the login shape and the subject ids do
+        not. Only the blocks the target emits are replaced.
+        """
+        raw = dict(self.raw)
+        for key in ("app", "base_url", "users"):
+            if emitted.get(key) is not None:
+                raw[key] = emitted[key]
+        return replace(
+            self,
+            raw=raw,
+            roles=[str(u.get("role")) for u in (raw.get("users") or []) if u.get("role")],
+            base_url=(
+                _strip_default_port(str(raw["base_url"]).rstrip("/"))
+                if raw.get("base_url")
+                else self.base_url
+            ),
         )
 
 
@@ -310,15 +373,28 @@ class AppSpec:
     # platform's own traffic arrives from the platform's address range and is
     # classified synthetic. Falls back to base_url, loudly.
     internal_url: str | None = None
+    # The network the harness's own traffic must arrive over, because that is what
+    # decides whether the target records it as the platform's own or as the tool's.
+    internal_network: str = "bench-internal"
     # Reset, per targets/target-contract.yaml: a command inside a container, never a
     # route. `reset_service` is the compose service that owns the state.
     reset_service: str | None = None
     reset_command: str = "/usr/local/bin/state-reset"
     reset_timeout_s: float = 600.0
-    # Restarted before the reset command runs. Only for state that lives outside the
-    # application process -- a poisoned proxy cache is in the proxy's memory, and no
-    # script inside the origin can flush it.
-    restart_services: list[str] = field(default_factory=list)
+    # Restarted before the reset command runs. DEFAULT: every service of the app.
+    #
+    # A reset command computes its digest over persistent storage, so it is blind to
+    # state held in the process: a write to Object.prototype (shopfront plants two),
+    # an in-memory cache, a compiled template cache, a cached object in Varnish. The
+    # digest comes back identical and the next tool inherits the previous tool's
+    # exploit -- which is the single most direct way one scanner's work becomes
+    # another's score, and exactly what the reset verification exists to prevent.
+    #
+    # So the default is on and a target opts out with `restart_services: []`. The
+    # cost of a needless restart is seconds; the cost of a missed one is a published
+    # number attributing one tool's exploit to another.
+    restart_services: list[str] | None = None
+    # Waited on after a restart. Defaults to whatever was restarted.
     health_services: list[str] = field(default_factory=list)
     # Pin the expected seeded digest here to check every run against a fixed value
     # instead of against whatever the previous run recorded.
@@ -340,7 +416,7 @@ class AppSpec:
         if self.reset_service is None:
             self.reset_service = self.services[0]
         if not self.health_services:
-            self.health_services = list(self.restart_services)
+            self.health_services = list(self.services_to_restart)
 
     @classmethod
     def from_dict(cls, key: str, data: dict[str, Any]) -> AppSpec:
@@ -352,14 +428,34 @@ class AppSpec:
         return cls(key=key, **data)
 
     @property
+    def services_to_restart(self) -> list[str]:
+        """Every service unless the target explicitly opted out with an empty list."""
+        return list(self.services) if self.restart_services is None else list(self.restart_services)
+
+    @property
+    def restart_opted_out(self) -> bool:
+        return self.restart_services == []
+
+    @property
     def harness_url(self) -> str:
         """Base URL the harness itself uses. See the class docstring."""
         return self.internal_url or self.base_url
 
     @property
     def harness_url_is_the_tools(self) -> bool:
-        """True when no internal name was configured, i.e. our traffic looks like the tool's."""
-        return not self.internal_url
+        """True when our traffic is indistinguishable from the tool's by name alone.
+
+        Either no internal name was configured, or -- as with a target that answers
+        to the same alias on both networks -- it is the same name the tool uses. In
+        both cases the interface, and therefore the classification, is decided by
+        whichever address the resolver happens to return, so the orchestrator pins
+        the connection to the internal address instead.
+        """
+        return not self.internal_url or self.internal_url == self.base_url
+
+    @property
+    def internal_host(self) -> str:
+        return urlsplit(self.harness_url).hostname or ""
 
     @property
     def host(self) -> str:
@@ -425,6 +521,8 @@ class BenchConfig:
     apps: dict[str, AppSpec]
     tools: dict[str, ToolSpec]
     credentials_override: dict[str, Credentials]
+    # app -> the `users:`/`base_url:` block the target itself printed at preflight.
+    emitted_credentials: dict[str, dict[str, Any]] = field(default_factory=dict)
     compose_file: Path | None = None
     compose_project: str = "platform-edge"
     # The service whose loopback the control plane is reachable on. Run management
@@ -485,7 +583,9 @@ class BenchConfig:
         path = app.default_credentials_file()
         if not path.exists():
             return None
-        return TargetCredentialsFile.load(path)
+        target = TargetCredentialsFile.load(path)
+        emitted = self.emitted_credentials.get(app.key)
+        return target.merged_with(emitted) if emitted else target
 
     def resolve_urls(self) -> dict[str, str]:
         """Take each target's base URL from the file the target itself writes.

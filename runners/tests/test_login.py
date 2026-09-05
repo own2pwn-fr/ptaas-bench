@@ -140,3 +140,14 @@ def test_the_session_summary_never_carries_the_password():
     summary = establish(http, form_creds()).to_dict()
     assert "s3cr3t" not in json.dumps(summary)
     assert summary["cookie_names"] == ["sid"]
+
+
+def test_requests_can_be_pinned_to_one_address():
+    """A dual-homed target answers to the same name on both networks; the interface
+    decides whether our own login is recorded as the platform's traffic or the tool's."""
+    http = FakeHttp({
+        LOGIN: Response(200, "", cookies=["sid=abc"]),
+        VERIFY: Response(200, "Sign out"),
+    })
+    establish(http, form_creds(), connect_to="10.77.0.9")
+    assert set(http.connected_to) == {"10.77.0.9"}

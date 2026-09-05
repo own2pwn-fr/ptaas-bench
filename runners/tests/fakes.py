@@ -158,10 +158,14 @@ class FakeHttp:
         self.routes = routes or {}
         self.default = default or Response(404, "no route in the fake")
         self.requests: list[tuple[str, str]] = []
+        self.connected_to: list[str | None] = []
 
     def request(self, method: str, url: str, *, json_body=None, data=None, headers=None,
-                timeout: float = 30) -> Response:
+                timeout: float = 30, connect_to: str | None = None) -> Response:
+        # connect_to is recorded rather than applied: the routing decision is what
+        # matters to the caller, and a test asserts it was made.
         self.requests.append((method.upper(), url))
+        self.connected_to.append(connect_to)
         handler = self.routes.get(url, self.default)
         if isinstance(handler, list):
             # A queue: successive calls to the same URL return successive answers,

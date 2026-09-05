@@ -99,6 +99,24 @@ class AppTopology:
                     seen.append(ip)
         return seen
 
+    def address_on(self, network: str, prefer_host: str | None = None) -> str | None:
+        """This application's address on ``network``.
+
+        ``prefer_host`` is the hostname the harness is configured to use, matched
+        against the service name first: a target with several services answers on
+        several addresses, and the one we want is the one serving HTTP. Falling back
+        to the first service that has an address on that network is right for the
+        common shape, where the front-most service is listed first.
+        """
+        if prefer_host:
+            for service in self.services:
+                if service.service == prefer_host and network in service.addresses:
+                    return service.addresses[network]
+        for service in self.services:
+            if network in service.addresses:
+                return service.addresses[network]
+        return None
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "app": self.app,

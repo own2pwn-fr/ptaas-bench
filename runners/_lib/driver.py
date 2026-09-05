@@ -238,6 +238,18 @@ class BaseDriver:
         """What the preparation fetched, in one line, for the run record."""
         return None
 
+    def drives_a_browser(self, ctx: RunContext, invocations: list[Invocation]) -> tuple[bool, str]:
+        """Whether this run will execute JavaScript in a real browser.
+
+        Part of the corpus cannot be reached, and in shopfront's case cannot be
+        *proved*, without one: its DOM XSS oracles fire on a report-only CSP
+        violation reported by a real browser and matched to a real navigation. A tool
+        with no browser scoring zero on those is an honest result for that tool and a
+        misleading one for the class, so the run record states which it was rather
+        than leaving the reader to guess.
+        """
+        return False, "this tool does not drive a browser"
+
     def normalise(self, raw_dir: Path, **kwargs: Any) -> NormaliseResult:
         raise NotImplementedError
 

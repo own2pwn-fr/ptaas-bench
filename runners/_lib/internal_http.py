@@ -10,13 +10,18 @@ dual-homed, and a target is exactly what a tool takes RCE on, so being "on the
 internal network" was never protection for the answer key. The orchestrator therefore
 executes inside the collector's own container and talks to 127.0.0.1.
 
-**Reaching a target.** The platform's own traffic (a login the harness performs on
+**Reaching a target, over the right interface.** The platform's own traffic (a login the harness performs on
 behalf of a scanner that cannot log itself in) must not be scored as the tool's. The
 collector and the target SDKs classify synthetic traffic *by source address*, never
 by a header -- a header would be visible to a tool through any reflection or verbose
 error and would hand it the shape of the grader. So harness traffic aimed at a target
 goes through the dual-homed sinkhole, whose address sits in the range both sides
-treat as the platform's own.
+treat as the platform's own. That is necessary but not sufficient: a target is
+dual-homed too, and usually answers to the same name on both networks, so resolving
+that name picks an interface at random -- and the interface decides the source
+address, which decides the classification. ``connect_to`` pins the connection to the
+target's internal address while keeping the Host header, which makes the routing a
+decision rather than a coin toss.
 
 Two transports, same interface:
 
@@ -36,6 +41,7 @@ import urllib.request
 from dataclasses import dataclass
 from dataclasses import field as dc_field
 from typing import Any, Protocol
+from urllib.parse import urlsplit
 
 log = logging.getLogger("bench.runners.http")
 
@@ -45,13 +51,24 @@ log = logging.getLogger("bench.runners.http")
 # internal network by anything other than the operator.
 _CLIENT_SRC = r"""
 import json, sys, urllib.request, urllib.error
+from urllib.parse import urlsplit
 spec = json.loads(sys.argv[1])
 data = spec.get("body")
 if data is not None:
     data = data.encode()
-req = urllib.request.Request(
-    spec["url"], data=data, headers=spec.get("headers") or {}, method=spec["method"]
-)
+url = spec["url"]
+headers = dict(spec.get("headers") or {})
+connect_to = spec.get("connect_to")
+if connect_to:
+    # Connect to a specific address while keeping the Host header. A target is
+    # dual-homed under the same name, so resolving it would pick either interface at
+    # random -- and which one decides whether this request counts as the platform's
+    # own traffic or as the tool's.
+    parts = urlsplit(url)
+    headers.setdefault("Host", parts.netloc)
+    port = f":{parts.port}" if parts.port else ""
+    url = parts._replace(netloc=f"{connect_to}{port}").geturl()
+req = urllib.request.Request(url, data=data, headers=headers, method=spec["method"])
 def collect(resp):
     # Set-Cookie must be read as a list: a login that sets a session cookie and a
     # CSRF cookie collapses to one header if you use a plain dict.
@@ -112,6 +129,7 @@ class Http(Protocol):
         data: str | None = None,
         headers: dict[str, str] | None = None,
         timeout: float = 30,
+        connect_to: str | None = None,
     ) -> Response: ...
 
 
@@ -136,8 +154,11 @@ class ExecHttp:
         data: str | None = None,
         headers: dict[str, str] | None = None,
         timeout: float = 30,
+        connect_to: str | None = None,
     ) -> Response:
         spec: dict[str, Any] = {"method": method.upper(), "url": url, "timeout": timeout}
+        if connect_to:
+            spec["connect_to"] = connect_to
         head = dict(headers or {})
         if json_body is not None:
             spec["body"] = json.dumps(json_body)
@@ -179,6 +200,7 @@ class DirectHttp:
         data: str | None = None,
         headers: dict[str, str] | None = None,
         timeout: float = 30,
+        connect_to: str | None = None,
     ) -> Response:
         payload: bytes | None = None
         head = dict(headers or {})
@@ -188,6 +210,11 @@ class DirectHttp:
         elif data is not None:
             payload = data.encode()
             head.setdefault("Content-Type", "application/x-www-form-urlencoded")
+        if connect_to:
+            parts = urlsplit(url)
+            head.setdefault("Host", parts.netloc)
+            port = f":{parts.port}" if parts.port else ""
+            url = parts._replace(netloc=f"{connect_to}{port}").geturl()
         req = urllib.request.Request(url, data=payload, headers=head, method=method.upper())
         try:
             with urllib.request.urlopen(req, timeout=timeout) as resp:

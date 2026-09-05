@@ -6,7 +6,7 @@ findings file with nothing in it, and that reads in the comparison table as a sc
 with poor coverage. The whole point of stopping early is that "the harness was
 misconfigured" and "the tool missed everything" must never be the same output.
 
-Four checks:
+Five checks:
 
 * **The target's credentials file exists.** It is the authority for the base URL
   (seed-derived, so it cannot be hardcoded) and for the identities. Missing, we do not
@@ -19,6 +19,12 @@ Four checks:
   to write the file with an empty ``users:`` list and a comment, precisely so that "no
   authentication here" can be told from "someone forgot". Only the second stops a run,
   and only when the catalog says that application has authenticated entrypoints.
+* **The identities are the ones the running deployment actually has.** The committed
+  credentials file belongs to one DEPLOY_SEED; e-mail addresses and passwords move
+  with the seed while subject ids do not. So the target is asked, with
+  ``state-reset --emit-credentials``, and where it disagrees with the file the target
+  wins. Trusting a file committed for the default seed is how an authenticated run
+  quietly becomes an anonymous one.
 * **No `dev`-profile service is running.** Those sit on a non-internal network to give
   a developer host access. Up during a run, that is a route out of the sealed network,
   and the egress capture that makes every blind vulnerability in the corpus measurable
@@ -108,6 +114,81 @@ def apps_with_authenticated_entrypoints(catalog_dir: Path | None = None) -> set[
         if doc.get("app") and str(entrypoint.get("auth", "none")) != "none":
             apps.add(str(doc["app"]))
     return apps
+
+
+def emit_credentials(docker: Any, app: AppSpec) -> tuple[dict[str, Any] | None, str]:
+    """Ask the running target for its current identities.
+
+    ``state-reset --emit-credentials`` prints the `app:` and `users:` blocks and
+    changes nothing. A target that does not implement the flag is not an error: the
+    committed file is then all there is, and the check says so.
+    """
+    res = docker.compose_exec(
+        app.reset_service, [app.reset_command, "--emit-credentials"], timeout=120
+    )
+    if res.returncode != 0:
+        return None, f"exit {res.returncode} {(res.stderr or '').strip()[:200]}".strip()
+    try:
+        doc = yaml.safe_load(res.stdout or "") or {}
+    except yaml.YAMLError as exc:
+        return None, f"unparsable output: {exc}"
+    if not isinstance(doc, dict) or "users" not in doc:
+        return None, f"no users block in the output: {(res.stdout or '').strip()[:200]!r}"
+    return doc, "ok"
+
+
+def check_live_credentials(config: BenchConfig, app: AppSpec, docker: Any) -> Check:
+    """Overlay the live identities on the committed file, and say whether they differ."""
+    name = f"credentials-live:{app.key}"
+    committed = config.target_file(app)
+    if committed is None:
+        return Check(name, True, "no committed file to reconcile", indeterminate=True)
+
+    doc, detail = emit_credentials(docker, app)
+    if doc is None:
+        return Check(
+            name,
+            False,
+            f"{app.reset_command} --emit-credentials did not answer ({detail}); the "
+            "committed file is being trusted, and it belongs to one DEPLOY_SEED",
+            indeterminate=True,
+        )
+
+    config.emitted_credentials[app.key] = doc
+    before = {(u.get("role"), u.get("username")) for u in (committed.raw.get("users") or [])}
+    after = {(u.get("role"), u.get("username")) for u in (doc.get("users") or [])}
+    if before != after:
+        return Check(
+            name,
+            True,
+            "the committed file belongs to a different DEPLOY_SEED; using the "
+            f"identities the target printed ({sorted(r for r, _ in after)})",
+        )
+    return Check(name, True, "the committed file matches the running deployment")
+
+
+def js_dependent_entries(apps: list[AppSpec], catalog_dir: Path | None = None) -> dict[str, int]:
+    """How many catalog entries per app need JavaScript execution.
+
+    Read from ``discovery.requires``, which is where the catalog states it. A tool
+    with no browser will miss these, and that is an honest result for that tool --
+    but only if the reader knows, which is why it goes into the run record next to
+    whether the tool had a browser at all.
+    """
+    catalog_dir = catalog_dir or (REPO_ROOT / "catalog" / "vulns")
+    counts = {app.key: 0 for app in apps}
+    if not catalog_dir.exists():
+        return counts
+    for path in sorted(catalog_dir.glob("*.yaml")):
+        try:
+            doc = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        except yaml.YAMLError:
+            continue
+        app = str(doc.get("app", ""))
+        requires = ((doc.get("discovery") or {}).get("requires")) or []
+        if app in counts and "js-execution" in requires:
+            counts[app] += 1
+    return counts
 
 
 def check_credentials(config: BenchConfig, app: AppSpec, authed_apps: set[str]) -> list[Check]:
@@ -267,6 +348,9 @@ def preflight(
     report.checks.append(check_no_dev_services(docker))
 
     for app in apps:
+        # Ask the target first: the answer changes what check_credentials reads.
+        if config.target_file(app) is not None and app.reset_service:
+            report.checks.append(check_live_credentials(config, app, docker))
         report.checks.extend(check_credentials(config, app, authed_apps))
         if check_dns and tool_image:
             expected = list((topology or {}).get(app.key, []))

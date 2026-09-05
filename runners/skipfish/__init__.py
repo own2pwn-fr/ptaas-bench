@@ -144,7 +144,8 @@ class SkipfishDriver(BaseDriver):
         # while still being reported as authenticated.
         args: list[str] = []
         creds = ctx.creds_for(app.key)
-        for path in (creds.logout_paths if creds else []):
+        # -X is a substring match, so a route template would never fire.
+        for path in (creds.logout_prefixes() if creds else []):
             args += ["-X", path]
         for path in list(getattr(app, "exclude_paths", []) or []):
             args += ["-X", path]

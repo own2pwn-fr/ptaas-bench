@@ -111,8 +111,15 @@ def _dig(obj: Any, dotted: str) -> Any:
     return cur
 
 
-def establish(http: Http, creds: Credentials, *, strict: bool = True) -> Session:
-    """Log in and verify. Raises ``LoginError`` in strict mode when unverifiable."""
+def establish(
+    http: Http, creds: Credentials, *, strict: bool = True, connect_to: str | None = None
+) -> Session:
+    """Log in and verify. Raises ``LoginError`` in strict mode when unverifiable.
+
+    ``connect_to`` pins every request to one address (the target's internal one)
+    while keeping the Host header, so that this traffic is classified as the
+    platform's own rather than as the tool's. See _lib/internal_http.py.
+    """
     session = Session(app=creds.app)
     login_response = None
 
@@ -126,15 +133,16 @@ def establish(http: Http, creds: Credentials, *, strict: bool = True) -> Session
         # Some apps mint a CSRF cookie on the login page and reject a POST without it.
         pre_cookies: dict[str, str] = {}
         if creds.login_page_url:
-            pre = http.request("GET", creds.login_page_url, timeout=30)
+            pre = http.request("GET", creds.login_page_url, timeout=30, connect_to=connect_to)
             pre_cookies = _parse_set_cookie(pre.cookies)
 
         headers = {"Cookie": "; ".join(f"{k}={v}" for k, v in pre_cookies.items())} if pre_cookies else {}
         if creds.kind == "json" or creds.kind == "bearer":
-            res = http.request("POST", creds.login_url, json_body=creds.login_body(), headers=headers, timeout=60)
+            res = http.request("POST", creds.login_url, json_body=creds.login_body(), headers=headers, timeout=60, connect_to=connect_to)
         else:
             res = http.request(
-                "POST", creds.login_url, data=urlencode(creds.login_body()), headers=headers, timeout=60
+                "POST", creds.login_url, data=urlencode(creds.login_body()), headers=headers,
+                timeout=60, connect_to=connect_to,
             )
         # A 302 to the dashboard is a successful form login; urllib follows it, so a
         # non-2xx here really is a failure.
@@ -164,7 +172,7 @@ def establish(http: Http, creds: Credentials, *, strict: bool = True) -> Session
     # dedicated URL when one is configured, otherwise against the body the login
     # returned. Only when neither is available is the session unverifiable.
     if creds.verify_url:
-        check = http.request("GET", creds.verify_url, headers=session.as_headers(), timeout=30)
+        check = http.request("GET", creds.verify_url, headers=session.as_headers(), timeout=30, connect_to=connect_to)
         where = creds.verify_url
     elif creds.logged_in_regex or creds.logged_out_regex:
         check = login_response

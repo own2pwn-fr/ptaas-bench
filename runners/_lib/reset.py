@@ -164,13 +164,16 @@ class TargetResetter:
         started = self._clock()
         outcome = ResetOutcome(app=app.key, ok=False, reference_digest=reference_digest)
 
-        if app.restart_services:
-            # Only for state that lives outside the application process (a proxy
-            # cache, an in-memory store). Everything else is the reset command's job.
-            before = {svc: self.docker.container_started_at(self._cid(svc)) for svc in app.restart_services}
-            self.docker.compose_restart(app.restart_services)
-            after = {svc: self.docker.container_started_at(self._cid(svc)) for svc in app.restart_services}
-            for svc in app.restart_services:
+        services = app.services_to_restart
+        if services:
+            # The reset command's digest is computed over persistent storage, so it
+            # cannot see state held in the process: a polluted prototype, an
+            # in-memory cache, a cached object in a proxy. Only a restart clears
+            # those, and the digest would come back identical either way.
+            before = {svc: self.docker.container_started_at(self._cid(svc)) for svc in services}
+            self.docker.compose_restart(services)
+            after = {svc: self.docker.container_started_at(self._cid(svc)) for svc in services}
+            for svc in services:
                 outcome.checks.append(
                     Check(
                         f"restarted:{svc}",

@@ -37,10 +37,16 @@
 #   reset_service     the compose service to `docker compose exec` into
 #   reset_command     default /usr/local/bin/state-reset; idempotent, exits non-zero
 #                     on failure, prints a one-line state digest
-#   restart_services  containers restarted before that command runs. Only for state
-#                     that lives outside the application process: a poisoned proxy
-#                     cache is in the proxy's memory and no script inside the origin
-#                     can flush it.
+#   restart_services  containers restarted before that command runs. DEFAULTS TO
+#                     EVERY SERVICE of the app; a target opts out with an explicit
+#                     empty list. The reset command's digest is computed over
+#                     persistent storage, so it cannot see state held in a process --
+#                     shopfront's two prototype-pollution flaws write to
+#                     Object.prototype, edge's cache flaws leave an object in
+#                     Varnish -- and it comes back identical while the next tool
+#                     inherits the previous tool's exploit. Seconds of restart
+#                     against a published number crediting one scanner with
+#                     another's work.
 
 version: 1
 
@@ -60,7 +66,7 @@ platform:
 
 apps:
   # ---------------------------------------------------------------------------
-  # LANDED. Matches compose/edge.yml and targets/edge/.
+  # LANDED. Matches compose/edge.yml, compose/shopfront.yml and targets/.
   # ---------------------------------------------------------------------------
   edge:
     services: [edge-nginx, edge-haproxy, edge-varnish, edge-origin]
@@ -69,10 +75,10 @@ apps:
     # inside 10.77.0.0/24 -- the range the origin treats as its operator's tooling.
     internal_url: http://nginx
     reset_service: edge-origin
-    # Every flaw here is a disagreement between two HTTP parsers, and two of them
-    # persist in Varnish's cache rather than in the origin. Restarting the cache is
-    # the only way to clear a poisoned entry.
-    restart_services: [edge-varnish]
+    # restart_services defaults to all four hops. Two of the flaws here leave a
+    # poisoned object in Varnish's memory, which no script inside the origin can
+    # reach, and the connection state of the other two hops is part of what is being
+    # measured.
     health_services: [edge-origin, edge-varnish]
     notes: >
       Proxy chain, no application logic. The tool must enter through the front door:
@@ -87,14 +93,30 @@ apps:
   # open a real run against an application whose credentials file is missing.
   # ---------------------------------------------------------------------------
   shopfront:
-    services: [shopfront-web, shopfront-api, shopfront-db]
-    base_url: http://www.${SHOPFRONT_SITE_DOMAIN:-kestrelgoods.example}
-    internal_url: http://shopfront-web:3000
-    reset_service: shopfront-api
-    health_services: [shopfront-api, shopfront-db]
-    openapi_url: http://www.${SHOPFRONT_SITE_DOMAIN:-kestrelgoods.example}/api/openapi.json
-    graphql_url: http://www.${SHOPFRONT_SITE_DOMAIN:-kestrelgoods.example}/graphql
-    notes: Reference SPA. Nothing in the initial HTML; JS-blind crawlers score ~0 here.
+    # Compose service `shopfront`; hostname storefront-web-01, which is also its
+    # alias on the tool network. The database is on the internal network only, which
+    # is why it is here (it must be restarted and reset) but is not reachable by any
+    # tool.
+    services: [shopfront, shopfront-db]
+    # No base_url: targets/shopfront/bench-credentials.yaml carries it, and preflight
+    # re-reads the live identities with `state-reset --emit-credentials` because the
+    # committed file belongs to one DEPLOY_SEED.
+    internal_url: http://shopfront:3000
+    reset_service: shopfront
+    # restart_services defaults to both services. Non-negotiable here: two planted
+    # flaws pollute Object.prototype inside the Node process, which survives
+    # state-reset (it restores Postgres, the uploads directory and the key
+    # directory) and would hand the next tool an exploit it never performed. The
+    # container's own command re-runs state-reset on start, so a restart and a reset
+    # agree by construction.
+    health_services: [shopfront, shopfront-db]
+    openapi_url: http://shopfront:3000/api/openapi.json
+    graphql_url: http://shopfront:3000/graphql
+    notes: >
+      Reference SPA: nothing in the initial HTML, every route client-side, the API
+      JSON-only. Two of its DOM XSS oracles fire on a report-only CSP violation
+      reported by a real browser, so a tool with no headless browser cannot prove
+      them -- the run records whether the tool had one.
 
   admin:
     services: [admin-web, admin-api, admin-db, admin-ldap]

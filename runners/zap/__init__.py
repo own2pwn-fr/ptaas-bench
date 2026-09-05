@@ -75,6 +75,11 @@ class ZapDriver(BaseDriver):
             )
         return invocations
 
+    def drives_a_browser(self, ctx, invocations):
+        # Every plan includes spiderAjax with runOnlyIfModern false, so the browser
+        # runs on every profile, baseline included.
+        return True, "spiderAjax runs firefox-headless on every profile"
+
     def build_plan(
         self,
         ctx: RunContext,
@@ -234,8 +239,8 @@ class ZapDriver(BaseDriver):
         # it in a plan file that ships inside the tool's own mount would have been a
         # tell in itself.
         excludes = list(app.exclude_paths)
-        for path in (creds.logout_paths if creds else []):
-            excludes.append(f".*{path}.*")
+        if creds is not None:
+            excludes.extend(creds.logout_regexes())
         return excludes
 
     def _auth_blocks(self, app: AppSpec, creds: Credentials) -> dict[str, Any]:

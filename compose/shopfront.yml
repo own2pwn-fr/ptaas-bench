@@ -50,8 +50,10 @@ services:
       # Docker's embedded resolver, which has no route out from an internal network, and
       # every outbound name would hang for the resolver timeout instead of resolving.
       - 10.88.0.5
-    ports:
-      - "8280:3000"
+    # No published host port: the tool reaches this service by name on the sealed
+    # network, and a port on the host would let unaccounted traffic reach the target
+    # during a measured run. Host access for development goes through a separate
+    # service under the `dev` profile, which preflight refuses to start a run beside.
     networks:
       bench-public:
         aliases: [shopfront, storefront-web-01]

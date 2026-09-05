@@ -81,7 +81,7 @@ from runners._lib.findings import NormaliseResult
 from runners._lib.internal_http import DirectHttp, ExecHttp, HttpError
 from runners._lib.login import LoginError, Session, establish
 from runners._lib.normalise import CweTable, default_table
-from runners._lib.preflight import PreflightError, preflight
+from runners._lib.preflight import PreflightError, js_dependent_entries, preflight
 from runners._lib.reset import ResetError, TargetResetter, reset_targets
 from runners._lib.topology import (
     AppTopology,
@@ -195,6 +195,7 @@ class Orchestrator:
         self.resetter: Any = None
         self.topology: dict[str, AppTopology] = {}
         self.preflight_report: Any = None
+        self.browser: dict[str, Any] = {}
         # The target owns its address: the base URL comes from the file the target
         # writes at seed time, because a hostname derived from DEPLOY_SEED is correct
         # for exactly one deployment and silently wrong for the next.
@@ -266,30 +267,10 @@ class Orchestrator:
             return EXIT_RESET
         digests_before = {o.app: o.state_digest for o in resets if o.state_digest}
 
-        # 2. Log in, and prove that too. Deliberately before the run is opened, so
-        #    the harness's own login traffic is never attributed to the tool.
-        try:
-            sessions = self._login()
-        except LoginError as exc:
-            log.error("%s", exc)
-            return EXIT_AUTH
-
-        # 3. Identify what is about to run, while nothing is being measured.
-        version = None
-        if not self.args.skip_version_probe:
-            version = self._probe_version(profile)
-
-        # 4. Preparation. The tool network is sealed, so anything a tool needs to
-        #    fetch from the internet -- nuclei's templates above all -- is fetched
-        #    now, on a network with egress, and recorded. A tool that silently failed
-        #    to update and fell back to a stale corpus of checks would produce a
-        #    meaningless data point published as a real one.
-        preparation = self._prepare(profile)
-        preparation_ok = all(p.ok for p in preparation)
-
-        # 5. The address map. After the reset (which restarts containers, and docker
-        #    reassigns addresses when it does) and before the run opens, because it
-        #    must be true for exactly this run.
+        # 2. The address map. After the reset (which restarts containers, and docker
+        #    reassigns addresses when it does) and before anything else needs it:
+        #    preflight checks names against it, and the harness's own login traffic
+        #    is pinned to the internal address it names.
         self.topology = inspect_apps(self.docker, self.apps)
         for app_key, digest in digests_before.items():
             if app_key in self.topology:
@@ -305,7 +286,7 @@ class Orchestrator:
                 clashes,
             )
 
-        # 6. Preflight. Every check here guards a failure mode that produces a
+        # 3. Preflight. Every check here guards a failure mode that produces a
         #    plausible-looking empty result rather than an error.
         report = preflight(
             self.config,
@@ -322,6 +303,27 @@ class Orchestrator:
         except PreflightError as exc:
             log.error("%s", exc)
             return EXIT_PREFLIGHT
+
+        # 4. Log in, and prove that too. Deliberately before the run is opened, so
+        #    the harness's own login traffic is never attributed to the tool.
+        try:
+            sessions = self._login()
+        except LoginError as exc:
+            log.error("%s", exc)
+            return EXIT_AUTH
+
+        # 5. Identify what is about to run, while nothing is being measured.
+        version = None
+        if not self.args.skip_version_probe:
+            version = self._probe_version(profile)
+
+        # 6. Preparation. The tool network is sealed, so anything a tool needs to
+        #    fetch from the internet -- nuclei's templates above all -- is fetched
+        #    now, on a network with egress, and recorded. A tool that silently failed
+        #    to update and fell back to a stale corpus of checks would produce a
+        #    meaningless data point published as a real one.
+        preparation = self._prepare(profile)
+        preparation_ok = all(p.ok for p in preparation)
 
         # 7. Open the run. From here on, every request the targets see belongs to
         #    this tool.
@@ -363,6 +365,9 @@ class Orchestrator:
         results = []
         run_error: str | None = None
         try:
+            # Planned once here so the record can state what the run was capable of
+            # before it starts; BaseDriver.run plans again, which is cheap and pure.
+            self.browser = self._browser_capability(ctx, self.driver.plan(ctx))
             results = self.driver.run(ctx)
         except KeyboardInterrupt:
             run_error = "interrupted by the operator"
@@ -504,20 +509,89 @@ class Orchestrator:
                 # "we never logged in" look identical in a results table.
                 log.warning("%s: no credentials configured; scanning anonymously", app.key)
                 continue
-            if app.harness_url_is_the_tools:
-                # Without an internal name our login lands on the same address the
-                # tool uses, so the target cannot tell us apart and credits the
-                # requests to the scanner's crawl.
+            connect_to = self._internal_address(app)
+            if connect_to is None and app.harness_url_is_the_tools:
+                # The target answers to the same name on both networks (or has no
+                # internal name at all) and we could not pin an address, so the
+                # interface -- and with it the classification of our own login
+                # traffic -- is decided by whichever address the resolver returns.
                 log.warning(
-                    "%s: no internal_url configured; the harness's own login traffic "
-                    "will arrive on the tool's network and may be scored as the tool's.",
+                    "%s: the harness's login traffic cannot be pinned to the internal "
+                    "network; some of it may be scored as the tool's crawl coverage.",
                     app.key,
                 )
             sessions[app.key] = establish(
-                self.target_http, creds, strict=not self.args.allow_unverified_auth
+                self.target_http,
+                creds,
+                strict=not self.args.allow_unverified_auth,
+                connect_to=connect_to,
             )
             log.info("%s: session established (%s)", app.key, sessions[app.key].detail)
         return sessions
+
+    def _internal_address(self, app: Any) -> str | None:
+        """The address to reach a target on so our traffic is the platform's own.
+
+        Names are ambiguous for a dual-homed target -- `shopfront` is an alias on
+        both networks -- and the interface decides the source address, which decides
+        whether the target records the request as synthetic. Connecting to the
+        internal address with the Host header preserved makes that a decision.
+        """
+        topology = self.topology.get(app.key)
+        if topology is None:
+            return None
+        return topology.address_on(app.internal_network, prefer_host=app.internal_host)
+
+    # Binaries worth asking about, in the order a tool would pick one.
+    BROWSER_BINARIES = (
+        "firefox", "firefox-esr", "chromium", "chromium-browser", "google-chrome", "chrome"
+    )
+
+    def _browser_capability(self, ctx: RunContext, invocations: list[Any]) -> dict[str, Any]:
+        """Did this run have a browser, and does the corpus need one?
+
+        Two of shopfront's entries can only be *proved* with a real browser: their
+        oracles fire on a report-only CSP violation reported by one. A tool without a
+        browser scoring zero there is honest about that tool and misleading about the
+        vulnerability class, so the record states both what the tool had and how much
+        of the corpus in scope needs it.
+        """
+        declared, reason = self.driver.drives_a_browser(ctx, invocations)
+        detected: str | None = None
+        probe = "not attempted"
+        if not self.args.skip_version_probe:
+            names = " ".join(self.BROWSER_BINARIES)
+            try:
+                res = self.docker.run_capture(
+                    self.tool.image_ref,
+                    ["-c", f"command -v {names} 2>/dev/null | head -1"],
+                    entrypoint="/bin/sh",
+                    network="none",
+                    allow_pull=not self.args.no_pull,
+                    build_spec=self.tool.build,
+                    context_root=REPO_ROOT,
+                )
+                detected = (res.stdout or "").strip().splitlines()[0].strip() if res.stdout.strip() else None
+                probe = "ok"
+            except Exception as exc:  # noqa: BLE001 - an unprobed image is recorded as such
+                probe = f"probe failed: {exc}"
+
+        needs = js_dependent_entries(self.apps)
+        total = sum(needs.values())
+        if total and not declared:
+            log.warning(
+                "%d catalog entr%s in scope need JavaScript execution and this run has no "
+                "browser (%s). Those are expected misses for this tool, not evidence that "
+                "the class is undetectable.",
+                total, "y" if total == 1 else "ies", reason,
+            )
+        return {
+            "declared": declared,
+            "reason": reason,
+            "binary_detected": detected,
+            "probe": probe,
+            "catalog_entries_requiring_js": needs,
+        }
 
     def _prepare(self, profile: str) -> list[Any]:
         """Run the tool's preparation steps on a network with egress."""
@@ -695,6 +769,10 @@ class Orchestrator:
             "target_topology": {app: t.to_dict() for app, t in self.topology.items()},
             "address_map_accepted_by_collector": self.collector.addresses_accepted,
             "preparation": [p.to_dict() for p in kw.get("preparation") or []],
+            # Whether this run could execute JavaScript at all, and how much of the
+            # corpus in scope needs it. Without this, a scanner with no browser and a
+            # scanner that failed to detect DOM XSS produce the same zero.
+            "browser": self.browser,
             "synthetic_traffic": {
                 "rule": "classified by socket peer address, never by a header",
                 "harness_client_service": self.config.platform_client_service,
