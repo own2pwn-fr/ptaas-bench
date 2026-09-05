@@ -1,0 +1,181 @@
+# The trade site: an interpreter and a database, the way it has been racked since 2009.
+#
+# Relative paths resolve against this file's directory (compose/), per the `include`
+# semantics of the Compose specification. The build context is the repository root
+# because the image installs the internal observability package from source alongside
+# the application rather than from a package server.
+#
+# WHY THE VERSIONS ARE PINNED
+# ---------------------------
+# Everything this target depends on is behaviour that upstream changes between minor
+# versions and that this deployment is written against: what the interpreter's header
+# function accepts, which stream wrappers an include may open, how a session identifier
+# supplied by a caller is handled, and how the database coerces a string in a numeric
+# comparison. A floating tag would not keep the deployment fresh, it would change what
+# the deployment does without changing anything in this repository.
+#
+#   php     8.3.14-apache   targets/legacy/docker/php.ini and docker/site.conf
+#   mysql   8.0.40          targets/legacy/app/seed/schema.sql
+#
+# Digests are not written here because this fragment was authored offline. At first
+# bring-up, record `docker image inspect --format '{{index .RepoDigests 0}}'` for both
+# and replace the tags with `image@sha256:...`. Until then the tags are exact -- never
+# `latest`, never a floating minor.
+#
+# NAMES
+# -----
+# Hostnames and network aliases are the product's own and are resolvable by anything on
+# the same network, so they are a statement about what this is. They follow
+# LEGACY_SITE_DOMAIN, which a deployment can override.
+
+x-site-domain: &site-domain ${LEGACY_SITE_DOMAIN:-braithwaite-tool.net}
+
+services:
+
+  # ---------------------------------------------------------------------------
+  # The web server. The only service of this target on the customer-facing
+  # network, and the only one anything out there can reach at all.
+  # ---------------------------------------------------------------------------
+  legacy-web:
+    build:
+      context: ..
+      dockerfile: targets/legacy/Dockerfile
+    image: braithwaite/website:1.14.3
+    container_name: legacy-web
+    hostname: web01
+    profiles: [targets, legacy]
+    environment:
+      TELEMETRY_SERVICE: legacy
+      TELEMETRY_ENDPOINT: http://otel-collector:8900
+
+      # The estate's own range. Requests whose SOCKET PEER falls inside it are our own
+      # tooling -- the deployment checks, the release rehearsal -- and every record they
+      # produce is marked as generated rather than organic. Customer traffic arrives
+      # from the other network and never matches. The agent decides on the socket peer
+      # and on nothing a caller can send, which is what stops a caller announcing one of
+      # these addresses in a header and having its own traffic discounted.
+      # 127.0.0.0/8 is in the list for the same reason: the container's own health
+      # probe re-enters through the front door, so without it every run would carry a
+      # request every ten seconds that no tool sent and that would still count towards
+      # crawl coverage.
+      TELEMETRY_SYNTHETIC_CIDRS: "10.77.0.0/24,127.0.0.0/8"
+
+      # An interpreter request is a process, so there is no thread to hand a record to.
+      # Records are appended here and a separate long-lived process posts them, which is
+      # what keeps a collector that is down or slow from showing up in a response time.
+      TELEMETRY_SPOOL_PATH: /var/tmp/telemetry/records.jsonl
+      TELEMETRY_FLUSH_INTERVAL_MS: "250"
+
+      DB_HOST: db01
+      DB_NAME: braithwaite
+      DB_USER: braithwaite
+      DB_PASSWORD: ${LEGACY_DB_PASSWORD:-Halifax-Yard-1962}
+
+      SITE_NAME: Braithwaite Tool & Plant
+      SITE_DOMAIN: *site-domain
+      DOCUMENT_ROOT_DIR: /var/www/html
+      UPLOAD_DIR: /var/www/html/uploads
+      LITERATURE_DIR: /var/www/literature
+      STATEMENT_DIR: /var/www/statements
+      MAIL_QUEUE_DIR: /var/spool/braithwaite
+      SESSION_DIR: /var/lib/php/sessions
+
+      # Seeded content -- company names, people, product descriptions, references and
+      # account codes -- is derived from this. Two deployments with different seeds
+      # share no strings a search could match.
+      DEPLOY_SEED: ${DEPLOY_SEED:-}
+    networks:
+      bench-public:
+        aliases:
+          - www.${LEGACY_SITE_DOMAIN:-braithwaite-tool.net}
+          - ${LEGACY_SITE_DOMAIN:-braithwaite-tool.net}
+      bench-internal:
+        aliases: [web01]
+    # The resolver for the customer-facing network. It answers every name, which is what
+    # lets a callback aimed at any domain be captured, and it is why the outbound
+    # declaration the agent makes just before a request-controlled fetch is worth making.
+    dns: ["10.88.0.5"]
+    # Ports are NOT published. The customer-facing network has no route to the host by
+    # design; publishing would put this container on a developer's loopback and give
+    # anything that took the container a way back out. See the `dev` profile below.
+    depends_on:
+      legacy-db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "php", "-r", "exit(@file_get_contents('http://127.0.0.1/health.php') === \"ok\\n\" ? 0 : 1);"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 60s
+
+  # ---------------------------------------------------------------------------
+  # The database. It is on the estate network only: nothing on the customer-facing
+  # network can reach it, and it publishes nothing.
+  # ---------------------------------------------------------------------------
+  legacy-db:
+    image: mysql:8.0.40
+    container_name: legacy-db
+    hostname: db01
+    profiles: [targets, legacy]
+    command:
+      - --default-authentication-plugin=caching_sha2_password
+      # The trading tables were built long before the engine's strict modes were the
+      # default, and the reports still lean on the old coercions.
+      - --sql-mode=NO_ENGINE_SUBSTITUTION
+    environment:
+      MYSQL_DATABASE: braithwaite
+      MYSQL_USER: braithwaite
+      MYSQL_PASSWORD: ${LEGACY_DB_PASSWORD:-Halifax-Yard-1962}
+      MYSQL_ROOT_PASSWORD: ${LEGACY_DB_ROOT_PASSWORD:-Elland-Lowfields-1998}
+    networks:
+      bench-internal:
+        aliases: [db01]
+    dns: ["10.77.0.5"]
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "--silent"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 20s
+
+  # ---------------------------------------------------------------------------
+  # Local development only, never during a measured run: `--profile dev`.
+  #
+  # It publishes the site on the developer's machine, which is exactly the route the
+  # sealed networks exist to remove. Bringing it up during a run would let a
+  # compromised container reach the host, and would let host traffic reach the target
+  # without arriving from an address the instrumentation can classify.
+  # ---------------------------------------------------------------------------
+  legacy-devtap:
+    image: nginx:1.27.3-alpine
+    container_name: legacy-devtap
+    profiles: [dev]
+    command:
+      - /bin/sh
+      - -c
+      - |
+        printf 'events {}\nhttp {\n  server {\n    listen 80;\n    location / {\n      proxy_pass http://web01:80;\n      proxy_set_header Host www.%s;\n    }\n  }\n}\n' "${LEGACY_SITE_DOMAIN:-braithwaite-tool.net}" > /etc/nginx/nginx.conf
+        exec nginx -g 'daemon off;'
+    ports:
+      - "8280:80"
+    networks: [bench-internal, legacy-dev]
+    depends_on: [legacy-web]
+
+# Mirrors docker-compose.yml exactly so that `include` merges the two definitions rather
+# than conflicting with them.
+networks:
+  bench-public:
+    name: bench-public
+    internal: true
+    ipam:
+      config:
+        - subnet: 10.88.0.0/24
+  bench-internal:
+    name: bench-internal
+    internal: true
+    ipam:
+      config:
+        - subnet: 10.77.0.0/24
+  # Used by the dev tap alone, and the only non-internal network in this fragment.
+  legacy-dev:
+    name: legacy-dev

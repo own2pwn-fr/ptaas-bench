@@ -1,0 +1,29 @@
+#!/bin/sh
+# Restore the trade site to its deployment state.
+#
+# It rebuilds the trading database and the document folders from the deployment profile,
+# and prints a one-line digest of everything it wrote. Run it twice: the digest must
+# match, and if it does not then something is holding state this script does not know
+# about.
+#
+# It is a command inside the container rather than a page on the site, because a page
+# would be reachable by anybody who can reach the site.
+set -eu
+
+SCRIPT=/var/www/app/seed/reset.php
+
+if [ "$(id -u)" = "0" ]; then
+    out=$(su -s /bin/sh -c "php $SCRIPT" www-data)
+else
+    out=$(php "$SCRIPT")
+fi
+
+case "$out" in
+    state\ *)
+        printf '%s\n' "$out"
+        ;;
+    *)
+        echo "state-reset: unexpected reply: $out" >&2
+        exit 1
+        ;;
+esac

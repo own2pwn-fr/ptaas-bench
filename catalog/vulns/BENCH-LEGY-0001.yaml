@@ -1,0 +1,34 @@
+id: BENCH-LEGY-0001
+title: Blind boolean SQL injection in the product reference lookup
+app: legacy
+component: web
+class: sqli_blind_bool
+severity: critical
+entrypoint:
+  method: GET
+  path: /product.php
+  auth: none
+  param: ref
+  param_in: query
+  default_value: BT-4471
+discovery:
+  render: server-template
+  reachable_from:
+  - /
+  - /catalogue.php
+  - /search.php
+  requires: []
+  difficulty: 1
+oracle:
+  kind: sink
+  condition: |
+    The reference lookup concatenates the parameter into the WHERE clause. The same lookup is also run as a parameterised exact match on the literal value, and the sink reports when the concatenated statement executed without error AND selected a different set of primary keys from the parameterised control -- that is, the value left its string literal and changed which rows the predicate matches. A value that merely breaks the statement, and a value that changes nothing, never report; neither does a quote that is echoed back in the page.
+  poc: GET /product.php?ref=BT-4471' OR '1'='1
+  signal: catalogue.reference.predicate_shift
+tags:
+- form
+- mysql
+- server-rendered
+introduced: '2026-09-05'
+decoy_note: The reference box in the site header predates the query helper the rest of the catalogue uses.
+  It was written as a one-line lookup for a single field and nobody went back to it when the helper arrived.

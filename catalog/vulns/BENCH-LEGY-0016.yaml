@@ -1,0 +1,36 @@
+id: BENCH-LEGY-0016
+title: Formula injection through a quote reference into the account CSV export
+app: legacy
+component: web
+class: csv_injection
+severity: medium
+entrypoint:
+  method: POST
+  path: /account/quote.php
+  auth: user
+  param: reference
+  param_in: body
+  default_value: PO-88213
+  content_type: application/x-www-form-urlencoded
+discovery:
+  render: server-template
+  reachable_from:
+  - /account/index.php
+  - /account/quote.php
+  requires:
+  - form-submit
+  - state-change
+  difficulty: 3
+oracle:
+  kind: sink
+  condition: |
+    Quote references are stored exactly as submitted and written into the account's CSV export with no leading apostrophe and no quoting rule for the first character. The sink is in the export writer, not in the form: it reports when a cell whose content came from stored request input is written out starting with a character a spreadsheet reads as the opening of a calculation. Submitting such a reference reports nothing; serving an export that contains one does.
+  poc: POST /account/quote.php with reference==cmd|' /C calc'!A0, then GET /account/orders.php?export=csv
+  signal: orders.export.formula_cell
+tags:
+- authenticated
+- stored
+- export
+introduced: '2026-09-05'
+decoy_note: The export was written for a customer who reconciles purchase orders in a spreadsheet, and
+  the reference is their own text, so it is written through unchanged on purpose.

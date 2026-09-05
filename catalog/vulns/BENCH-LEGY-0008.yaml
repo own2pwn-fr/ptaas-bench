@@ -1,0 +1,34 @@
+id: BENCH-LEGY-0008
+title: Path traversal in the account statement download, past a single-pass filter
+app: legacy
+component: web
+class: path_traversal
+severity: critical
+entrypoint:
+  method: GET
+  path: /account/invoice.php
+  auth: user
+  param: file
+  param_in: query
+  default_value: INV-2026-0119.pdf
+discovery:
+  render: server-template
+  reachable_from:
+  - /account/index.php
+  - /account/statements.php
+  requires:
+  - multi-step-flow
+  difficulty: 3
+oracle:
+  kind: sink
+  condition: |
+    The statement handler removes the sequence `../` from the parameter once and then joins the remainder to the statement directory, so a sequence that reconstitutes itself after one pass survives. The sink reports when the canonical path of the file actually opened lies outside the statement directory AND bytes from it reached the response. A plain `../` sequence is removed and never reports, which is what makes this one measure whether a tool tries a second encoding rather than one.
+  poc: GET /account/invoice.php?file=....//....//....//....//etc/passwd
+  signal: billing.statement.read_scope
+tags:
+- authenticated
+- file-read
+- filter-bypass
+introduced: '2026-09-05'
+decoy_note: Somebody did fix this, once, with the filter that was on the first page of results at the
+  time. The fix is still there and still looks like a fix.

@@ -1,0 +1,34 @@
+id: BENCH-LEGY-0015
+title: Header injection into the enquiry notification message
+app: legacy
+component: web
+class: email_injection
+severity: medium
+entrypoint:
+  method: POST
+  path: /contact.php
+  auth: none
+  param: email
+  param_in: body
+  default_value: enquiries@fenwick-joinery.example
+  content_type: application/x-www-form-urlencoded
+discovery:
+  render: server-template
+  reachable_from:
+  - /
+  - /contact.php
+  requires:
+  - form-submit
+  difficulty: 1
+oracle:
+  kind: sink
+  condition: |
+    The enquiry form puts the sender's address into the additional header block of the notification message. The sink reports when the block the transport was handed contained a routing or recipient field the application never set -- the value carried a line break and a complete second field into it. A value with a line break that forms no field never reports. There is a second, independent side to this one: before queueing, the mailer checks that each routing domain resolves, and the destination is declared to the egress correlation registry immediately before the lookup, so an injected recipient at a domain the tool controls also produces a callback the sinkhole attributes back to this request whatever domain was used. Either half is proof; the in-application counter is the one the self-test replays, because it fires without needing anything to answer.
+  poc: POST /contact.php with email=a@b.example%0aBcc:%20ops@partner-cdn.test
+  signal: enquiry.dispatch.field_split
+tags:
+- form
+- mail
+introduced: '2026-09-05'
+decoy_note: The reply-to address has to be the customer's or the depot cannot answer the enquiry, and
+  it goes into the header block the same way the subject does.

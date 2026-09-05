@@ -1,0 +1,32 @@
+id: BENCH-LEGY-0007
+title: Path traversal in the public document download
+app: legacy
+component: web
+class: path_traversal
+severity: critical
+entrypoint:
+  method: GET
+  path: /download.php
+  auth: none
+  param: doc
+  param_in: query
+  default_value: catalogue-2026.pdf
+discovery:
+  render: server-template
+  reachable_from:
+  - /
+  - /literature.php
+  requires: []
+  difficulty: 1
+oracle:
+  kind: sink
+  condition: |
+    The download handler joins the parameter to the literature directory and streams whatever it opens. The sink reports when the canonical path of the file that was actually opened lies outside that directory AND at least one byte of it was written to the response. A path that resolves back inside, and one that resolves outside but opens nothing, never report.
+  poc: GET /download.php?doc=../../../../etc/passwd
+  signal: library.document.read_scope
+tags:
+- server-rendered
+- file-read
+introduced: '2026-09-05'
+decoy_note: The literature folder is maintained over FTP by the marketing agency, so the handler takes
+  a file name rather than an identifier from a table.

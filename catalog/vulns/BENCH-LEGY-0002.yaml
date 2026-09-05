@@ -1,0 +1,32 @@
+id: BENCH-LEGY-0002
+title: Blind boolean SQL injection in the depot page, numeric context
+app: legacy
+component: web
+class: sqli_blind_bool
+severity: critical
+entrypoint:
+  method: GET
+  path: /branch.php
+  auth: none
+  param: id
+  param_in: query
+  default_value: '4'
+discovery:
+  render: server-template
+  reachable_from:
+  - /branches.php
+  requires: []
+  difficulty: 2
+oracle:
+  kind: sink
+  condition: |
+    The depot page interpolates the identifier into the WHERE clause without quotes, so no quote character is needed to leave it. The sink compares the rows the interpolated statement selected against the rows a parameterised equality on the same literal selects, and reports only when the two differ. Numeric input that selects the same depot, and input that makes the statement fail, never report.
+  poc: GET /branch.php?id=4 OR 1=1
+  signal: branches.detail.predicate_shift
+tags:
+- mysql
+- numeric-context
+- server-rendered
+introduced: '2026-09-05'
+decoy_note: A numeric identifier looked safe enough to interpolate, which is the reason this one outlived
+  the string parameters that were fixed around it.

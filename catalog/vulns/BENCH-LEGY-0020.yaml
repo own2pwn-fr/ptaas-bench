@@ -1,0 +1,33 @@
+id: BENCH-LEGY-0020
+title: Reflected cross-site scripting inside an attribute on the stock check page
+app: legacy
+component: web
+class: xss_reflected
+severity: medium
+entrypoint:
+  method: GET
+  path: /stock.php
+  auth: none
+  param: ref
+  param_in: query
+  default_value: BT-4471
+discovery:
+  render: server-template
+  reachable_from:
+  - /product.php
+  - /stock.php
+  requires: []
+  difficulty: 2
+oracle:
+  kind: sink
+  condition: |
+    The stock page puts the reference back into the value attribute of the check-again form without escaping the quote character. The sink reports when the bytes written into that attribute differ from what the escaping helper would have produced AND the value closed the attribute it was written into, which is what it takes to reach an event handler from this position. A reference containing angle brackets alone does not leave the attribute and reports nothing.
+  poc: GET /stock.php?ref=x" onmouseover=alert(1) x="
+  signal: stock.lookup.markup_escape
+tags:
+- server-rendered
+- reflected
+- attribute-context
+introduced: '2026-09-05'
+decoy_note: The reference is put back in the box so the customer can correct a typo, and it is a product
+  code, so it was assumed to be alphanumeric.

@@ -1,0 +1,32 @@
+id: BENCH-LEGY-0027
+title: Third-party script on the quote page loads without an integrity attribute
+app: legacy
+component: web
+class: missing_sri
+severity: medium
+entrypoint:
+  method: GET
+  path: /quote.php
+  auth: none
+  param: null
+  param_in: query
+  default_value: null
+discovery:
+  render: server-template
+  reachable_from:
+  - /
+  - /cart.php
+  requires: []
+  difficulty: 2
+oracle:
+  kind: artifact
+  condition: |
+    The quote page loads a script from a third-party origin with no integrity attribute and no crossorigin attribute, so whatever that origin serves runs with the page's privileges. There is no exploitation step inside the application: the finding is the tag. The sink reports when the page is actually rendered with that tag in it, so that reaching and rendering the page can be told apart from listing the route, and so that the entry is scoreable at all -- a target must never emit a catalog identifier, and nothing else here would map back to this entry.
+  poc: GET /quote.php and read the script tags
+  signal: quote.thirdparty.integrity_absent
+tags:
+- supply-chain
+- server-rendered
+introduced: '2026-09-05'
+decoy_note: The quote page embeds the finance partner's affordability widget, added by the agency that
+  built the campaign, with the snippet exactly as the partner published it.

@@ -1,0 +1,36 @@
+id: BENCH-LEGY-0003
+title: Blind boolean SQL injection in the order history filter
+app: legacy
+component: web
+class: sqli_blind_bool
+severity: critical
+entrypoint:
+  method: GET
+  path: /account/orders.php
+  auth: user
+  param: ref
+  param_in: query
+  default_value: ''
+discovery:
+  render: server-template
+  reachable_from:
+  - /account/index.php
+  - /account/orders.php
+  requires:
+  - form-submit
+  difficulty: 3
+oracle:
+  kind: sink
+  condition: |
+    The order history filter concatenates the reference fragment into the WHERE clause alongside the session's own customer id. The sink compares the primary keys the concatenated statement selected with those a parameterised LIKE on the same literal selects, and reports when they differ -- which is also how an injected clause that drops the customer restriction shows itself, because rows belonging to another account appear in the difference.
+  poc: GET /account/orders.php?ref=%25' OR '1'='1'%23 with the session cookie of a signed-in customer.
+    The comment is what carries it past the customer restriction that follows the filter in the clause.
+  signal: orders.filter.predicate_shift
+tags:
+- mysql
+- authenticated
+- server-rendered
+introduced: '2026-09-05'
+decoy_note: The filter box was added for a customer who wanted to search their own purchase orders. The
+  customer id is already in the query, so the fragment was appended to a WHERE clause that was assumed
+  to be safe by construction.

@@ -1,0 +1,33 @@
+id: BENCH-LEGY-0005
+title: Local file inclusion through the saved appearance cookie
+app: legacy
+component: web
+class: lfi
+severity: critical
+entrypoint:
+  method: GET
+  path: /
+  auth: none
+  param: bt_skin
+  param_in: cookie
+  default_value: slate.php
+discovery:
+  render: server-template
+  reachable_from:
+  - /
+  - /account/preferences.php
+  requires: []
+  difficulty: 3
+oracle:
+  kind: sink
+  condition: |
+    Every page renders its header by including the fragment named in the appearance cookie. The sink reports when the canonical path of the included fragment lies outside the skin directory AND the include wrote something into the response. The cookie is not a form field and is not linked anywhere, so reaching this one means the caller went looking at inputs the pages do not advertise.
+  poc: 'GET / with Cookie: bt_skin=../../../../etc/passwd'
+  signal: layout.skin.include_scope
+tags:
+- cookie
+- server-rendered
+- include
+introduced: '2026-09-05'
+decoy_note: 'The appearance switch was a two-day job in 2011: store the chosen fragment name in a cookie,
+  include it. The switch itself was removed from the settings page years ago; the cookie is still read.'

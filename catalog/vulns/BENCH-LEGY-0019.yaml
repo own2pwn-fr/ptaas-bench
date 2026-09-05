@@ -1,0 +1,32 @@
+id: BENCH-LEGY-0019
+title: Reflected cross-site scripting in the sign-in notice banner
+app: legacy
+component: web
+class: xss_reflected
+severity: medium
+entrypoint:
+  method: GET
+  path: /account/login.php
+  auth: none
+  param: notice
+  param_in: query
+  default_value: ''
+discovery:
+  render: server-template
+  reachable_from:
+  - /account/login.php
+  - /account/logout.php
+  requires: []
+  difficulty: 2
+oracle:
+  kind: sink
+  condition: |
+    The sign-in page renders the banner named in the query string, which the sign-out and session-expiry redirects use to explain themselves, through the raw output helper. The sink reports when the bytes written differ from what the escaping helper would have produced AND the value opened an element or an event attribute in the response.
+  poc: GET /account/login.php?notice=<img src=x onerror=alert(1)>
+  signal: signin.notice.markup_escape
+tags:
+- server-rendered
+- reflected
+introduced: '2026-09-05'
+decoy_note: The banner is meant to carry a short sentence with a link in it -- "your session ended, sign
+  in again" -- so it was written to allow markup.

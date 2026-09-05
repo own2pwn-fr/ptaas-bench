@@ -1,0 +1,24 @@
+{
+    "name": "braithwaite/website",
+    "description": "Braithwaite Tool & Plant trade site.",
+    "type": "project",
+    "license": "proprietary",
+    "require": {
+        "php": ">=8.3",
+        "internal/telemetry": "^1.0",
+        "twig/twig": "^3.11"
+    },
+    "repositories": [
+        {
+            "type": "path",
+            "url": "packages/telemetry",
+            "options": {
+                "symlink": false
+            }
+        }
+    ],
+    "config": {
+        "vendor-dir": "vendor",
+        "optimize-autoloader": true
+    }
+}

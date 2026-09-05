@@ -1,0 +1,33 @@
+id: BENCH-LEGY-0023
+title: Session cookie issued without HttpOnly, Secure or SameSite
+app: legacy
+component: web
+class: cookie_flags
+severity: low
+entrypoint:
+  method: POST
+  path: /account/login.php
+  auth: none
+  param: null
+  param_in: body
+  default_value: null
+  content_type: application/x-www-form-urlencoded
+discovery:
+  render: server-template
+  reachable_from:
+  - /account/login.php
+  requires:
+  - form-submit
+  difficulty: 1
+oracle:
+  kind: artifact
+  condition: |
+    The session cookie is issued with none of HttpOnly, Secure or SameSite set. The sink reports on the response that actually establishes a session and hands one to the caller with those attributes absent; requests that reuse an existing session do not issue a cookie and do not report.
+  poc: POST /account/login.php with valid credentials and observe the Set-Cookie header
+  signal: account.session.cookie_attributes
+tags:
+- cookie
+- configuration
+introduced: '2026-09-05'
+decoy_note: The session name and its attributes were set once, in a configuration file that predates every
+  one of those attributes existing.

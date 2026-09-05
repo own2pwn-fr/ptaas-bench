@@ -1,0 +1,34 @@
+id: BENCH-LEGY-0012
+title: Command injection in the staff storage report
+app: legacy
+component: web
+class: cmdi
+severity: critical
+entrypoint:
+  method: POST
+  path: /admin/tools.php
+  auth: admin
+  param: folder
+  param_in: body
+  default_value: pod
+  content_type: application/x-www-form-urlencoded
+discovery:
+  render: server-template
+  reachable_from:
+  - /admin/index.php
+  requires:
+  - form-submit
+  difficulty: 4
+oracle:
+  kind: sink
+  condition: |
+    The storage report interpolates the folder name into a shell command. The page runs the command twice -- once as written and once with the argument quoted -- and shows the unquoted result. The sink compares the two outputs and reports when they differ, which happens exactly when the value left its argument position and made the shell run something else. A value that produces the same output under both quotings never reports, so a metacharacter that the shell does not act on scores nothing.
+  poc: POST /admin/tools.php with folder=pod; id
+  signal: console.storage.argument_break
+tags:
+- admin
+- form
+- rce
+introduced: '2026-09-05'
+decoy_note: Two panes were added to this page a year apart, and only the newer one got its argument quoted.
+  The older pane is the one that is displayed.

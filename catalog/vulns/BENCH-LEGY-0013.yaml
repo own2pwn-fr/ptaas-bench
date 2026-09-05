@@ -1,0 +1,32 @@
+id: BENCH-LEGY-0013
+title: Command injection in the attachment preview
+app: legacy
+component: web
+class: cmdi
+severity: critical
+entrypoint:
+  method: GET
+  path: /account/documents.php
+  auth: user
+  param: preview
+  param_in: query
+  default_value: ''
+discovery:
+  render: server-template
+  reachable_from:
+  - /account/documents.php
+  requires:
+  - multi-step-flow
+  difficulty: 3
+oracle:
+  kind: sink
+  condition: |
+    The attachment preview shells out to read the size and type of the named file. The handler builds the command twice, once interpolated and once with the argument quoted, and the sink reports when the two produce different output -- the value escaped its argument and something else ran. A file name that is merely wrong produces the same error under both quotings and never reports.
+  poc: GET /account/documents.php?preview=note.txt;id
+  signal: delivery.preview.argument_break
+tags:
+- authenticated
+- rce
+introduced: '2026-09-05'
+decoy_note: The preview column was a quick addition so drivers could see whether a photo had uploaded
+  intact, and shelling out to the same tools the depot scripts use was the obvious way to do it.

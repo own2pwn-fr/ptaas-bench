@@ -1,0 +1,34 @@
+id: BENCH-LEGY-0011
+title: Object deserialization of the basket carried in a hidden form field
+app: legacy
+component: web
+class: deser_php
+severity: critical
+entrypoint:
+  method: POST
+  path: /cart.php
+  auth: none
+  param: basket
+  param_in: body
+  default_value: null
+  content_type: application/x-www-form-urlencoded
+discovery:
+  render: server-template
+  reachable_from:
+  - /cart.php
+  - /product.php
+  requires:
+  - form-submit
+  difficulty: 2
+oracle:
+  kind: sink
+  condition: |
+    The basket is round-tripped through a hidden field as a serialized string so it survives a lost session, and the field is restored with the object restore function on every post. The sink reports when the restore materialised an object of a class other than the basket record and one of its lifecycle methods ran on the restored data.
+  poc: POST /cart.php with basket=<base64 of O:15:"DocumentSpooler":2:{...}>
+  signal: basket.restore.lifecycle_call
+tags:
+- form
+- gadget-chain
+introduced: '2026-09-05'
+decoy_note: Sessions used to be lost between the two web servers, and carrying the basket in the form
+  was the fix that stopped the complaints. It has worked ever since.

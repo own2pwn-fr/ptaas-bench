@@ -1,0 +1,37 @@
+id: BENCH-LEGY-0017
+title: Formula injection through an enquiry into the staff CSV export
+app: legacy
+component: web
+class: csv_injection
+severity: medium
+entrypoint:
+  method: POST
+  path: /contact.php
+  auth: none
+  param: company
+  param_in: body
+  default_value: Fenwick Joinery
+  content_type: application/x-www-form-urlencoded
+discovery:
+  render: server-template
+  reachable_from:
+  - /
+  - /contact.php
+  requires:
+  - form-submit
+  - state-change
+  difficulty: 1
+oracle:
+  kind: sink
+  condition: |
+    Enquiries submitted by anyone are exported by staff as CSV with no quoting rule for the first character of a cell. The sink is in the export writer: it reports when a cell whose content came from a stored enquiry is written out starting with a character a spreadsheet reads as the opening of a calculation. The injection point is anonymous and the effect is only observable in a staff export, so nothing reports until the two halves are put together.
+  poc: POST /contact.php with company==HYPERLINK("http://partner-cdn.test/x","x"), then GET /admin/enquiries.php?export=csv
+    as staff
+  signal: enquiries.export.formula_cell
+tags:
+- stored
+- export
+- cross-privilege
+introduced: '2026-09-05'
+decoy_note: The enquiry export is how the sales desk works its list every morning; it has always been
+  a straight dump of the table.

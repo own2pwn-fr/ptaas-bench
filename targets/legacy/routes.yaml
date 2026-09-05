@@ -1,0 +1,178 @@
+# Route inventory for the trade site.
+#
+# Two uses, both of which fix a measurement bias. Crawl coverage over the WHOLE reachable
+# surface rather than only the parts we made interesting, because reach measured over
+# planted vulnerabilities alone counts only the pages that were built to be found. And a
+# real false-positive denominator: a finding reported against a route declared `safe`
+# here is a confirmed false positive rather than merely unmatched.
+#
+# Ratio: 97 safe endpoints to 23 planted, i.e. 4.2:1, comfortably past the
+# 3:1 the target contract asks for. That matters more on this target than on any other in
+# the corpus. This is the control group -- discovery is nearly free, everything is
+# server-rendered, every form is in the initial HTML -- so what it measures is testing
+# skill rather than crawling skill, and that reading only holds if a tool can be wrong
+# here. An application where every parameter is exploitable measures nothing.
+#
+# Paths are the templates the front controller registers (app/routes.php), which is what
+# the catalog entrypoints are written against and what the instrumentation reports.
+#
+# THREE ROUTES ARE DELIBERATELY ABSENT, and their absence is the honest answer rather
+# than a gap:
+#
+#   /uploads/{file}        Served straight off disk by the web server, not by the front
+#                          controller. It is where BENCH-LEGY-0009 is OBSERVED -- an
+#                          uploaded script running -- while the entry point that plants it
+#                          is POST /account/documents.php. Declaring it `safe` would
+#                          publish a correct finding about code execution there as a false
+#                          positive; declaring it `planted` would name a route no catalog
+#                          entry describes. It is therefore neither, and a finding on it
+#                          is unmatched, which is the truthful state.
+#
+#   /admin/enquiries.php   Same shape, one hop further. It is where the CSV that carries
+#                          BENCH-LEGY-0017 is served, while the injection point is the
+#                          anonymous POST /contact.php. Absent for the same reason.
+#
+#   /assets/{file}         Static files served by the web server with no interpreter in
+#                          the path, so no request record exists for them and counting
+#                          them in coverage would deflate every tool's number equally for
+#                          no information.
+#
+# /index.php is also absent: it is an alias of / , which is already listed as planted, and
+# listing it separately would double-count one page in both the coverage numerator and the
+# precision denominator.
+
+app: legacy
+
+routes:
+
+  # ---- public catalogue and forms: planted -----------------------------------
+  - {path: /,                                 method: GET,  auth: none, render: server-template, params: [bt_skin, bt_prefs],                                 status: planted}
+  - {path: /product.php,                      method: GET,  auth: none, render: server-template, params: [ref],                                               status: planted}
+  - {path: /branch.php,                       method: GET,  auth: none, render: server-template, params: [id],                                                status: planted}
+  - {path: /help.php,                         method: GET,  auth: none, render: server-template, params: [topic],                                             status: planted}
+  - {path: /download.php,                     method: GET,  auth: none, render: server-template, params: [doc],                                               status: planted}
+  - {path: /go.php,                           method: GET,  auth: none, render: server-template, params: [ref, to],                                           status: planted}
+  - {path: /search.php,                       method: GET,  auth: none, render: server-template, params: [q],                                                 status: planted}
+  - {path: /stock.php,                        method: GET,  auth: none, render: server-template, params: [ref],                                               status: planted}
+  - {path: /quote.php,                        method: GET,  auth: none, render: server-template, params: [],                                                  status: planted}
+  - {path: /cart.php,                         method: POST, auth: none, render: server-template, params: [basket, action, branch],                            status: planted}
+  - {path: /contact.php,                      method: POST, auth: none, render: server-template, params: [name, company, email, phone, message],              status: planted}
+
+  # ---- account area: planted ---------------------------------------------------
+  - {path: /account/login.php,                method: GET,  auth: none, render: server-template, params: [notice],                                            status: planted}
+  - {path: /account/login.php,                method: POST, auth: none, render: server-template, params: [email, password, remember],                         status: planted}
+  - {path: /account/reset.php,                method: POST, auth: none, render: server-template, params: [email],                                             status: planted}
+  - {path: /account/orders.php,               method: GET,  auth: user, render: server-template, params: [ref, export],                                       status: planted}
+  - {path: /account/invoice.php,              method: GET,  auth: user, render: server-template, params: [file],                                              status: planted}
+  - {path: /account/documents.php,            method: GET,  auth: user, render: server-template, params: [preview],                                           status: planted}
+  - {path: /account/documents.php,            method: POST, auth: user, render: server-template, params: [attachment, note],                                  status: planted}
+  - {path: /account/profile.php,              method: GET,  auth: user, render: server-template, params: [format],                                            status: planted}
+  - {path: /account/quote.php,                method: POST, auth: user, render: server-template, params: [reference, note],                                   status: planted}
+
+  # ---- staff console: planted --------------------------------------------------
+  - {path: /admin/widget.php,                 method: GET,  auth: admin, render: server-template, params: [source],                                            status: planted}
+  - {path: /admin/tools.php,                  method: POST, auth: admin, render: server-template, params: [folder],                                            status: planted}
+  - {path: /admin/reports.php,                method: POST, auth: admin, render: server-template, params: [template, period],                                  status: planted}
+
+  # ---- public catalogue and forms: safe ----------------------------------------
+  - {path: /catalogue.php,                    method: GET,  auth: none, render: server-template, params: [section, page, sort],                               status: safe}
+  - {path: /category.php,                     method: GET,  auth: none, render: server-template, params: [slug],                                              status: safe}
+  - {path: /product-datasheet.php,            method: GET,  auth: none, render: server-template, params: [ref],                                               status: safe}
+  - {path: /compare.php,                      method: GET,  auth: none, render: server-template, params: [refs],                                              status: safe}
+  - {path: /recently-viewed.php,              method: GET,  auth: none, render: server-template, params: [],                                                  status: safe}
+  - {path: /brands.php,                       method: GET,  auth: none, render: server-template, params: [],                                                  status: safe}
+  - {path: /brand.php,                        method: GET,  auth: none, render: server-template, params: [slug],                                              status: safe}
+  - {path: /branches.php,                     method: GET,  auth: none, render: server-template, params: [],                                                  status: safe}
+  - {path: /store-finder.php,                 method: GET,  auth: none, render: server-template, params: [postcode],                                          status: safe}
+  - {path: /store-finder.php,                 method: POST, auth: none, render: server-template, params: [postcode],                                          status: safe}
+  - {path: /literature.php,                   method: GET,  auth: none, render: server-template, params: [],                                                  status: safe}
+  - {path: /cart.php,                         method: GET,  auth: none, render: server-template, params: [],                                                  status: safe}
+  - {path: /cart-add.php,                     method: POST, auth: none, render: server-template, params: [ref, qty],                                          status: safe}
+  - {path: /quote-request.php,                method: POST, auth: none, render: server-template, params: [name, company, email, phone, reference, branch, message], status: safe}
+  - {path: /stock-alert.php,                  method: POST, auth: none, render: server-template, params: [email, ref],                                        status: safe}
+  - {path: /contact.php,                      method: GET,  auth: none, render: server-template, params: [],                                                  status: safe}
+  - {path: /newsletter.php,                   method: GET,  auth: none, render: server-template, params: [],                                                  status: safe}
+  - {path: /newsletter.php,                   method: POST, auth: none, render: server-template, params: [email],                                             status: safe}
+  - {path: /callback.php,                     method: GET,  auth: none, render: server-template, params: [],                                                  status: safe}
+  - {path: /callback.php,                     method: POST, auth: none, render: server-template, params: [name, company, email, phone, when],                 status: safe}
+  - {path: /feedback.php,                     method: GET,  auth: none, render: server-template, params: [],                                                  status: safe}
+  - {path: /feedback.php,                     method: POST, auth: none, render: server-template, params: [rating, depot, comment],                            status: safe}
+  - {path: /careers-apply.php,                method: GET,  auth: none, render: server-template, params: [],                                                  status: safe}
+  - {path: /careers-apply.php,                method: POST, auth: none, render: server-template, params: [name, email, phone, vacancy, note],                 status: safe}
+  - {path: /faq.php,                          method: GET,  auth: none, render: server-template, params: [],                                                  status: safe}
+  - {path: /sitemap.php,                      method: GET,  auth: none, render: server-template, params: [],                                                  status: safe}
+  - {path: /news.php,                         method: GET,  auth: none, render: server-template, params: [],                                                  status: safe}
+  - {path: /news-item.php,                    method: GET,  auth: none, render: server-template, params: [slug],                                              status: safe}
+  - {path: /vacancies.php,                    method: GET,  auth: none, render: server-template, params: [],                                                  status: safe}
+  - {path: /vacancy.php,                      method: GET,  auth: none, render: server-template, params: [slug],                                              status: safe}
+  - {path: /robots.txt,                       method: GET,  auth: none, render: api-only,       params: [],                                                  status: safe}
+  - {path: /sitemap.xml,                      method: GET,  auth: none, render: api-only,       params: [],                                                  status: safe}
+  - {path: /.well-known/security.txt,         method: GET,  auth: none, render: api-only,       params: [],                                                  status: safe}
+  - {path: /health.php,                       method: GET,  auth: none, render: api-only,       params: [],                                                  status: safe}
+  - {path: /about.php,                        method: GET,  auth: none, render: server-template, params: [],                                                  status: safe}
+  - {path: /history.php,                      method: GET,  auth: none, render: server-template, params: [],                                                  status: safe}
+  - {path: /careers.php,                      method: GET,  auth: none, render: server-template, params: [],                                                  status: safe}
+  - {path: /terms.php,                        method: GET,  auth: none, render: server-template, params: [],                                                  status: safe}
+  - {path: /privacy.php,                      method: GET,  auth: none, render: server-template, params: [],                                                  status: safe}
+  - {path: /cookies.php,                      method: GET,  auth: none, render: server-template, params: [],                                                  status: safe}
+  - {path: /accessibility.php,                method: GET,  auth: none, render: server-template, params: [],                                                  status: safe}
+  - {path: /delivery.php,                     method: GET,  auth: none, render: server-template, params: [],                                                  status: safe}
+  - {path: /returns.php,                      method: GET,  auth: none, render: server-template, params: [],                                                  status: safe}
+  - {path: /credit-account.php,               method: GET,  auth: none, render: server-template, params: [],                                                  status: safe}
+  - {path: /trade-account.php,                method: GET,  auth: none, render: server-template, params: [],                                                  status: safe}
+  - {path: /hire-terms.php,                   method: GET,  auth: none, render: server-template, params: [],                                                  status: safe}
+  - {path: /health-and-safety.php,            method: GET,  auth: none, render: server-template, params: [],                                                  status: safe}
+  - {path: /accreditations.php,               method: GET,  auth: none, render: server-template, params: [],                                                  status: safe}
+  - {path: /sustainability.php,               method: GET,  auth: none, render: server-template, params: [],                                                  status: safe}
+  - {path: /services.php,                     method: GET,  auth: none, render: server-template, params: [],                                                  status: safe}
+  - {path: /services-threading.php,           method: GET,  auth: none, render: server-template, params: [],                                                  status: safe}
+  - {path: /services-hose.php,                method: GET,  auth: none, render: server-template, params: [],                                                  status: safe}
+  - {path: /services-calibration.php,         method: GET,  auth: none, render: server-template, params: [],                                                  status: safe}
+  - {path: /services-keycutting.php,          method: GET,  auth: none, render: server-template, params: [],                                                  status: safe}
+  - {path: /suppliers.php,                    method: GET,  auth: none, render: server-template, params: [],                                                  status: safe}
+  - {path: /price-promise.php,                method: GET,  auth: none, render: server-template, params: [],                                                  status: safe}
+  - {path: /price-list.php,                   method: GET,  auth: none, render: server-template, params: [],                                                  status: safe}
+  - {path: /quality.php,                      method: GET,  auth: none, render: server-template, params: [],                                                  status: safe}
+  - {path: /environmental.php,                method: GET,  auth: none, render: server-template, params: [],                                                  status: safe}
+  - {path: /modern-slavery.php,               method: GET,  auth: none, render: server-template, params: [],                                                  status: safe}
+  - {path: /insurance.php,                    method: GET,  auth: none, render: server-template, params: [],                                                  status: safe}
+  - {path: /training.php,                     method: GET,  auth: none, render: server-template, params: [],                                                  status: safe}
+
+  # ---- account area: safe ------------------------------------------------------
+  - {path: /account/reset.php,                method: GET,  auth: none, render: server-template, params: [],                                                  status: safe}
+  - {path: /account/register.php,             method: GET,  auth: none, render: server-template, params: [],                                                  status: safe}
+  - {path: /account/register.php,             method: POST, auth: none, render: server-template, params: [name, company, email, phone, references],           status: safe}
+  - {path: /account/logout.php,               method: GET,  auth: none, render: server-template, params: [],                                                  status: safe}
+  - {path: /account/index.php,                method: GET,  auth: user, render: server-template, params: [],                                                  status: safe}
+  - {path: /account/order.php,                method: GET,  auth: user, render: server-template, params: [ref],                                               status: safe}
+  - {path: /account/statements.php,           method: GET,  auth: user, render: server-template, params: [],                                                  status: safe}
+  - {path: /account/quote.php,                method: GET,  auth: user, render: server-template, params: [],                                                  status: safe}
+  - {path: /account/addresses.php,            method: GET,  auth: user, render: server-template, params: [],                                                  status: safe}
+  - {path: /account/addresses.php,            method: POST, auth: user, render: server-template, params: [label, line1, line2, town, postcode],               status: safe}
+  - {path: /account/address.php,              method: GET,  auth: user, render: server-template, params: [id],                                                status: safe}
+  - {path: /account/contacts.php,             method: GET,  auth: user, render: server-template, params: [],                                                  status: safe}
+  - {path: /account/users.php,                method: GET,  auth: user, render: server-template, params: [],                                                  status: safe}
+  - {path: /account/preferences.php,          method: GET,  auth: user, render: server-template, params: [],                                                  status: safe}
+  - {path: /account/preferences.php,          method: POST, auth: user, render: server-template, params: [listing, per_page],                                 status: safe}
+  - {path: /account/password.php,             method: GET,  auth: user, render: server-template, params: [],                                                  status: safe}
+  - {path: /account/password.php,             method: POST, auth: user, render: server-template, params: [current, new],                                      status: safe}
+  - {path: /account/favourites.php,           method: GET,  auth: user, render: server-template, params: [],                                                  status: safe}
+  - {path: /account/favourites.php,           method: POST, auth: user, render: server-template, params: [ref],                                               status: safe}
+  - {path: /account/templates.php,            method: GET,  auth: user, render: server-template, params: [],                                                  status: safe}
+  - {path: /account/deliveries.php,           method: GET,  auth: user, render: server-template, params: [],                                                  status: safe}
+
+  # ---- staff console: safe -----------------------------------------------------
+  - {path: /admin/index.php,                  method: GET,  auth: admin, render: server-template, params: [],                                                  status: safe}
+  - {path: /admin/tools.php,                  method: GET,  auth: admin, render: server-template, params: [folder],                                            status: safe}
+  - {path: /admin/reports.php,                method: GET,  auth: admin, render: server-template, params: [],                                                  status: safe}
+  - {path: /admin/customers.php,              method: GET,  auth: admin, render: server-template, params: [],                                                  status: safe}
+  - {path: /admin/customer.php,               method: GET,  auth: admin, render: server-template, params: [code],                                              status: safe}
+  - {path: /admin/orders.php,                 method: GET,  auth: admin, render: server-template, params: [status],                                            status: safe}
+  - {path: /admin/order.php,                  method: GET,  auth: admin, render: server-template, params: [ref],                                               status: safe}
+  - {path: /admin/products.php,               method: GET,  auth: admin, render: server-template, params: [q],                                                 status: safe}
+  - {path: /admin/product.php,                method: GET,  auth: admin, render: server-template, params: [ref],                                               status: safe}
+  - {path: /admin/product.php,                method: POST, auth: admin, render: server-template, params: [reference, price, stock, discontinued],             status: safe}
+  - {path: /admin/settings.php,               method: GET,  auth: admin, render: server-template, params: [],                                                  status: safe}
+  - {path: /admin/settings.php,               method: POST, auth: admin, render: server-template, params: [carriage_free_over, cutoff_time, counter_open, notice], status: safe}
+  - {path: /admin/audit.php,                  method: GET,  auth: admin, render: server-template, params: [],                                                  status: safe}
+  - {path: /admin/branches.php,               method: GET,  auth: admin, render: server-template, params: [],                                                  status: safe}

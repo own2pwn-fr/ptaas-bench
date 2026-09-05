@@ -1,0 +1,63 @@
+/* Braithwaite Tool & Plant — site styles.
+   Reworked in 2016 to fit a phone; the class names are older than that. */
+
+* { box-sizing: border-box; }
+body { margin: 0; font: 15px/1.5 "Helvetica Neue", Arial, sans-serif; color: #222; background: #f4f4f2; }
+a { color: #17415c; }
+a:hover { color: #0d2836; }
+h1 { font-size: 26px; margin: 18px 0 12px; }
+h2 { font-size: 20px; margin: 22px 0 8px; }
+h3 { font-size: 16px; margin: 16px 0 6px; }
+code { font-family: "Courier New", monospace; background: #eceae6; padding: 1px 3px; }
+
+.masthead { background: #17415c; color: #fff; padding: 14px 18px; }
+.masthead.counter { background: #0d2836; }
+.masthead.print { background: #fff; color: #000; border-bottom: 2px solid #000; }
+.masthead .brand { color: #fff; font-size: 22px; font-weight: bold; text-decoration: none; }
+.masthead.print .brand { color: #000; }
+.masthead .strap { display: block; font-size: 13px; opacity: 0.85; }
+.masthead .counter-hours { display: block; font-size: 12px; opacity: 0.7; }
+
+.topbar { background: #e6e3dd; padding: 8px 18px; display: flex; gap: 18px; flex-wrap: wrap; align-items: center; }
+.topbar label { font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; margin-right: 4px; }
+.topbar .phone { margin-left: auto; font-weight: bold; }
+
+ul.nav { list-style: none; margin: 0; padding: 0 12px; background: #cfcac1; display: flex; flex-wrap: wrap; }
+ul.nav li a { display: block; padding: 8px 12px; text-decoration: none; color: #17415c; }
+ul.nav li a:hover { background: #bdb7ac; }
+
+.page { max-width: 1040px; margin: 0 auto; padding: 10px 18px 40px; background: #fff; }
+.two-column { display: flex; gap: 26px; flex-wrap: wrap; }
+.two-column .side { flex: 0 0 220px; }
+.two-column .main { flex: 1 1 480px; }
+
+table.grid { border-collapse: collapse; width: 100%; margin: 10px 0 18px; }
+table.grid th, table.grid td { border: 1px solid #d8d4cc; padding: 6px 8px; text-align: left; vertical-align: top; }
+table.grid thead th { background: #eceae6; }
+table.grid td.num, table.grid th.num { text-align: right; }
+
+ul.plain { list-style: none; padding: 0; }
+ul.plain li { padding: 3px 0; }
+ul.crumbs { list-style: none; padding: 0; margin: 0 0 14px; display: flex; gap: 14px; flex-wrap: wrap; font-size: 13px; }
+ul.tiles { list-style: none; padding: 0; display: flex; gap: 16px; flex-wrap: wrap; }
+ul.tiles li { background: #eceae6; padding: 12px 18px; min-width: 150px; }
+ul.tiles .num { display: block; font-size: 26px; font-weight: bold; }
+
+form.stacked p { margin: 8px 0; }
+form.stacked label { display: block; font-weight: bold; margin-bottom: 3px; }
+form.inline { margin: 10px 0; }
+form.inline label { margin-right: 6px; }
+input[type=text], input[type=password], select, textarea { padding: 5px; border: 1px solid #b9b3a8; font: inherit; }
+button { padding: 6px 14px; border: 1px solid #17415c; background: #17415c; color: #fff; font: inherit; cursor: pointer; }
+button:hover { background: #0d2836; }
+
+.small { font-size: 13px; color: #555; }
+.notice { background: #e8f1e8; border-left: 4px solid #4a7a4a; padding: 8px 12px; }
+.error { background: #f6e7e7; border-left: 4px solid #9a3b3b; padding: 8px 12px; }
+.panel, .report { border: 1px solid #d8d4cc; padding: 12px 16px; margin: 12px 0; background: #fbfaf8; }
+.panel-body h3, .report-body h2 { margin-top: 0; }
+pre.output { background: #1d1d1d; color: #e8e8e8; padding: 10px 12px; overflow-x: auto; font-size: 13px; }
+
+.footer { max-width: 1040px; margin: 0 auto; padding: 18px; font-size: 13px; color: #444; }
+.footer ul { list-style: none; padding: 0; display: flex; gap: 14px; flex-wrap: wrap; }
+.cookie-note { border-top: 1px solid #d8d4cc; padding-top: 10px; }

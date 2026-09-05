@@ -1,0 +1,34 @@
+id: BENCH-LEGY-0010
+title: Object deserialization of the saved-preferences cookie
+app: legacy
+component: web
+class: deser_php
+severity: critical
+entrypoint:
+  method: GET
+  path: /
+  auth: none
+  param: bt_prefs
+  param_in: cookie
+  default_value: null
+discovery:
+  render: server-template
+  reachable_from:
+  - /
+  - /account/preferences.php
+  requires: []
+  difficulty: 2
+oracle:
+  kind: sink
+  condition: |
+    The saved-preferences cookie is base64-decoded and handed to the object restore function. The sink reports when the restore materialised an object of a class OTHER than the preferences record and one of that object's lifecycle methods actually ran on the restored data. A cookie that fails to decode, one that restores the expected record, and one that names a class whose lifecycle method never runs, all report nothing -- so sending a serialized string is not enough, the gadget has to fire.
+  poc: 'GET / with Cookie: bt_prefs=<base64 of O:15:"DocumentSpooler":2:{s:4:"path";s:0:"";s:6:"buffer";s:0:"";}>.
+    An empty path leaves nothing behind, which is what the replay uses; the same restore with a path
+    under the document root is what turns the gadget into code execution.'
+  signal: preferences.restore.lifecycle_call
+tags:
+- cookie
+- gadget-chain
+introduced: '2026-09-05'
+decoy_note: Preferences were moved out of the session and into a cookie so they would survive the nightly
+  session sweep. Serializing the record was the shortest way to keep the same object on both sides.

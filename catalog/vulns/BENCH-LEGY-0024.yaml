@@ -1,0 +1,33 @@
+id: BENCH-LEGY-0024
+title: Sign-in distinguishes an unknown address from a wrong password
+app: legacy
+component: web
+class: user_enumeration
+severity: medium
+entrypoint:
+  method: POST
+  path: /account/login.php
+  auth: none
+  param: email
+  param_in: body
+  default_value: j.hartley@fenwick-joinery.example
+  content_type: application/x-www-form-urlencoded
+discovery:
+  render: server-template
+  reachable_from:
+  - /account/login.php
+  requires:
+  - form-submit
+  difficulty: 1
+oracle:
+  kind: differential
+  condition: |
+    A sign-in against an address with no account is answered with a different message from a sign-in against a known address with the wrong password. The sink reports when the response actually takes the no-such-account branch, i.e. the application told the caller that the address is not registered. A failed sign-in against an address that does exist takes the other branch and never reports.
+  poc: POST /account/login.php with email=nobody@example.invalid and any password
+  signal: account.signin.subject_probe
+tags:
+- auth
+- form
+introduced: '2026-09-05'
+decoy_note: 'The two messages exist because the support desk asked for them: half the calls were people
+  using the wrong e-mail address for the account.'

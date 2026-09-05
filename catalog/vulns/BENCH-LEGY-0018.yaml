@@ -1,0 +1,32 @@
+id: BENCH-LEGY-0018
+title: Reflected cross-site scripting in the search results heading
+app: legacy
+component: web
+class: xss_reflected
+severity: medium
+entrypoint:
+  method: GET
+  path: /search.php
+  auth: none
+  param: q
+  param_in: query
+  default_value: hex bolt
+discovery:
+  render: server-template
+  reachable_from:
+  - /
+  - /catalogue.php
+  requires: []
+  difficulty: 1
+oracle:
+  kind: sink
+  condition: |
+    The results heading writes the search term into the page through the raw output helper rather than the escaping one. The sink compares the bytes written with what the escaping helper would have produced and reports only when they differ AND the raw value opens an element or an event attribute in the response -- the value crossed out of text content and into markup. A term that is echoed and stays text reports nothing, so echoing a quote is exercise and not more than that.
+  poc: GET /search.php?q=<svg onload=alert(1)>
+  signal: search.results.markup_escape
+tags:
+- server-rendered
+- reflected
+introduced: '2026-09-05'
+decoy_note: The heading was made to show the term in the customer's own capitalisation, which meant taking
+  it out of the escaping helper, and the escaping never came back.

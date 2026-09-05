@@ -1,0 +1,34 @@
+id: BENCH-LEGY-0025
+title: Password reset confirms whether an address has an account
+app: legacy
+component: web
+class: user_enumeration
+severity: medium
+entrypoint:
+  method: POST
+  path: /account/reset.php
+  auth: none
+  param: email
+  param_in: body
+  default_value: j.hartley@fenwick-joinery.example
+  content_type: application/x-www-form-urlencoded
+discovery:
+  render: server-template
+  reachable_from:
+  - /account/login.php
+  - /account/reset.php
+  requires:
+  - form-submit
+  difficulty: 2
+oracle:
+  kind: differential
+  condition: |
+    The reset form says that an e-mail is on its way for an address that has an account and that the address is not known for one that does not. The sink reports when the response takes the address-not-known branch.
+  poc: POST /account/reset.php with email=nobody@example.invalid
+  signal: account.recovery.subject_probe
+tags:
+- auth
+- form
+introduced: '2026-09-05'
+decoy_note: Telling somebody their address is not the one on the account saves a support call, which is
+  why it was written that way and why nobody has changed it.

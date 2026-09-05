@@ -1,0 +1,35 @@
+id: BENCH-LEGY-0028
+title: Local file inclusion in the staff report template selector
+app: legacy
+component: web
+class: lfi
+severity: critical
+entrypoint:
+  method: POST
+  path: /admin/reports.php
+  auth: admin
+  param: template
+  param_in: body
+  default_value: monthly-summary.php
+  content_type: application/x-www-form-urlencoded
+discovery:
+  render: server-template
+  reachable_from:
+  - /admin/index.php
+  - /admin/reports.php
+  requires:
+  - form-submit
+  difficulty: 4
+oracle:
+  kind: sink
+  condition: |
+    The report builder includes the template named in the form post. The sink reports when the canonical path of the included template lies outside the report template directory AND the include wrote something into the response. Choosing one of the offered templates never reports.
+  poc: POST /admin/reports.php with template=../../../../etc/passwd, as staff
+  signal: reporting.template.include_scope
+tags:
+- admin
+- form
+- include
+introduced: '2026-09-05'
+decoy_note: The report templates are a folder of partials that operations staff add to by hand, so the
+  selector takes a file name rather than an identifier from a list.

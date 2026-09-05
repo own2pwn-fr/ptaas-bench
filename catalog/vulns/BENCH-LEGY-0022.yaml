@@ -1,0 +1,33 @@
+id: BENCH-LEGY-0022
+title: Keep-me-signed-in cookie carries the account password in clear
+app: legacy
+component: web
+class: cleartext_transport
+severity: medium
+entrypoint:
+  method: POST
+  path: /account/login.php
+  auth: none
+  param: remember
+  param_in: body
+  default_value: '0'
+  content_type: application/x-www-form-urlencoded
+discovery:
+  render: server-template
+  reachable_from:
+  - /account/login.php
+  requires:
+  - form-submit
+  difficulty: 1
+oracle:
+  kind: artifact
+  condition: |
+    Ticking the keep-me-signed-in box issues a long-lived cookie holding the account's address and password, base64-encoded and nothing more, over a connection with no transport security. The sink reports when such a cookie is actually written into a response -- the recoverable credential left the server. Signing in without the box ticked never reports.
+  poc: POST /account/login.php with email, password and remember=1
+  signal: account.keepalive.credential_plain
+tags:
+- crypto
+- cookie
+introduced: '2026-09-05'
+decoy_note: The site has always been served over plain HTTP inside the trade network, and the keep-me-signed-in
+  cookie was the simplest way to re-authenticate the depot terminals every morning without a token table.

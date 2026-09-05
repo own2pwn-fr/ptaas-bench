@@ -1,0 +1,38 @@
+id: BENCH-LEGY-0009
+title: Proof-of-delivery upload stores executable files inside the document root
+app: legacy
+component: web
+class: unrestricted_upload
+severity: critical
+entrypoint:
+  method: POST
+  path: /account/documents.php
+  auth: user
+  param: attachment
+  param_in: multipart
+  default_value: null
+  content_type: multipart/form-data
+discovery:
+  render: server-template
+  reachable_from:
+  - /account/index.php
+  - /account/documents.php
+  requires:
+  - file-upload
+  - form-submit
+  difficulty: 3
+oracle:
+  kind: sink
+  condition: |
+    Attachments are written under the document root keeping the name and extension the browser sent, and the server hands anything ending in .php to the interpreter. The sink is in the interpreter's own request bootstrap rather than in the upload handler: it reports when a script inside the attachment directory is EXECUTED and is not one of the files placed there at deployment. Uploading a file, whatever it is called, never reports; fetching an uploaded one and having it run does.
+  poc: POST /account/documents.php with a multipart part named attachment, filename note.php, then GET
+    /uploads/note.php
+  signal: delivery.attachment.execute_scope
+tags:
+- authenticated
+- upload
+- rce
+introduced: '2026-09-05'
+decoy_note: Delivery notes are photographed on site and sent in by whatever the driver has, so the form
+  was written to accept anything and keep the original name for the audit trail. The folder is under the
+  web root because the same notes are linked back to the customer.

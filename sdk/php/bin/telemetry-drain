@@ -1,0 +1,122 @@
+#!/usr/bin/env php
+<?php
+
+declare(strict_types=1);
+
+/**
+ * Drain the local record spool to the collector.
+ *
+ * This is the other half of the design described in Internal\Telemetry\Spool: served
+ * requests only ever append to a local file, and this long-lived process does all the
+ * network work, so nothing a collector does can be observed in a response time.
+ *
+ * It is meant to be started once per container alongside the service:
+ *
+ *     vendor/bin/telemetry-drain &
+ *     exec <the service>
+ *
+ * It reads the same TELEMETRY_* environment as the agent, so there is nothing to
+ * configure twice. It exits 0 on SIGTERM after one last drain, so a container stop does
+ * not lose the tail of a burst.
+ *
+ * Options:
+ *     --once      drain whatever is queued, then exit. Useful from a health check or
+ *                 at the end of a deployment step.
+ *     --quiet     no output at all. By default it says nothing on the happy path and
+ *                 complains on stderr when a drain fails, which is what an operator
+ *                 reading container logs after a gap in a dashboard needs to see.
+ */
+
+namespace Internal\Telemetry\Drain;
+
+use Internal\Telemetry\Config;
+use Internal\Telemetry\HttpPoster;
+use Internal\Telemetry\Spool;
+
+$autoloads = [
+    __DIR__ . '/../vendor/autoload.php',      // installed from source
+    __DIR__ . '/../../../autoload.php',       // installed as a dependency
+    __DIR__ . '/../../autoload.php',
+];
+$loaded = false;
+foreach ($autoloads as $candidate) {
+    if (is_file($candidate)) {
+        require $candidate;
+        $loaded = true;
+        break;
+    }
+}
+if (!$loaded) {
+    fwrite(STDERR, "telemetry-drain: no autoloader found\n");
+    exit(1);
+}
+
+$options = $argv ?? [];
+$once = in_array('--once', $options, true);
+$quiet = in_array('--quiet', $options, true);
+
+$config = Config::fromEnvironment();
+$spool = new Spool($config);
+
+$running = true;
+if (function_exists('pcntl_signal') && function_exists('pcntl_async_signals')) {
+    pcntl_async_signals(true);
+    $stop = static function () use (&$running): void {
+        $running = false;
+    };
+    pcntl_signal(SIGTERM, $stop);
+    pcntl_signal(SIGINT, $stop);
+}
+
+/**
+ * Post one batch, with a single retry.
+ *
+ * A collector restarting between two batches is the common transient failure and is
+ * worth one retry. Beyond that the batch is dropped rather than re-queued: a collector
+ * that stays down must not be able to make this process grow without limit, and the
+ * spool's own ceiling is the backstop on the other side.
+ *
+ * @param list<string> $lines
+ */
+$send = static function (array $lines) use ($config): bool {
+    $body = '{"events":[' . implode(',', $lines) . ']}';
+    for ($attempt = 0; $attempt < 2; $attempt++) {
+        if (HttpPoster::post($config->endpoint, $config->eventsPath, $body, max(2.0, $config->timeout), true)) {
+            return true;
+        }
+        if ($attempt === 0) {
+            usleep(50_000);
+        }
+    }
+
+    return false;
+};
+
+$drain = static function () use ($spool, $config, $send, $quiet): void {
+    $lines = $spool->take();
+    if ($lines === []) {
+        return;
+    }
+    foreach (array_chunk($lines, $config->batchMax) as $batch) {
+        if (!$send($batch) && !$quiet) {
+            fwrite(STDERR, sprintf(
+                "telemetry-drain: %d records not delivered to %s\n",
+                count($batch),
+                $config->endpoint,
+            ));
+        }
+    }
+};
+
+if ($once) {
+    $drain();
+    exit(0);
+}
+
+$interval = (int) max(20_000, (int) ($config->flushInterval * 1_000_000));
+while ($running) {
+    $drain();
+    usleep($interval);
+}
+$drain();
+exit(0);

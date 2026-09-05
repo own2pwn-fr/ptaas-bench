@@ -1,0 +1,34 @@
+id: BENCH-LEGY-0021
+title: Stored password digest is unsalted MD5 and is served by a legacy profile view
+app: legacy
+component: web
+class: weak_hash
+severity: medium
+entrypoint:
+  method: GET
+  path: /account/profile.php
+  auth: user
+  param: format
+  param_in: query
+  default_value: html
+discovery:
+  render: server-template
+  reachable_from:
+  - /account/index.php
+  - /account/profile.php
+  requires:
+  - multi-step-flow
+  difficulty: 3
+oracle:
+  kind: artifact
+  condition: |
+    Accounts are stored with an unsalted MD5 of the password, and the machine-readable profile view kept for the 2012 handheld application still includes the stored digest in its output. The sink reports when a response actually carried that digest to the caller. The ordinary HTML profile page does not include it and never reports, so the record is of the digest having been read out, not of the hash function having been chosen.
+  poc: GET /account/profile.php?format=xml with a signed-in session
+  signal: account.credential.digest_legacy
+tags:
+- authenticated
+- crypto
+introduced: '2026-09-05'
+decoy_note: The digest is in the record the handhelds sync, because the handhelds used to authenticate
+  offline against it. The handhelds are gone; the view is still there because something in the warehouse
+  still calls it.

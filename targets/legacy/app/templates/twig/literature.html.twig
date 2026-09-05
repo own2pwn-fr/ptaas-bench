@@ -1,0 +1,18 @@
+{# The other page that was converted before the rebuild was stopped. #}
+{% if documents is empty %}
+  <p>There is nothing in the library at the moment.</p>
+{% else %}
+  <table class="grid">
+    <thead><tr><th>Title</th><th>File</th><th class="num">Pages</th><th>Issued</th></tr></thead>
+    <tbody>
+      {% for document in documents %}
+        <tr>
+          <td><a href="/download.php?doc={{ document.filename|url_encode }}">{{ document.title }}</a></td>
+          <td class="small">{{ document.filename }}</td>
+          <td class="num">{{ document.pages }}</td>
+          <td>{{ document.published_at }}</td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+{% endif %}

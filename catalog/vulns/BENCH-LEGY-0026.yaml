@@ -1,0 +1,33 @@
+id: BENCH-LEGY-0026
+title: Sign-in binds the account to a caller-supplied session identifier
+app: legacy
+component: web
+class: session_fixation
+severity: high
+entrypoint:
+  method: POST
+  path: /account/login.php
+  auth: none
+  param: BTSESSID
+  param_in: cookie
+  default_value: null
+  content_type: application/x-www-form-urlencoded
+discovery:
+  render: server-template
+  reachable_from:
+  - /account/login.php
+  requires:
+  - form-submit
+  difficulty: 2
+oracle:
+  kind: state
+  condition: |
+    The sign-in handler binds the account to whatever session identifier the request arrived with and never issues a new one. The application keeps a record of every identifier it has issued, and the sink reports when a sign-in succeeds while the session is bound to an identifier that is not in that record -- the caller chose it. A sign-in that arrives with no identifier, or with one this deployment issued earlier, never reports.
+  poc: 'POST /account/login.php with Cookie: BTSESSID=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa and valid credentials'
+  signal: account.session.identifier_adopted
+tags:
+- auth
+- session
+introduced: '2026-09-05'
+decoy_note: Regenerating the identifier on sign-in used to log the depot terminals out of the basket they
+  had just filled, so the call was taken out and never put back.
