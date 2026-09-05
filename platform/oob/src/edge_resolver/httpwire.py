@@ -1,19 +1,19 @@
 """A very small HTTP/1.1 server-side codec over asyncio streams.
 
-Why not http.server: this listener answers 200 to *anything*, including bytes that are
-not HTTP at all (a tool blasting a raw payload at port 80 still deserves to be logged),
-and it must share the process's single event loop with four other protocols. Parsing
-the request line and headers by hand is a page of code and keeps that behaviour
-explicit.
+Why not http.server: these listeners answer 200 to *anything*, including bytes that are
+not HTTP at all (a client blasting a payload at port 80 still deserves to be logged),
+and they share one event loop with four other protocols. Parsing the request line and
+headers by hand is a page of code and keeps that behaviour explicit.
 
-Limits: no keep-alive (every response closes the connection), no chunked request
-decoding (a chunked body is logged as raw bytes, not reassembled), no HTTP/2.
+Limits: no keep-alive (every response closes the connection, and says so), no chunked
+request decoding (a chunked body is read as raw bytes, not reassembled), no HTTP/2.
 """
 
 from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass, field
+from email.utils import formatdate
 from urllib.parse import unquote, urlsplit
 
 HEAD_LIMIT = 16384
@@ -38,7 +38,8 @@ class HttpRequest:
     @property
     def path(self) -> str:
         # An absolute-form target (proxy style, "GET http://host/p") is common from
-        # SSRF payloads, so split it properly instead of assuming origin-form.
+        # server-side request payloads, so split it properly instead of assuming
+        # origin-form.
         split = urlsplit(self.target)
         return unquote(split.path or "/")
 
@@ -117,22 +118,29 @@ async def read_request(
     return request
 
 
+REASONS = {200: "OK", 400: "Bad Request", 404: "Not Found", 405: "Method Not Allowed"}
+
+
+def http_date() -> str:
+    return formatdate(usegmt=True)
+
+
 def build_response(
     status: int = 200,
-    body: bytes = b"ok\n",
+    body: bytes = b"",
     *,
     content_type: str = "text/plain; charset=utf-8",
     extra_headers: dict[str, str] | None = None,
+    server: str = "nginx",
 ) -> bytes:
-    reason = {200: "OK", 400: "Bad Request", 404: "Not Found"}.get(status, "OK")
+    reason = REASONS.get(status, "OK")
     headers = {
+        "Server": server,
+        "Date": http_date(),
         "Content-Type": content_type,
         "Content-Length": str(len(body)),
         "Connection": "close",
-        "Server": "bench-oob",
         **(extra_headers or {}),
     }
-    head = f"HTTP/1.1 {status} {reason}\r\n" + "".join(
-        f"{k}: {v}\r\n" for k, v in headers.items()
-    )
+    head = f"HTTP/1.1 {status} {reason}\r\n" + "".join(f"{k}: {v}\r\n" for k, v in headers.items())
     return head.encode("latin-1") + b"\r\n" + body

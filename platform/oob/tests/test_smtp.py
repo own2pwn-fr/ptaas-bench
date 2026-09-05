@@ -15,61 +15,61 @@ def _send(port: int, sender: str, recipient: str, message: str = "Subject: hi\r\
 
 
 def test_sender_domain_never_steals_the_attribution(service):
-    """Regression: ``app@target.invalid`` used to outrank ``shop0031@<zone>`` because a
+    """Regression: ``mailer@retail.internal`` used to outrank ``shop0031@<zone>`` because a
     sender domain was mined with the DNS-label rule."""
-    _send(service.ports["smtp"], "app@target.invalid", f"shop0031@{ZONE}")
-    (callback,) = service.store.wait_for(1, timeout=5)
-    assert callback.token == "shop0031"
+    _send(service.ports["smtp"], "mailer@retail.internal", f"shop0031@{ZONE}")
+    (record,) = service.store.wait_for(1, timeout=5)
+    assert record.token == "shop0031"
 
 
 def test_envelope_localpart_carries_the_token(service):
-    _send(service.ports["smtp"], "app@target.invalid", f"shop0031@{ZONE}")
-    (callback,) = service.store.wait_for(1, timeout=5)
-    assert (callback.channel, callback.token, callback.source) == (
+    _send(service.ports["smtp"], "mailer@retail.internal", f"shop0031@{ZONE}")
+    (record,) = service.store.wait_for(1, timeout=5)
+    assert (record.channel, record.token, record.source) == (
         "smtp",
         "shop0031",
         "smtp_localpart",
     )
-    assert callback.detail["rcpt_to"] == [f"shop0031@{ZONE}"]
-    assert callback.detail["mail_from"] == "app@target.invalid"
-    assert callback.in_zone is True
+    assert record.detail["rcpt_to"] == [f"shop0031@{ZONE}"]
+    assert record.detail["mail_from"] == "mailer@retail.internal"
+    assert record.owned_zone is True
 
 
 def test_address_domain_outranks_the_localpart(service):
-    """``anything@shop0031.oob.bench.local`` hides the token where a DNS label would be,
+    """``anything@shop0031.telemetry-edge.net`` hides the token where a DNS label would be,
     so rule 1 applies and rule 5 does not."""
-    _send(service.ports["smtp"], "app@target.invalid", f"noreply@shop0031.{ZONE}")
-    (callback,) = service.store.wait_for(1, timeout=5)
-    assert (callback.token, callback.source) == ("shop0031", "dns_label")
+    _send(service.ports["smtp"], "mailer@retail.internal", f"noreply@shop0031.{ZONE}")
+    (record,) = service.store.wait_for(1, timeout=5)
+    assert (record.token, record.source) == ("shop0031", "dns_label")
 
 
 def test_recipient_outranks_sender(service):
-    """The payload controls RCPT TO; MAIL FROM is usually the target app's own domain,
+    """The payload controls RCPT TO; MAIL FROM is usually the application's own domain,
     so it must never win the attribution."""
     _send(service.ports["smtp"], f"aaaa0001@{ZONE}", f"shop0031@{ZONE}")
-    (callback,) = service.store.wait_for(1, timeout=5)
-    assert callback.token == "shop0031"
+    (record,) = service.store.wait_for(1, timeout=5)
+    assert record.token == "shop0031"
 
 
 def test_headers_are_logged_and_the_body_is_discarded(service):
     _send(
         service.ports["smtp"],
-        "app@target.invalid",
+        "mailer@retail.internal",
         f"shop0031@{ZONE}",
         "Subject: catalogue import\r\nX-Mailer: target-app\r\n\r\nplease ignore\r\n",
     )
-    (callback,) = service.store.wait_for(1, timeout=5)
-    headers = callback.detail["headers"]
+    (record,) = service.store.wait_for(1, timeout=5)
+    headers = record.detail["headers"]
     assert "Subject: catalogue import" in headers
     assert "X-Mailer: target-app" in headers
-    assert callback.detail["body_bytes"] > 0
-    assert "please ignore" not in callback.raw  # the body is counted, never kept
+    assert record.detail["body_bytes"] > 0
+    assert "please ignore" not in record.raw  # the body is counted, never kept
 
 
 def test_dynamic_form_over_smtp(service):
-    _send(service.ports["smtp"], "app@target.invalid", f"shop0031-9f2c@{ZONE}")
-    (callback,) = service.store.wait_for(1, timeout=5)
-    assert (callback.token, callback.nonce) == ("shop0031", "9f2c")
+    _send(service.ports["smtp"], "mailer@retail.internal", f"shop0031-9f2c@{ZONE}")
+    (record,) = service.store.wait_for(1, timeout=5)
+    assert (record.token, record.nonce) == ("shop0031", "9f2c")
 
 
 def test_abandoned_transaction_is_still_evidence(service):
@@ -78,12 +78,12 @@ def test_abandoned_transaction_is_still_evidence(service):
         assert sock.recv(1024).startswith(b"220 ")
         sock.sendall(b"HELO scanner.invalid\r\n")
         sock.recv(1024)
-        sock.sendall(b"MAIL FROM:<app@target.invalid>\r\n")
+        sock.sendall(b"MAIL FROM:<mailer@retail.internal>\r\n")
         sock.recv(1024)
         sock.sendall(f"RCPT TO:<shop0031@{ZONE}>\r\n".encode())
         sock.recv(1024)
-    (callback,) = service.store.wait_for(1, timeout=5)
-    assert callback.token == "shop0031" and callback.detail["aborted"] is True
+    (record,) = service.store.wait_for(1, timeout=5)
+    assert record.token == "shop0031" and record.detail["aborted"] is True
 
 
 def test_starttls_and_auth_are_refused_without_killing_the_session(service):
@@ -95,5 +95,18 @@ def test_starttls_and_auth_are_refused_without_killing_the_session(service):
         assert sock.recv(1024).startswith(b"502 ")
         sock.sendall(f"MAIL FROM:<a@b.invalid>\r\nRCPT TO:<shop0031@{ZONE}>\r\nQUIT\r\n".encode())
         sock.recv(4096)
-    (callback,) = service.store.wait_for(1, timeout=5)
-    assert callback.token == "shop0031"
+    (record,) = service.store.wait_for(1, timeout=5)
+    assert record.token == "shop0031"
+
+
+def test_external_recipient_domain_is_recorded_as_the_host(service):
+    """The ordinary case: mail aimed at a domain the tool chose. The host is what the
+    attribution join needs, so it must be on the record even when nothing else is."""
+    _send(service.ports["smtp"], "mailer@retail.internal", "drop@z9x2k1p8.example-collab.net")
+    (record,) = service.store.wait_for(1, timeout=5)
+    assert record.host == "z9x2k1p8.example-collab.net"
+    assert record.owned_zone is False
+    # Rule 5 beats a foreign recipient domain (rule "smtp_domain", ranked below the six),
+    # so the localpart is the identifier here -- which is what a tool that mints
+    # `<id>@<its own host>` addresses relies on.
+    assert (record.token, record.source) == ("drop", "smtp_localpart")

@@ -1,27 +1,27 @@
-"""LDAP listener: enough of LDAPv3 to log the DN a JNDI lookup asks for.
+"""LDAP listener: enough of LDAPv3 to record the DN a directory lookup asks for.
 
-log4shell-style payloads (``${jndi:ldap://<token>.oob.bench.local/x}``) produce two
-observable events: the DNS resolution, and an LDAP connection whose BindRequest or
-SearchRequest carries the token. This listener answers both operations with a success
-result so the client gets past its first round-trip and actually sends the search,
-instead of aborting on a protocol error before we learn anything.
+A Java naming lookup (``${jndi:ldap://host/x}`` and relatives) produces two observable
+events: the DNS resolution, and an LDAP connection whose BindRequest or SearchRequest
+carries the path from the URL. This listener answers both operations successfully so the
+client gets past its first round-trip and actually sends the search, instead of aborting
+on a protocol error before we learn anything.
 
 Implemented: LDAPMessage framing, BindRequest (any auth choice -- simple, SASL, empty --
-is answered success without ever looking at the credential), SearchRequest (only the
+answered success without ever looking at the credential), SearchRequest (only the
 baseObject is read), UnbindRequest, ExtendedRequest (answered success). Responses are
 BindResponse, SearchResultEntry and SearchResultDone.
 
-NOT implemented, deliberately:
+NOT implemented, on purpose:
 
 * the search filter, scope, attribute list and size/time limits are parsed past, not
   honoured. Every search returns the same single entry, whatever was asked for.
-* there is no directory. The entry we return is the baseObject itself with two inert
-  attributes.
-* we never return a JNDI reference: no ``javaClassName``, no ``javaCodebase``, no
-  ``javaSerializedData``, no ``javaFactory``. A Java client therefore gets a clean
-  search result and then fails to materialise an object, which is the intended
-  outcome -- this is a canary, and helping a payload achieve code execution against
-  the tool under test (or against the benchmark host) would be indefensible.
+* there is no directory behind this. The entry we return is the baseObject itself with
+  one inert attribute.
+* we never return a naming reference: no ``javaClassName``, no ``javaCodebase``, no
+  ``javaSerializedData``, no ``javaFactory``. A Java client therefore gets a clean search
+  result and then fails to materialise an object, which is the outcome we want -- this
+  service records requests, and helping a payload reach code execution in the client
+  would be indefensible.
 * no StartTLS, no LDAPS, no SASL exchange, no controls, no referrals, no paged results,
   no abandon, no modify/add/delete.
 """
@@ -36,7 +36,7 @@ from ..config import Config
 from ..recorder import Recorder
 from ..tokens import Candidate, dn_candidates
 
-log = logging.getLogger("bench_oob.ldap")
+log = logging.getLogger("edge_resolver.ldap")
 
 MAX_MESSAGE = 65536
 
@@ -64,9 +64,9 @@ class LdapHandler:
                         channel="ldap",
                         source_ip=peer_ip,
                         candidates=[],
-                        raw=f"ldap malformed message ({exc}): {message[:256].hex()}",
+                        raw=f"ldap unparseable message ({exc}): {message[:256].hex()}",
                         detail={"malformed": True},
-                        in_zone=None,
+                        owned_zone=None,
                     )
                     recorded = True
                     break
@@ -82,12 +82,12 @@ class LdapHandler:
                     candidates=[],
                     raw="ldap connection with no DN-bearing operation",
                     detail={"empty": True},
-                    in_zone=None,
+                    owned_zone=None,
                 )
         except (ConnectionError, asyncio.CancelledError):
             raise
         except Exception:  # pragma: no cover
-            log.exception("ldap handler failed")
+            log.exception("ldap handling failed")
         finally:
             try:
                 writer.close()
@@ -113,8 +113,7 @@ class LdapHandler:
             dn = fields[1].text if len(fields) > 1 else ""
             self._record(peer_ip, "bind", dn, {"version": version})
             body = ber.tlv(
-                ber.APP_BIND_RESPONSE,
-                ber.enc_enum(0) + ber.enc_str("") + ber.enc_str(""),
+                ber.APP_BIND_RESPONSE, ber.enc_enum(0) + ber.enc_str("") + ber.enc_str("")
             )
             return ber.enc_seq(ber.enc_int(message_id), body), True
 
@@ -125,15 +124,10 @@ class LdapHandler:
             self._record(peer_ip, "search", base, {"scope": scope})
             entry = ber.tlv(
                 ber.APP_SEARCH_ENTRY,
-                ber.enc_str(base)
-                + ber.enc_seq(
-                    _attribute("objectClass", "top"),
-                    _attribute("description", "ptaas-bench out-of-band canary"),
-                ),
+                ber.enc_str(base) + ber.enc_seq(_attribute("objectClass", "top")),
             )
             done = ber.tlv(
-                ber.APP_SEARCH_DONE,
-                ber.enc_enum(0) + ber.enc_str("") + ber.enc_str(""),
+                ber.APP_SEARCH_DONE, ber.enc_enum(0) + ber.enc_str("") + ber.enc_str("")
             )
             return (
                 ber.enc_seq(ber.enc_int(message_id), entry)
@@ -144,8 +138,7 @@ class LdapHandler:
         if op.tag == ber.APP_EXTENDED_REQUEST:
             self._record(peer_ip, "extended", "", {})
             body = ber.tlv(
-                ber.APP_EXTENDED_RESPONSE,
-                ber.enc_enum(0) + ber.enc_str("") + ber.enc_str(""),
+                ber.APP_EXTENDED_RESPONSE, ber.enc_enum(0) + ber.enc_str("") + ber.enc_str("")
             )
             return ber.enc_seq(ber.enc_int(message_id), body), True
 
@@ -160,9 +153,9 @@ class LdapHandler:
             candidates=candidates,
             raw=f"ldap {operation} dn={dn!r} " + " ".join(f"{k}={v}" for k, v in detail.items()),
             detail={"operation": operation, "dn": dn, **detail},
-            # LDAP carries no hostname (no SNI on plain LDAP), so we genuinely cannot
-            # tell whether the payload named our zone. None, not a guess.
-            in_zone=None,
+            # Plain LDAP carries no server name, so attribution here rests on the source
+            # address and on any hint registered for the host that was resolved first.
+            owned_zone=None,
         )
 
 

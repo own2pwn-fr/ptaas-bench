@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from bench_oob.tokens import (
+from edge_resolver.tokens import (
     Candidate,
     address_parts,
     dn_values,
@@ -15,7 +15,7 @@ from bench_oob.tokens import (
     query_token,
 )
 
-ZONE = "oob.bench.local"
+ZONE = "telemetry-edge.net"
 
 
 @pytest.mark.parametrize(
@@ -76,12 +76,12 @@ def test_extraction_reports_the_dynamic_form_verbatim():
 @pytest.mark.parametrize(
     "host,expected",
     [
-        ("shop0031.oob.bench.local", "shop0031"),
+        ("shop0031.telemetry-edge.net", "shop0031"),
         ("SHOP0031.OOB.BENCH.LOCAL.", "shop0031"),
-        ("shop0031-9f2c.deep.oob.bench.local", "shop0031-9f2c"),
-        ("oob.bench.local", None),  # the bare zone carries no token
-        ("shop0031.oob.bench.local:8080", "shop0031"),  # Host header with a port
-        ("x7d9k2.collab.example", "x7d9k2"),  # foreign collaborator domain
+        ("shop0031-9f2c.deep.telemetry-edge.net", "shop0031-9f2c"),
+        ("telemetry-edge.net", None),  # the bare zone carries no token
+        ("shop0031.telemetry-edge.net:8080", "shop0031"),  # Host header with a port
+        ("x7d9k2.example-collab.net", "x7d9k2"),  # a host the tool chose
         ("127.0.0.1", "127"),  # nonsense, but never token-shaped, so harmless
         ("", None),
     ],
@@ -99,7 +99,7 @@ def test_path_and_query_helpers():
 
 
 def test_address_and_dn_helpers():
-    assert address_parts("<shop0031@oob.bench.local>") == ("shop0031", "oob.bench.local")
+    assert address_parts("<shop0031@telemetry-edge.net>") == ("shop0031", "telemetry-edge.net")
     assert address_parts("shop0031") == ("shop0031", None)
     assert dn_values("cn=shop0031,dc=oob,dc=bench") == ["shop0031", "oob", "bench"]
     assert dn_values("shop0031") == ["shop0031"]

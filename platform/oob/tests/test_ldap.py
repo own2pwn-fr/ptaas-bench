@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import socket
 
-from bench_oob import ber
+from edge_resolver import ber
 
 
 def _bind_request(dn: str, message_id: int = 1) -> bytes:
@@ -63,16 +63,16 @@ def _result_code(message: bytes) -> tuple[int, int, int]:
 
 def test_bind_is_answered_success_and_the_dn_is_recorded(service):
     (response,) = _exchange(
-        service.ports["ldap"], _bind_request("cn=shop0031,dc=oob,dc=bench,dc=local")
+        service.ports["ldap"], _bind_request("cn=shop0031,dc=edge,dc=internal")
     )
     message_id, tag, result = _result_code(response)
     assert (message_id, tag, result) == (1, ber.APP_BIND_RESPONSE, 0)
 
-    (callback,) = service.store.wait_for(1, timeout=5)
-    assert (callback.channel, callback.token, callback.source) == ("ldap", "shop0031", "ldap_dn")
-    assert callback.detail["operation"] == "bind"
+    (record,) = service.store.wait_for(1, timeout=5)
+    assert (record.channel, record.token, record.source) == ("ldap", "shop0031", "ldap_dn")
+    assert record.detail["operation"] == "bind"
     # No hostname travels over plain LDAP, so we do not pretend to know the zone.
-    assert callback.in_zone is None
+    assert record.owned_zone is None
 
 
 def test_search_returns_an_entry_then_done(service):
@@ -91,13 +91,13 @@ def test_search_returns_an_entry_then_done(service):
     assert list(ber.iter_tlv(entry_op.content))[0].text == "shop0031"
     assert _result_code(responses[2]) == (2, ber.APP_SEARCH_DONE, 0)
 
-    callbacks = service.store.wait_for(2, timeout=5)
-    assert [c.detail["operation"] for c in callbacks] == ["bind", "search"]
-    assert callbacks[1].token == "shop0031"
+    records = service.store.wait_for(2, timeout=5)
+    assert [c.detail["operation"] for c in records] == ["bind", "search"]
+    assert records[1].token == "shop0031"
 
 
 def test_search_entry_carries_no_jndi_reference(service):
-    """We are a canary, not an exploitation server: no javaCodebase, ever."""
+    """We record requests; we do not help a client load remote code."""
     responses = _exchange(service.ports["ldap"], _search_request("shop0031"), expect=2)
     assert b"javaCodebase" not in responses[0]
     assert b"javaSerializedData" not in responses[0]
@@ -106,25 +106,25 @@ def test_search_entry_carries_no_jndi_reference(service):
 
 def test_dynamic_form_in_the_dn(service):
     _exchange(service.ports["ldap"], _search_request("cn=shop0031-9f2c,dc=example"), expect=2)
-    callbacks = service.store.wait_for(1, timeout=5)
-    assert (callbacks[0].token, callbacks[0].nonce) == ("shop0031", "9f2c")
+    records = service.store.wait_for(1, timeout=5)
+    assert (records[0].token, records[0].nonce) == ("shop0031", "9f2c")
 
 
 def test_token_outside_the_allowlist_is_recorded_as_unknown(make_service):
     """With BENCH_OOB_KNOWN_TOKENS set, a token-shaped DN we never planted is still
     stored -- it means the tool is testing with a collaborator token of its own."""
     service = make_service(known_tokens=frozenset({"shop0031"}))
-    _exchange(service.ports["ldap"], _bind_request("cn=x7d9k2,dc=collab,dc=example"))
-    (callback,) = service.store.wait_for(1, timeout=5)
-    assert callback.token == "x7d9k2" and callback.known is False
+    _exchange(service.ports["ldap"], _bind_request("cn=x7d9k2,dc=example,dc=net"))
+    (record,) = service.store.wait_for(1, timeout=5)
+    assert record.token == "x7d9k2" and record.known is False
 
 
 def test_garbage_is_recorded_not_crashed(service):
     with socket.create_connection(("127.0.0.1", service.ports["ldap"]), timeout=5) as sock:
         sock.sendall(b"\x30\x05hello")
         sock.recv(4096)
-    (callback,) = service.store.wait_for(1, timeout=5)
-    assert callback.channel == "ldap" and callback.token is None
+    (record,) = service.store.wait_for(1, timeout=5)
+    assert record.channel == "ldap" and record.token is None
 
 
 def test_unbind_closes_without_a_response(service):
@@ -133,5 +133,5 @@ def test_unbind_closes_without_a_response(service):
         sock.sendall(unbind)
         assert sock.recv(4096) == b""  # connection closed, no response defined
     # An LDAP connection that carried no DN is still worth one line of evidence.
-    (callback,) = service.store.wait_for(1, timeout=5)
-    assert callback.detail["empty"] is True
+    (record,) = service.store.wait_for(1, timeout=5)
+    assert record.detail["empty"] is True

@@ -3,8 +3,8 @@
 Limits, stated plainly because a half-implemented codec that pretends otherwise is a
 trap:
 
-* single-byte identifiers only. Tag numbers above 30 (multi-byte identifier octets)
-  are rejected. Every LDAP protocol op and every context tag we care about is <= 30.
+* single-byte identifiers only. Tag numbers above 30 (multi-byte identifier octets) are
+  rejected. Every LDAP protocol op and every context tag we care about is <= 30.
 * definite lengths only, up to 4 length octets. RFC 4511 forbids the indefinite form,
   so a message using it is treated as malformed.
 * no type checking beyond the tag byte: we read the structure, not the semantics.

@@ -9,10 +9,10 @@ def local_address_towards(host: str, port: int = 53, default: str | None = None)
     """Local source address the kernel would use to reach ``host``.
 
     A connected UDP socket sends nothing, it only pins a route, so this is a cheap way
-    for a dual-homed container to answer "which of my addresses faces this peer?"
-    without hardcoding subnets. Used for two things: the A record we hand back (the
-    tool must be able to reach the address it resolves), and the interface the control
-    API binds to (the one facing the collector, i.e. bench-internal)."""
+    for a dual-homed host to answer "which of my addresses faces this peer?" without
+    hardcoding subnets. Used for two things: the A record we hand back (the client must
+    be able to reach the address it resolves) and the interface the admin API binds to
+    (the one facing the reporting endpoint, i.e. the internal network)."""
     if not host:
         return default
     for family in (socket.AF_INET, socket.AF_INET6):

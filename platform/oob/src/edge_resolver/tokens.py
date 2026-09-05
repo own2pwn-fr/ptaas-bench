@@ -1,35 +1,37 @@
-"""Canary token extraction -- the crux of the whole service.
+"""Extracting an identifier out of whatever a payload aimed at us.
 
-A callback is only evidence if we can say *which* vulnerability it proves, so every
-hit is mined for a token. Two forms are supported:
+Most requests that land here name a host chosen by the tool under test, not by us, so
+the identifier is usually the tool's own: ``z9x2k1p8.example-collab.net`` carries
+``z9x2k1p8``. Grouping by it is still worth a lot -- it ties a DNS lookup, the HTTP
+connection that follows it and a later SMTP hit together as one attempt -- even though
+the mapping back to a planted defect comes from correlation.py rather than from here.
 
-* static  ``shop0031``            -- the value a catalog entry declares in
-  ``oracle.canary_token``; every hit on it maps to that vulnerability.
-* dynamic ``shop0031-9f2c``       -- ``<token>-<nonce>``; the base token still maps to
-  the vulnerability, the nonce distinguishes repeated hits (a tool re-firing the same
-  payload, or the platform's own seeding) without needing a second token.
+Two written forms are also understood, for hosts we do own:
 
-A token is ``[a-z0-9]{4,32}``. The dash is not in that alphabet, which is what makes
-the dynamic form unambiguous: the *first* dash always separates token from nonce, so
-the nonce itself may contain dashes and nothing gets mis-split.
+* static  ``shop0031``          -- a fixed label a catalog entry declares, for cases
+  where a payload template is written against our own zone;
+* dynamic ``shop0031-9f2c``     -- ``<label>-<nonce>``; the base label still maps to
+  the catalog entry, the nonce keeps repeated hits distinguishable.
 
-Extraction order is fixed and global (``SOURCE_RANK``), not per-channel, so that a
-callback carrying the token in two places always resolves the same way:
+Labels are ``[a-z0-9]{4,32}``. The dash is outside that alphabet, which makes the
+dynamic form unambiguous: the *first* dash always separates label from nonce, so the
+nonce itself may contain dashes and nothing gets mis-split.
 
-    1. leftmost DNS label      ``shop0031.oob.bench.local``
-    2. HTTP Host header        ``Host: shop0031.oob.bench.local``
+Extraction order is fixed and global (``SOURCE_RANK``), not per-channel, so a request
+carrying an identifier in two places always resolves the same way:
+
+    1. leftmost DNS label      ``shop0031.telemetry-edge.net``
+    2. HTTP Host header        ``Host: shop0031.telemetry-edge.net``
     3. first path segment      ``GET /shop0031/x``
     4. HTTP query ``t=``       ``GET /x?t=shop0031``
-    5. SMTP envelope localpart ``RCPT TO:<shop0031@oob.bench.local>``
-    6. LDAP DN                 ``cn=shop0031,dc=oob,dc=bench,dc=local``
+    5. SMTP envelope localpart ``RCPT TO:<shop0031@...>``
+    6. LDAP DN                 ``cn=shop0031,dc=...``
 
-The domain part of an SMTP *recipient* is ranked with rule 1 when it is inside our
-zone: it is a DNS name, and ``x@shop0031.oob.bench.local`` hides the token in exactly
-the same place as a DNS query would. Everything else about an envelope ranks below the
-six rules, because it is not attacker-controlled in the way the recipient is -- the
-sender is usually the target application's own domain, and letting ``app@target.invalid``
-outrank ``RCPT TO:<shop0031@...>`` would attribute the callback to the wrong thing (it
-did, in an earlier revision; see tests/test_smtp.py).
+Below those six sit two more, and the reason is a real mis-attribution we hit: an
+address domain is a DNS name, so ``noreply@shop0031.<zone>`` is mined with rule 1 --
+but only for the *recipient*. Ranking a MAIL FROM domain that way made
+``app@retail.internal`` outrank ``RCPT TO:<shop0031@...>`` and credit the wrong thing.
+Sender parts and out-of-zone recipient domains therefore rank last.
 """
 
 from __future__ import annotations
@@ -39,13 +41,13 @@ from dataclasses import dataclass
 from typing import Iterable, Sequence
 
 TOKEN_RE = re.compile(r"^[a-z0-9]{4,32}$")
-# The nonce is allowed to be richer than the token (dashes, up to 64 chars) because it
-# is opaque to us: only the base token is correlated against the catalog.
+# The nonce may be richer than the label (dashes, up to 64 chars) because it is opaque
+# to us: only the base label is ever matched against the catalog.
 DYNAMIC_RE = re.compile(r"^([a-z0-9]{4,32})-([a-z0-9][a-z0-9-]{0,63})$")
 
-# Marker used in the collector event when nothing token-shaped was found. The OobEvent
-# schema makes `token` required, so we cannot send null; the store keeps None.
-UNKNOWN_TOKEN = "unknown"
+# Used in the reported event when nothing identifier-shaped was found. The event schema
+# makes the field required, so we cannot send null there; the local store keeps None.
+UNIDENTIFIED = "unidentified"
 
 SOURCE_RANK: dict[str, int] = {
     "dns_label": 10,
@@ -54,15 +56,15 @@ SOURCE_RANK: dict[str, int] = {
     "query_t": 40,
     "smtp_localpart": 50,
     "ldap_dn": 60,
-    # Below the six rules: envelope parts that the payload does not usually control.
-    "smtp_domain": 70,   # recipient domain outside our zone
-    "smtp_sender": 75,   # anything from MAIL FROM
+    # Below the six rules: envelope parts a payload does not usually control.
+    "smtp_domain": 70,   # recipient domain outside our own zone
+    "smtp_sender": 75,   # anything taken from MAIL FROM
 }
 
 
 @dataclass(frozen=True)
 class Candidate:
-    """One place a token might be hiding, with the rule that found it."""
+    """One place an identifier might be hiding, with the rule that found it."""
 
     source: str
     value: str
@@ -74,11 +76,10 @@ class Candidate:
 
 @dataclass(frozen=True)
 class Extraction:
-    """Result of mining a callback.
+    """Result of mining one request.
 
-    ``token`` is None when nothing matched the token grammar; ``candidate`` then holds
-    the best-ranked non-empty string we saw, so an unknown callback is still reported
-    with something a human can recognise (a tool's own collaborator subdomain, say).
+    ``token`` is None when nothing matched the grammar; ``candidate`` then holds the
+    best-ranked non-empty string we saw, so the request is still recognisable.
     """
 
     token: str | None = None
@@ -92,14 +93,14 @@ class Extraction:
 
     @property
     def label(self) -> str:
-        """Token as it appeared on the wire, i.e. with the nonce when there was one."""
+        """The identifier as it appeared on the wire, nonce included."""
         if self.token is None:
             return self.candidate or ""
         return f"{self.token}-{self.nonce}" if self.nonce else self.token
 
 
 def parse_token(value: str | None) -> tuple[str, str | None] | None:
-    """Parse a candidate string into ``(token, nonce)``, or None if it is not one."""
+    """Parse a candidate string into ``(label, nonce)``, or None if it is not one."""
     if not value:
         return None
     candidate = value.strip().lower()
@@ -112,7 +113,7 @@ def parse_token(value: str | None) -> tuple[str, str | None] | None:
 
 
 def extract(candidates: Iterable[Candidate]) -> Extraction:
-    """Pick the token from an unordered bag of candidates, by rule priority."""
+    """Pick the identifier from an unordered bag of candidates, by rule priority."""
     ordered = sorted(
         (c for c in candidates if c.value), key=lambda c: (c.rank, c.source)
     )
@@ -131,19 +132,18 @@ def extract(candidates: Iterable[Candidate]) -> Extraction:
 
 
 def host_label(host: str | None, zone: str) -> str | None:
-    """Leftmost label of a hostname, with the service's own zone stripped first.
+    """Leftmost label of a hostname, with our own zone stripped first.
 
-    ``shop0031.oob.bench.local`` -> ``shop0031``; the bare zone -> None (no token);
-    a foreign name (``x7d9k2.collab.example``) still yields its leftmost label, which
-    is how we notice a tool testing with its own collaborator domain.
+    ``shop0031.<zone>`` -> ``shop0031``; the bare zone -> None; a foreign name
+    (``z9x2k1p8.example-collab.net``) still yields its leftmost label, which is exactly
+    the shape a tool's own callback host has.
     """
     if not host:
         return None
     name = host.strip().strip(".").lower()
     if not name:
         return None
-    # Strip an IPv6 literal's brackets / a port suffix if one leaked in from a Host header.
-    if name.startswith("["):
+    if name.startswith("["):  # IPv6 literal from a Host header
         return None
     if name.count(":") == 1:
         name = name.split(":", 1)[0]
@@ -167,7 +167,6 @@ def first_path_segment(path: str | None) -> str | None:
 
 
 def query_token(query: str | None) -> str | None:
-    """Value of the ``t=`` parameter, hand-parsed to stay lenient about junk queries."""
     if not query:
         return None
     from urllib.parse import parse_qs
@@ -197,8 +196,8 @@ _DN_SPLIT = re.compile(r"[,/;+]")
 def dn_values(dn: str | None) -> list[str]:
     """Attribute values of a DN, most specific first.
 
-    Covers what JNDI actually puts on the wire: ``cn=shop0031,dc=example`` from a
-    search base, but also the bare object name a URL like ``ldap://host:389/shop0031``
+    Covers what a JNDI client actually puts on the wire: ``cn=shop0031,dc=example``
+    from a search base, and the bare object name a URL like ``ldap://host:389/shop0031``
     turns into.
     """
     if not dn:

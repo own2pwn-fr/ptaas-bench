@@ -1,15 +1,15 @@
-"""Just enough DNS wire format to answer a query and log the name that was resolved.
+"""Just enough DNS wire format to answer a query and log the name that was asked for.
 
 Hand-rolled rather than pulled from a library: we parse one question and emit A, TXT,
 NS or SOA records, which is a hundred lines, whereas a real server would drag in zone
-files, recursion and a dependency we would have to keep patched.
+files, recursion, and a dependency to keep patched.
 
-Known limits, all deliberate:
+Known limits, all intentional:
 
 * one question per message (every real client sends exactly one);
 * EDNS0 OPT records in the request are ignored and never echoed, so a client that
   advertised a large UDP buffer gets a plain 512-byte-class answer;
-* no DNSSEC, no zone transfer, no recursion (queries outside our zone are REFUSED);
+* no DNSSEC and no zone transfer;
 * compression pointers are followed when parsing, and used in answers only to point at
   the question name at offset 12.
 """
@@ -49,6 +49,7 @@ CLASS_ANY = 255
 
 RCODE_NOERROR = 0
 RCODE_FORMERR = 1
+RCODE_SERVFAIL = 2
 RCODE_NXDOMAIN = 3
 RCODE_NOTIMP = 4
 RCODE_REFUSED = 5
@@ -156,9 +157,7 @@ def encode_name(name: str | bytes | tuple[bytes, ...] | list[bytes]) -> bytes:
         labels = [bytes(label) for label in name]
     else:
         text = name.decode("latin-1") if isinstance(name, bytes) else name
-        labels = [
-            part.encode("latin-1") for part in text.strip(".").split(".") if part
-        ]
+        labels = [part.encode("latin-1") for part in text.strip(".").split(".") if part]
     out = bytearray()
     for label in labels:
         if len(label) > 63:
@@ -179,11 +178,11 @@ def txt_rdata(text: str) -> bytes:
 
 
 def soa_rdata(zone: str, serial: int = 1) -> bytes:
-    mname = encode_name(f"ns.{zone}")
+    mname = encode_name(f"ns1.{zone}")
     rname = encode_name(f"hostmaster.{zone}")
-    # refresh / retry / expire / minimum: small values, this zone is ephemeral and we
-    # actively want resolvers to come back rather than cache us for a day.
-    return mname + rname + struct.pack("!5I", serial, 60, 60, 3600, 5)
+    # Short timers: this view of the world is ephemeral and we would rather clients came
+    # back than cached us for a day.
+    return mname + rname + struct.pack("!5I", serial, 300, 60, 3600, 30)
 
 
 def _record(name_field: bytes, rrtype: int, ttl: int, rdata: bytes) -> bytes:
@@ -200,7 +199,8 @@ def build_response(
     authority: list[tuple[str, int, bytes]] | None = None,
     rcode: int = RCODE_NOERROR,
     authoritative: bool = True,
-    ttl: int = 5,
+    recursion_available: bool = True,
+    ttl: int = 30,
 ) -> bytes:
     """Assemble a response to ``query``.
 
@@ -213,7 +213,11 @@ def build_response(
     if authoritative:
         flags |= 0x0400  # AA
     if query.recursion_desired:
-        flags |= 0x0100  # echo RD; RA stays clear, we do not recurse
+        flags |= 0x0100  # echo RD
+    if recursion_available:
+        # An internal resolver that serves a stub client says it can recurse; saying
+        # otherwise would make an ordinary client log an error on every lookup.
+        flags |= 0x0080
     flags |= rcode & 0x0F
 
     question_bytes = b""
@@ -231,10 +235,8 @@ def build_response(
     header = struct.pack("!6H", query.txid, flags, qdcount, len(answers), len(authority), 0)
     message = header + question_bytes + body + ns
     if len(message) > MAX_UDP:
-        # Truncate to the header+question and set TC so the client retries over TCP.
-        message = struct.pack(
-            "!6H", query.txid, flags | 0x0200, qdcount, 0, 0, 0
-        ) + question_bytes
+        # Truncate to header+question and set TC so the client retries over TCP.
+        message = struct.pack("!6H", query.txid, flags | 0x0200, qdcount, 0, 0, 0) + question_bytes
     return message
 
 
