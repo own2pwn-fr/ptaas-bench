@@ -362,7 +362,7 @@ function bt_page_go(): void
         'quote' => '/quote.php',
     ];
 
-    bt_attribution_header('redirect.reference.field_split', 'ref', bt_query('ref'));
+    bt_attribution_header(bt_query('ref'));
 
     $to = bt_query('to', 'catalogue');
     bt_redirect($destinations[$to] ?? '/');

@@ -51,7 +51,7 @@ routes:
   - {path: /branch.php,                       method: GET,  auth: none, render: server-template, params: [id],                                                status: planted}
   - {path: /help.php,                         method: GET,  auth: none, render: server-template, params: [topic],                                             status: planted}
   - {path: /download.php,                     method: GET,  auth: none, render: server-template, params: [doc],                                               status: planted}
-  - {path: /go.php,                           method: GET,  auth: none, render: server-template, params: [ref, to],                                           status: planted}
+  - {path: /go.php,                           method: GET,  auth: none, render: server-template, params: [ref, to],                                           status: safe}
   - {path: /search.php,                       method: GET,  auth: none, render: server-template, params: [q],                                                 status: planted}
   - {path: /stock.php,                        method: GET,  auth: none, render: server-template, params: [ref],                                               status: planted}
   - {path: /quote.php,                        method: GET,  auth: none, render: server-template, params: [],                                                  status: planted}

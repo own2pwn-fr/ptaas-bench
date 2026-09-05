@@ -101,12 +101,24 @@ apps:
     role: 'The 2009 application that never died. Fully server-rendered, forms everywhere, query strings
       everywhere: the easy end of the crawl spectrum, and the control group that shows what a scanner
       can do when discovery is free.'
-    quota: 28
+    quota: 27
     id_range: BENCH-LEGY-0001 .. BENCH-LEGY-0028
     classes:
     - sqli_blind_bool
     - cmdi
-    - crlf_injection
+    # crlf_injection: WITHDRAWN 2026-09-06, and not planted anywhere else, so this class
+    # is the one hole in the taxonomy. BENCH-LEGY-0014 put the value into a response
+    # header at the server layer, because the interpreter's own header function refuses
+    # to split. Measured on the wire at first bring-up: the interpreter hands the value
+    # to the server intact -- the request environment still holds the 0d0a -- and httpd
+    # 2.4.62 then replaces the control bytes with spaces while emitting the header
+    # block. There is no configuration toggle for that. The counter had been matching
+    # the value rather than the bytes that went out, so it fired for a split that
+    # provably never happened and would have credited every tool that sent a line break
+    # at the parameter. Withdrawn rather than tightened: an entry no tool can ever earn
+    # penalises everyone equally for something impossible. Re-planting the class needs a
+    # hop that genuinely splits; do not assume a cache or a balancer will, they very
+    # likely sanitise it too.
     - email_injection
     - csv_injection
     - xss_reflected

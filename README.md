@@ -75,10 +75,10 @@ failure mode this project exists to expose.
 
 ## What is in the corpus
 
-170 planted vulnerabilities across 116 vulnerability classes, mapped to the OWASP Top 10
-**2017, 2021 and 2025** editions simultaneously (all thirty category slots are populated),
-spread over eight targets chosen so that crawl difficulty varies independently of flaw
-difficulty:
+169 planted vulnerabilities across 115 of the taxonomy's 116 vulnerability classes,
+mapped to the OWASP Top 10 **2017, 2021 and 2025** editions simultaneously (all thirty
+category slots are populated), spread over eight targets chosen so that crawl difficulty
+varies independently of flaw difficulty:
 
 | Target | Stack | Rendering | Why it exists |
 |---|---|---|---|
@@ -90,6 +90,14 @@ difficulty:
 | `intranet` | Flask + HTMX + SQLite | HTMX partials | HTML fragments over XHR — neither classic nor SPA crawlers handle this |
 | `edge` | nginx → HAProxy → Varnish → Go origin | n/a | Desync and cache flaws that exist only because two hops disagree |
 | `infra` | Static vhost, exposed Redis / MongoDB / Elasticsearch | Static | `.git`, `.env`, backups, open datastores — the floor every scanner should clear |
+
+The missing class is `crlf_injection`. It was planted, and withdrawn at first bring-up
+once the response header was read on the wire rather than trusted to its own counter:
+the interpreter passes the value through intact, and httpd 2.4.62 replaces the control
+bytes with spaces as it emits the header block, with no way to configure otherwise. The
+entry therefore fired for a split that never happened, which would have credited every
+tool that sent a line break at the parameter. Re-planting the class needs a hop that
+genuinely splits; the reasoning is in `catalog/roadmap.yaml`.
 
 The catalog is data, not code: `catalog/vulns/*.yaml`, validated against
 `catalog/schema.json`, classes and OWASP mappings in `catalog/taxonomy.yaml`.
