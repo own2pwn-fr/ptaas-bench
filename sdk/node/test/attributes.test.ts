@@ -1,39 +1,39 @@
 import { createHash } from "node:crypto";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
-import { Bench } from "../src/client.js";
-import { observe, rawValue, sha256, SAMPLE_MAX_CHARS, truncateSample } from "../src/params.js";
-import { collectParams, parseCookieHeader } from "../src/request.js";
-import type { ParamLocation, ParamObservation } from "../src/types.js";
+import { TelemetryClient } from "../src/client.js";
+import { observe, rawValue, sha256, SAMPLE_MAX_CHARS, truncateSample } from "../src/attributes.js";
+import { collectAttributes, parseCookieHeader } from "../src/request.js";
+import type { AttributeSource, Attribute } from "../src/types.js";
 import { buildApp, listen, type TestApp } from "./app-fixture.js";
 import { FakeCollector } from "./fake-collector.js";
 
 const collector = new FakeCollector();
-let bench: Bench;
+let client: TelemetryClient;
 let target: TestApp;
 
 beforeAll(async () => {
-  const collectorUrl = await collector.start();
-  bench = new Bench({ app: "shopfront", collectorUrl, flushIntervalMs: 10 }, {});
-  target = await listen(buildApp(bench));
+  const endpoint = await collector.start();
+  client = new TelemetryClient({ service: "shopfront", endpoint, flushIntervalMs: 10 }, {});
+  target = await listen(buildApp(client));
 });
 
 afterAll(async () => {
-  await bench.shutdown();
+  await client.shutdown();
   await target.close();
   await collector.stop();
 });
 
 beforeEach(() => collector.reset());
 
-async function traceParams(path: string, init?: RequestInit): Promise<ParamObservation[]> {
+async function traceAttributes(path: string, init?: RequestInit): Promise<Attribute[]> {
   await fetch(`${target.url}${path}`, init);
-  await bench.flush();
+  await client.flush();
   await collector.waitFor(() => collector.httpEvents().length > 0);
   return collector.httpEvents()[0]!.params ?? [];
 }
 
-function find(params: ParamObservation[], name: string, location: ParamLocation) {
+function find(params: Attribute[], name: string, location: AttributeSource) {
   return params.find((p) => p.name === name && p.in === location);
 }
 
@@ -90,13 +90,13 @@ describe("cookie header parsing", () => {
 
 describe("parameter enumeration across locations", () => {
   it("enumerates query parameters", async () => {
-    const params = await traceParams("/api/products?q=laptop&sort=price");
+    const params = await traceAttributes("/api/products?q=laptop&sort=price");
     expect(find(params, "q", "query")?.value_sha256).toBe(sha256("laptop"));
     expect(find(params, "sort", "query")?.sample).toBe("price");
   });
 
   it("enumerates path parameters from a nested router", async () => {
-    const params = await traceParams("/api/orders/1002/items/SKU-9", { method: "POST" });
+    const params = await traceAttributes("/api/orders/1002/items/SKU-9", { method: "POST" });
     // req.params is restored as the router unwinds, so this is the assertion that
     // catches a naive "read it on finish" implementation.
     expect(find(params, "id", "path")?.sample).toBe("1002");
@@ -104,18 +104,18 @@ describe("parameter enumeration across locations", () => {
   });
 
   it("flattens a nested JSON body into dotted paths", async () => {
-    const params = await traceParams("/api/admin/imports", {
+    const params = await traceAttributes("/api/admin/imports", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
-        source_url: "http://token.oob.bench.local/x",
+        source_url: "http://token.oob.client.local/x",
         options: { retries: 3, auth: { user: "admin" } },
         tags: ["a", "b"],
         empty: {},
       }),
     });
 
-    expect(find(params, "source_url", "json")?.sample).toBe("http://token.oob.bench.local/x");
+    expect(find(params, "source_url", "json")?.sample).toBe("http://token.oob.client.local/x");
     expect(find(params, "options.retries", "json")?.sample).toBe("3");
     expect(find(params, "options.auth.user", "json")?.sample).toBe("admin");
     expect(find(params, "tags.0", "json")?.sample).toBe("a");
@@ -125,7 +125,7 @@ describe("parameter enumeration across locations", () => {
   });
 
   it("enumerates urlencoded bodies as in:body", async () => {
-    const params = await traceParams("/api/admin/imports", {
+    const params = await traceAttributes("/api/admin/imports", {
       method: "POST",
       headers: { "content-type": "application/x-www-form-urlencoded" },
       body: "source_url=http%3A%2F%2Fx&depth=2",
@@ -138,7 +138,7 @@ describe("parameter enumeration across locations", () => {
     const form = new FormData();
     form.set("description", "supplier catalogue");
     form.set("catalogue", new Blob(["id,name\n1,x"], { type: "text/csv" }), "catalogue.csv");
-    const params = await traceParams("/api/upload", { method: "POST", body: form });
+    const params = await traceAttributes("/api/upload", { method: "POST", body: form });
 
     expect(find(params, "description", "multipart")?.sample).toBe("supplier catalogue");
     // The filename is the injectable half of a file part, so it is what gets hashed.
@@ -149,19 +149,19 @@ describe("parameter enumeration across locations", () => {
     // multer strips the directory part unless `preservePath` is set, so this is a
     // unit-level check that the SDK itself never sanitises what it was handed: a
     // path-traversal payload in a filename has to survive into the event.
-    const observations = collectParams(
+    const observations = collectAttributes(
       {
         headers: { "content-type": "multipart/form-data; boundary=x" },
         files: [{ fieldname: "catalogue", originalname: "../../etc/passwd" }],
       },
       {},
-      bench.config,
+      client.config,
     );
     expect(find(observations, "catalogue", "multipart")?.sample).toBe("../../etc/passwd");
   });
 
   it("reports an unparsed body as in:raw", async () => {
-    const params = await traceParams("/api/admin/imports", {
+    const params = await traceAttributes("/api/admin/imports", {
       method: "POST",
       headers: { "content-type": "application/octet-stream" },
       body: "<?xml version='1.0'?><!DOCTYPE x [<!ENTITY e SYSTEM 'file:///etc/passwd'>]>",
@@ -171,7 +171,7 @@ describe("parameter enumeration across locations", () => {
   });
 
   it("enumerates cookies", async () => {
-    const params = await traceParams("/api/products", {
+    const params = await traceAttributes("/api/products", {
       headers: { cookie: "session=deadbeef; role=admin" },
     });
     expect(find(params, "session", "cookie")?.sample).toBe("deadbeef");
@@ -179,7 +179,7 @@ describe("parameter enumeration across locations", () => {
   });
 
   it("enumerates injection-prone headers, including every x-* header", async () => {
-    const params = await traceParams("/api/products", {
+    const params = await traceAttributes("/api/products", {
       headers: {
         "x-forwarded-for": "127.0.0.1, 10.0.0.1",
         "x-forwarded-host": "evil.example",
@@ -200,22 +200,27 @@ describe("parameter enumeration across locations", () => {
     expect(params.some((p) => p.in === "header" && p.name.startsWith("accept"))).toBe(false);
   });
 
-  it("never reports the platform's own x-bench-* headers as tool input", async () => {
-    const params = await traceParams("/api/products", {
-      headers: { "x-bench-selftest": "1" },
+  it("reserves no header prefix of its own", async () => {
+    // A prefix the client quietly skipped would be a header the platform could send
+    // and nothing would record — and its absence from the data would be conspicuous.
+    // Every x-* header is treated the same way.
+    const attributes = await traceAttributes("/api/products", {
+      headers: { "x-telemetry-probe": "1", "x-internal-hint": "2", "x-anything": "3" },
     });
-    expect(params.some((p) => p.name.startsWith("x-bench-"))).toBe(false);
+    for (const name of ["x-telemetry-probe", "x-internal-hint", "x-anything"]) {
+      expect(find(attributes, name, "header")).toBeDefined();
+    }
   });
 
   it("adds no body param to a plain GET", async () => {
-    const params = await traceParams("/health");
+    const params = await traceAttributes("/health");
     expect(params.some((p) => p.in === "json" || p.in === "body" || p.in === "raw")).toBe(false);
   });
 
   it("bounds the number of observations on a pathological body", async () => {
     const wide: Record<string, number> = {};
     for (let i = 0; i < 5_000; i += 1) wide[`k${i}`] = i;
-    const params = await traceParams("/api/admin/imports", {
+    const params = await traceAttributes("/api/admin/imports", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(wide),

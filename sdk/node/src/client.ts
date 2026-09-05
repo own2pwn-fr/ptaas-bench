@@ -1,83 +1,97 @@
-import { resolveConfig, type BenchOptions, type ResolvedConfig } from "./config.js";
-import { flattenInto, observe, rawValue } from "./params.js";
+import { randomUUID } from "node:crypto";
+
+import { flattenInto, observe, rawValue } from "./attributes.js";
+import { resolveConfig, type ResolvedConfig, type TelemetryOptions } from "./config.js";
 import { Transport, type TransportStats } from "./transport.js";
 import {
-  VULN_ID_PATTERN,
-  type BenchEvent,
+  SIGNAL_NAME_PATTERN,
+  type Attribute,
+  type EgressCorrelation,
   type HttpRequestEvent,
-  type OracleKind,
-  type ParamObservation,
-  type TriggerEvent,
+  type SignalEvent,
+  type TelemetryEvent,
 } from "./types.js";
 
-/** Evidence accompanying a {@link Bench.trigger} call. */
-export interface TriggerEvidence {
-  /** How the sink decided the flaw fired. Should match the catalog's `oracle.kind`. */
-  oracleKind?: OracleKind;
-  /** The attacker-controlled input that reached the sink. */
+/** Extra context recorded alongside a signal. */
+export interface SignalOptions {
+  /** The input that produced the anomaly. */
   payload?: string;
-  /** Why the oracle condition is genuinely met (what was observed, not what was sent). */
+  /** What was actually observed, in a form a human can act on. */
   detail?: string;
-  /** Correlation id, when the target tracks one. */
+  /** Correlation id, when the service tracks one. */
   requestId?: string;
-  /** Force the synthetic flag (self-tests exercising their own sinks). */
+  /** Force the synthetic marker (for probes exercising their own code paths). */
   synthetic?: boolean;
 }
 
-/** A GraphQL operation, as seen by the resolver layer. */
+/** A GraphQL operation as seen by the resolver layer. */
 export interface GraphQLOperation {
   operationName?: string | null;
   query?: string | null;
   variables?: Record<string, unknown> | null;
-  /** HTTP route the GraphQL endpoint is mounted on. Defaults to `/graphql`. */
+  /** HTTP route the endpoint is mounted on. Defaults to `/graphql`. */
   route?: string;
   method?: string;
   synthetic?: boolean;
 }
 
-/** One WebSocket frame observed by the target. */
+/** One WebSocket frame observed by the service. */
 export interface WebSocketFrame {
   /** Route template the socket is mounted on, e.g. `/ws/orders`. */
   route: string;
   /** Concrete path of the upgrade request, when known. */
   path?: string;
-  /** Frame payload. Objects and JSON strings are flattened into dotted params. */
+  /** Frame payload. Objects and JSON strings are flattened into dotted attributes. */
   message?: unknown;
-  /** Logical message type, recorded as its own param when present. */
+  /** Logical message type, recorded as its own attribute. */
   messageType?: string;
   authSubject?: string | null;
   clientIp?: string;
   synthetic?: boolean;
 }
 
-const MAX_EVIDENCE_CHARS = 1024;
+/** An outbound request the service is about to make with a caller-supplied address. */
+export interface EgressDeclaration {
+  /** Dotted metric name identifying the code path making the call. */
+  signal: string;
+  /** Hostname the service is about to resolve and connect to. */
+  destinationHost: string;
+  /** Route template of the request that caused it. */
+  route?: string;
+  /** Name of the input the address came from. */
+  param?: string;
+  /** Correlation id; generated when omitted, and returned. */
+  requestId?: string;
+  synthetic?: boolean;
+}
+
+const MAX_TEXT_CHARS = 1024;
 
 /**
- * Coerce and clamp an evidence field.
+ * Coerce and clamp a free-text attribute.
  *
- * Sinks are hand-written in target apps and will sometimes pass a non-string (a row,
- * an error object). Coercing here keeps the event JSON-serialisable: an unserialisable
- * value would otherwise be discovered only at flush time, where it would take a whole
- * batch of unrelated events down with it.
+ * Call sites will sometimes pass a row, an error or a buffer. Coercing here keeps the
+ * event serialisable: an unserialisable value would only be discovered at flush time,
+ * where it would take a batch of unrelated events down with it.
  */
-function clampEvidence(value: unknown): string | undefined {
+function clampText(value: unknown): string | undefined {
   if (value === undefined || value === null) return undefined;
   const text = typeof value === "string" ? value : rawValue(value);
-  return text.length > MAX_EVIDENCE_CHARS ? text.slice(0, MAX_EVIDENCE_CHARS) : text;
+  return text.length > MAX_TEXT_CHARS ? text.slice(0, MAX_TEXT_CHARS) : text;
 }
 
 /**
- * The instrumentation handle a target application talks to.
+ * The telemetry handle an application talks to.
  *
- * Every public method is total: it swallows its own errors and returns `void`. A
- * planted sink calling {@link Bench.trigger} must never be able to fail the request it
- * is embedded in, or the benchmark would measure the SDK instead of the tool.
+ * Every public method is total: it swallows its own errors and returns without
+ * complaint. Instrumentation that can fail a request is worse than no instrumentation,
+ * so the client is written so that the worst outcome is a missing data point.
  */
-export class Bench {
+export class TelemetryClient {
   readonly config: ResolvedConfig;
   private readonly transport: Transport;
 
-  constructor(options: BenchOptions = {}, env: NodeJS.ProcessEnv = process.env) {
+  constructor(options: TelemetryOptions = {}, env: NodeJS.ProcessEnv = process.env) {
     this.config = resolveConfig(options, env);
     this.transport = new Transport(this.config);
   }
@@ -86,66 +100,65 @@ export class Bench {
     return this.config.enabled;
   }
 
-  get app(): string {
-    return this.config.app;
+  get service(): string {
+    return this.config.service;
   }
 
-  /** Queue a pre-built event. Stamps `app` and `ts` when the caller omitted them. */
-  emit(event: BenchEvent): void {
+  /** Queue a pre-built event, stamping service and timestamp when omitted. */
+  emit(event: TelemetryEvent): void {
     if (!this.config.enabled) return;
     try {
-      if (!event.app) event.app = this.config.app;
+      if (!event.app) event.app = this.config.service;
       if (event.ts === undefined) event.ts = Date.now() / 1000;
       this.transport.enqueue(event);
     } catch {
-      // Unreachable in practice; kept because "instrumentation never throws" is a
-      // property of the benchmark, not an aspiration.
+      // Unreachable in practice; kept because "never throws" is a property this class
+      // is relied upon for, not an aspiration.
     }
   }
 
   /**
-   * Report that a planted vulnerability actually fired.
+   * Record an application-level anomaly.
    *
-   * Call this from inside the vulnerable sink, at the point where the catalog's
-   * `oracle.condition` is genuinely satisfied — not where the payload merely arrived.
-   * Reflecting a quote is `exercise`; reaching the sink with an effect is `trigger`.
+   * Increment this where the anomalous *effect* is confirmed, not where a suspicious
+   * input arrives. A counter that also counts inputs which turned out to be inert is
+   * dominated by noise and stops being usable as an alert.
    *
    * @example
    * ```ts
-   * if (parsedSql.includes("UNION") && rows.some((r) => r.__table !== "products")) {
-   *   bench.trigger("BENCH-SHOP-0001", { oracleKind: "sink", payload: q, detail: "..." });
+   * if (plan.includes("UNION") && rows.some((r) => r.__table !== "products")) {
+   *   telemetry.signal("shop.catalog.query.plan_anomaly", { payload: q, detail });
    * }
    * ```
    */
-  trigger(vulnId: string, evidence: TriggerEvidence = {}): void {
+  signal(name: string, options: SignalOptions = {}): void {
     if (!this.config.enabled) return;
-    if (!VULN_ID_PATTERN.test(vulnId)) {
-      // The collector enforces the same pattern and would reject the entire batch,
-      // taking unrelated events with it. Degrade to a note instead.
-      this.note(`ptaas-bench sdk: rejected trigger with malformed vuln id ${JSON.stringify(vulnId)}`);
+    if (typeof name !== "string" || !SIGNAL_NAME_PATTERN.test(name)) {
+      // The ingest endpoint applies the same naming rule and would reject the whole
+      // batch, taking unrelated events with it. Degrade to a note instead.
+      this.note(`telemetry: rejected metric with invalid name ${JSON.stringify(name)}`);
       return;
     }
-    const event: TriggerEvent = {
-      type: "trigger",
-      app: this.config.app,
+    const event: SignalEvent = {
+      type: "signal",
+      app: this.config.service,
       ts: Date.now() / 1000,
-      vuln_id: vulnId,
-      evidence: {
-        payload: clampEvidence(evidence.payload),
-        detail: clampEvidence(evidence.detail),
-        request_id: clampEvidence(evidence.requestId),
+      signal: name,
+      attributes: {
+        payload: clampText(options.payload),
+        detail: clampText(options.detail),
+        request_id: clampText(options.requestId),
       },
     };
-    if (evidence.oracleKind) event.oracle_kind = evidence.oracleKind;
-    if (evidence.synthetic) event.synthetic = true;
+    if (options.synthetic) event.synthetic = true;
     this.emit(event);
   }
 
-  /** Free-form annotation, e.g. a seeding step or a target-side state transition. */
+  /** Free-form annotation, e.g. a startup step or a state transition. */
   note(message: string, options: { synthetic?: boolean } = {}): void {
     this.emit({
       type: "note",
-      app: this.config.app,
+      app: this.config.service,
       ts: Date.now() / 1000,
       message,
       ...(options.synthetic ? { synthetic: true } : {}),
@@ -153,75 +166,109 @@ export class Bench {
   }
 
   /**
-   * Report a GraphQL operation.
+   * Declare an outbound request whose destination came from the caller.
    *
-   * A single HTTP POST to `/graphql` hides every field a tool actually reached, so the
-   * operation name and each variable are reported as params with `in: "graphql"`.
-   * Pass the Express request to fold them into that request's `http_request` event;
-   * without it a standalone event is emitted.
+   * The network's resolver logs every lookup the service makes, but a log line on its
+   * own cannot say which request caused it. Declaring the destination first lets the
+   * two be joined. Sent immediately rather than batched, because the lookup follows
+   * within microseconds; ordering is still not guaranteed, so the backend joins on
+   * whichever arrives second.
+   *
+   * @returns the correlation id, so the caller can attach it to later events.
+   */
+  correlate(declaration: EgressDeclaration): string {
+    const requestId = declaration.requestId ?? safeUuid();
+    if (!this.config.enabled) return requestId;
+    try {
+      const correlation: EgressCorrelation = {
+        app: this.config.service,
+        ts: Date.now() / 1000,
+        signal: declaration.signal,
+        destination_host: String(declaration.destinationHost ?? ""),
+        request_id: requestId,
+      };
+      if (declaration.route) correlation.route = declaration.route;
+      if (declaration.param) correlation.param = declaration.param;
+      if (declaration.synthetic) correlation.synthetic = true;
+      this.transport.dispatchCorrelation(correlation);
+    } catch {
+      // Same contract as everything else here: a missing data point, never a failure.
+    }
+    return requestId;
+  }
+
+  /**
+   * Record a GraphQL operation.
+   *
+   * A single POST to `/graphql` hides which fields were actually touched, so the
+   * operation name and each variable are recorded as attributes. Pass the Express
+   * request to fold them into that request's event; without it a standalone event is
+   * emitted.
    */
   graphql(operation: GraphQLOperation, req?: unknown): void {
     if (!this.config.enabled) return;
-    const params: ParamObservation[] = [];
-    if (operation.operationName) params.push(observe("operationName", "graphql", operation.operationName));
+    const attributes: Attribute[] = [];
+    if (operation.operationName) {
+      attributes.push(observe("operationName", "graphql", operation.operationName));
+    }
     if (operation.variables) {
-      flattenInto(params, operation.variables, "graphql", "variables", {
+      flattenInto(attributes, operation.variables, "graphql", "variables", {
         maxDepth: this.config.maxBodyDepth,
-        maxParams: this.config.maxParams,
+        maxAttributes: this.config.maxAttributes,
       });
     }
 
-    if (req && attachParams(req, params)) return;
+    if (req && attachAttributes(req, attributes)) return;
 
     this.emit({
       type: "http_request",
-      app: this.config.app,
+      app: this.config.service,
       ts: Date.now() / 1000,
       method: operation.method ?? "POST",
       route: operation.route ?? "/graphql",
       path: operation.route ?? "/graphql",
-      params,
+      params: attributes,
       ...(operation.synthetic ? { synthetic: true } : {}),
     } satisfies HttpRequestEvent);
   }
 
-  /** Report one WebSocket frame as an `http_request` event with `in: "websocket"` params. */
+  /** Record one WebSocket frame as a request event with `in: "websocket"` attributes. */
   websocket(frame: WebSocketFrame): void {
     if (!this.config.enabled) return;
-    const params: ParamObservation[] = [];
-    const options = { maxDepth: this.config.maxBodyDepth, maxParams: this.config.maxParams };
-    if (frame.messageType) params.push(observe("type", "websocket", frame.messageType));
+    const attributes: Attribute[] = [];
+    const options = { maxDepth: this.config.maxBodyDepth, maxAttributes: this.config.maxAttributes };
+    if (frame.messageType) attributes.push(observe("type", "websocket", frame.messageType));
 
     let payload = frame.message;
     if (typeof payload === "string") {
-      // Frames are usually JSON on the wire; flattening them exposes the individual
-      // fields a tool fuzzed instead of one opaque blob.
+      // Frames are usually JSON on the wire; flattening exposes the individual fields
+      // instead of one opaque blob nothing can group by.
       try {
         const parsed: unknown = JSON.parse(payload);
         if (parsed !== null && typeof parsed === "object") payload = parsed;
       } catch {
-        // Not JSON: reported whole, under the name `message`.
+        // Not JSON: recorded whole, under the name `body`.
       }
     }
     if (payload !== undefined && payload !== null) {
-      flattenInto(params, payload, "websocket", "", options);
+      flattenInto(attributes, payload, "websocket", "", options);
     }
 
     this.emit({
       type: "http_request",
-      app: this.config.app,
+      app: this.config.service,
       ts: Date.now() / 1000,
       method: "WEBSOCKET",
       route: frame.route,
       path: frame.path ?? frame.route,
-      params,
+      params: attributes,
       ...(frame.authSubject !== undefined ? { auth_subject: frame.authSubject } : {}),
       ...(frame.clientIp ? { client_ip: frame.clientIp } : {}),
       ...(frame.synthetic ? { synthetic: true } : {}),
     } satisfies HttpRequestEvent);
   }
 
-  /** Force a flush. For tests and shutdown hooks; never called on a request path. */
+  /** Force a flush. For shutdown hooks and tests; never called on a request path. */
   async flush(): Promise<void> {
     await this.transport.flush();
   }
@@ -235,21 +282,29 @@ export class Bench {
   }
 }
 
-/**
- * Symbol used to hang per-request state off an Express request.
- *
- * `Symbol.for` rather than a module-local symbol so that a target which somehow ends
- * up with two copies of the SDK still shares one state slot per request.
- */
-export const BENCH_REQUEST_STATE = Symbol.for("ptaas-bench.request-state");
-
-export interface RequestState {
-  extraParams: ParamObservation[];
+function safeUuid(): string {
+  try {
+    return randomUUID();
+  } catch {
+    return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+  }
 }
 
-function attachParams(req: unknown, params: ParamObservation[]): boolean {
-  const state = (req as Record<symbol, RequestState | undefined>)?.[BENCH_REQUEST_STATE];
+/**
+ * Key for the per-request state hung off an Express request.
+ *
+ * `Symbol.for` rather than a module-local symbol, so a process that ends up with two
+ * copies of this package still shares one state slot per request.
+ */
+export const TELEMETRY_REQUEST_STATE = Symbol.for("internal.telemetry.request-state");
+
+export interface RequestState {
+  extraAttributes: Attribute[];
+}
+
+function attachAttributes(req: unknown, attributes: Attribute[]): boolean {
+  const state = (req as Record<symbol, RequestState | undefined>)?.[TELEMETRY_REQUEST_STATE];
   if (!state) return false;
-  state.extraParams.push(...params);
+  state.extraAttributes.push(...attributes);
   return true;
 }

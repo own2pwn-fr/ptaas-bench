@@ -1,15 +1,29 @@
 import type { ResolvedConfig } from "./config.js";
-import type { BenchEvent } from "./types.js";
+import type { EgressCorrelation, TelemetryEvent } from "./types.js";
+
+export interface TransportStats {
+  /** Events currently waiting in memory. */
+  queued: number;
+  /** Events accepted into the queue since start. */
+  enqueued: number;
+  /** Events discarded because the queue was full. */
+  discarded: number;
+  /** Events the backend accepted. */
+  sent: number;
+  /** Events lost to an unreachable or failing backend. */
+  failed: number;
+  /** Batches POSTed, successfully or not. */
+  batches: number;
+}
 
 /**
  * Serialise a batch, sacrificing only the events that cannot be serialised.
  *
- * Sinks are hand-written in target apps, so one of them will eventually hand the SDK
- * something circular. Letting a single bad event fail the whole POST would silently
- * delete unrelated triggers and misscore the run, so the batch is retried without the
- * offenders rather than discarded whole.
+ * Application code eventually hands the client something circular. Letting one bad
+ * value fail the whole POST would silently delete unrelated events, so the batch is
+ * retried without the offenders rather than discarded whole.
  */
-function serializeBatch(batch: BenchEvent[]): string | null {
+function serializeBatch(batch: TelemetryEvent[]): string | null {
   try {
     return JSON.stringify({ events: batch });
   } catch {
@@ -29,42 +43,26 @@ function serializeBatch(batch: BenchEvent[]): string | null {
   }
 }
 
-export interface TransportStats {
-  /** Events currently waiting in memory. */
-  queued: number;
-  /** Events accepted into the queue since start. */
-  enqueued: number;
-  /** Events discarded because the queue was full. */
-  dropped: number;
-  /** Events the collector accepted. */
-  sent: number;
-  /** Events lost to a failing or absent collector. */
-  failed: number;
-  /** Batches POSTed (successfully or not). */
-  batches: number;
-}
-
 /**
- * In-memory batching queue for collector events.
+ * In-memory batching queue.
  *
- * Everything here is fire-and-forget by construction. Several oracles in the catalog
- * are timing-based (`oracle.kind: timing`), so a collector that is down, slow or not
- * deployed at all must not be observable in the target's response time — hence: no
- * awaiting on the caller's path, no retry queue that could grow unbounded, no
- * back-pressure, and a hard cap on memory with the oldest events dropped first.
- * Losing recent events would be worse than losing old ones: a drop at the end of a
- * run is a trigger the scorer never sees.
+ * Everything here is fire-and-forget by construction. Telemetry must never be visible
+ * in an endpoint's response time — latency histograms are the whole point of collecting
+ * it, and a client that perturbs them measures itself. Hence: nothing awaited on the
+ * caller's path, no retry queue that could grow without bound, no back-pressure, and a
+ * hard cap on memory. When that cap is hit the oldest events go first: during an
+ * incident the most recent ones are the ones somebody is looking at.
  */
 export class Transport {
-  private readonly queue: BenchEvent[] = [];
+  private readonly queue: TelemetryEvent[] = [];
   private timer: NodeJS.Timeout | null = null;
   private inFlight = 0;
   private closed = false;
-  private unreportedDrops = 0;
+  private unreportedDiscards = 0;
   private readonly stats: TransportStats = {
     queued: 0,
     enqueued: 0,
-    dropped: 0,
+    discarded: 0,
     sent: 0,
     failed: 0,
     batches: 0,
@@ -76,19 +74,19 @@ export class Transport {
     return { ...this.stats, queued: this.queue.length };
   }
 
-  enqueue(event: BenchEvent): void {
+  enqueue(event: TelemetryEvent): void {
     if (this.closed) return;
     if (this.queue.length >= this.config.maxQueueSize) {
       this.queue.shift();
-      this.stats.dropped += 1;
-      this.unreportedDrops += 1;
+      this.stats.discarded += 1;
+      this.unreportedDiscards += 1;
     }
     this.queue.push(event);
     this.stats.enqueued += 1;
 
     if (this.queue.length >= this.config.batchSize) {
-      // Flush immediately on a full batch so a burst of traffic does not sit for a
-      // whole tick and start evicting itself.
+      // Send immediately on a full batch, so a traffic burst does not sit for a whole
+      // tick and start evicting itself.
       void this.flush();
       return;
     }
@@ -101,28 +99,26 @@ export class Transport {
       this.timer = null;
       void this.flush();
     }, this.config.flushIntervalMs);
-    // Instrumentation must never be the reason a target process stays alive.
+    // Telemetry must never be the reason a process refuses to exit.
     this.timer.unref?.();
   }
 
   /**
-   * Send whatever is queued. Resolves once the in-flight POSTs settle, which is for
-   * tests and graceful shutdown only — the request path never awaits it.
+   * Send whatever is queued. The returned promise settles once the in-flight POSTs do,
+   * which is for shutdown hooks and tests only; the request path never awaits it.
    */
   async flush(): Promise<void> {
-    if (this.config.reportDrops && this.unreportedDrops > 0) {
-      const dropped = this.unreportedDrops;
-      this.unreportedDrops = 0;
-      // A silent drop is indistinguishable from "the tool never reached this
-      // endpoint", which would corrupt the score rather than merely lose data.
-      // Prepended to the queue (not to a batch) so batches stay within the
-      // collector's hard limit of 500 events.
+    if (this.config.reportDiscards && this.unreportedDiscards > 0) {
+      const discarded = this.unreportedDiscards;
+      this.unreportedDiscards = 0;
+      // Prepended to the queue rather than to a batch, so batches stay within the
+      // ingest limit of 500.
       this.queue.unshift({
         type: "note",
-        app: this.config.app,
+        app: this.config.service,
         ts: Date.now() / 1000,
         synthetic: true,
-        message: `ptaas-bench sdk: dropped ${dropped} event(s), queue full`,
+        message: `telemetry: discarded ${discarded} event(s), queue limit reached`,
       });
     }
 
@@ -133,38 +129,60 @@ export class Transport {
     await Promise.all(pending);
   }
 
-  private async post(batch: BenchEvent[]): Promise<void> {
+  private async post(batch: TelemetryEvent[]): Promise<void> {
     this.stats.batches += 1;
-    const { collectorUrl, fetchImpl, requestTimeoutMs } = this.config;
-    if (!collectorUrl || typeof fetchImpl !== "function") {
+    const { endpoint, eventsPath } = this.config;
+    const body = endpoint ? serializeBatch(batch) : null;
+    if (body === null) {
       this.stats.failed += batch.length;
       return;
     }
+    const ok = await this.send(`${endpoint}${eventsPath}`, body);
+    if (ok) this.stats.sent += batch.length;
+    else this.stats.failed += batch.length;
+  }
+
+  /**
+   * Declare an outbound destination, out of band from the event batch.
+   *
+   * Sent on its own rather than queued: the correlation has to reach the collector
+   * around the same time as the outbound request it describes, and waiting for the next
+   * flush tick would routinely be too late. Still never awaited by the caller.
+   */
+  dispatchCorrelation(correlation: EgressCorrelation): void {
+    if (this.closed) return;
+    const { endpoint, correlationsPath } = this.config;
+    if (!endpoint) return;
+    let body: string;
+    try {
+      body = JSON.stringify(correlation);
+    } catch {
+      return;
+    }
+    void this.send(`${endpoint}${correlationsPath}`, body);
+  }
+
+  private async send(url: string, body: string): Promise<boolean> {
+    const { fetchImpl, requestTimeoutMs } = this.config;
+    if (typeof fetchImpl !== "function") return false;
 
     this.inFlight += 1;
     try {
-      const body = serializeBatch(batch);
-      if (body === null) {
-        this.stats.failed += batch.length;
-        return;
-      }
-      const response = await fetchImpl(`${collectorUrl}/v1/events`, {
+      const response = await fetchImpl(url, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body,
         signal: AbortSignal.timeout(requestTimeoutMs),
         keepalive: false,
       });
-      // The body is never read for content, but it must be consumed or the socket
-      // stays half-open and the agent leaks handles over a long run.
+      // The body is never read for content, but it has to be consumed or the socket
+      // stays half-open and handles leak over a long uptime.
       await response.body?.cancel().catch(() => undefined);
-      if (response.ok) this.stats.sent += batch.length;
-      else this.stats.failed += batch.length;
+      return response.ok;
     } catch {
-      // Collector down, DNS gone, timed out: by design this is a no-op. Events are
-      // deliberately not requeued — a retry storm against a dead collector would
-      // compete with the target for CPU and perturb the timing oracles.
-      this.stats.failed += batch.length;
+      // Backend down, DNS gone, timed out: by design a no-op. Nothing is requeued —
+      // a retry storm against a dead backend would compete with the service for CPU.
+      return false;
     } finally {
       this.inFlight -= 1;
     }
@@ -180,7 +198,7 @@ export class Transport {
     await this.flush();
   }
 
-  /** Test helper: are there POSTs still outstanding? */
+  /** Outstanding POSTs, for tests. */
   get pending(): number {
     return this.inFlight;
   }

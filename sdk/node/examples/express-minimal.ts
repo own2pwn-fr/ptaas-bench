@@ -1,35 +1,31 @@
 /**
- * Reference target application: the shape every ptaas-bench target copies.
- *
- * It plants BENCH-SHOP-0001 (UNION-based SQLi in the product search filter) exactly as
- * the catalog describes it, and shows where `bench.trigger` belongs relative to the
- * vulnerable sink.
+ * Minimal service wiring: telemetry middleware, one router, one anomaly counter.
  *
  *   node --experimental-strip-types examples/express-minimal.ts
- *   BENCH_APP=shopfront BENCH_COLLECTOR_URL=http://collector:8900 node ... (under compose)
+ *
+ * Environment: TELEMETRY_SERVICE, TELEMETRY_ENDPOINT (see the platform runbook).
  */
 import express from "express";
 import { pathToFileURL } from "node:url";
 
-import { benchMiddleware, bench, initBench } from "../src/index.js";
+import { initTelemetry, telemetry, telemetryMiddleware } from "../src/index.js";
 
-// Reads BENCH_APP and BENCH_COLLECTOR_URL. Absent either, the SDK is inert and this
-// app behaves exactly as it does in production — that is the point: a target is not
-// allowed to look different when it is not being benchmarked.
-initBench();
+// Reads TELEMETRY_SERVICE and TELEMETRY_ENDPOINT. With neither set the client is inert
+// and the service behaves exactly as it does in production with the collector down.
+initTelemetry();
 
 const app = express();
 
-// First, before the body parsers: the route snapshot has to be installed before
-// routing runs. Parameter enumeration still sees the parsed body, because it happens
-// after the response has been flushed.
-app.use(benchMiddleware());
+// First, ahead of the body parsers: the route accessor has to be installed before
+// routing runs. Request attributes are still collected from the parsed body, because
+// that happens once the response has been flushed.
+app.use(telemetryMiddleware());
 app.use(express.json());
 
 // ---------------------------------------------------------------------------
-// Fake data layer. A real target would use a real database; what matters for the
-// benchmark is that the SQL text and the returned rows are both inspectable, since
-// the oracle is defined over both.
+// Storage layer. Stands in for the reporting database: what matters here is that the
+// statement text and the returned rows are both inspectable, because the anomaly
+// counter below is defined over the two together.
 // ---------------------------------------------------------------------------
 interface Row {
   __table: string;
@@ -38,55 +34,45 @@ interface Row {
 
 const TABLES: Record<string, Row[]> = {
   products: [
-    { __table: "products", id: 1, name: "Laptop 14\"", price: 999 },
+    { __table: "products", id: 1, name: 'Laptop 14"', price: 999 },
     { __table: "products", id: 2, name: "Laptop stand", price: 39 },
   ],
   users: [{ __table: "users", id: 1, email: "ada@example.com", password_hash: "$2b$12$…" }],
 };
 
-/**
- * Toy engine standing in for a driver: it "parses" the statement and, when the query
- * carries a UNION against another table, actually returns that table's rows. The flaw
- * has to be real — a scanner must be able to exfiltrate data, not just see an error.
- */
 function executeSql(sql: string): Row[] {
   const union = /union\s+select\b[\s\S]*?\bfrom\s+([a-z_]+)/i.exec(sql);
   if (union) {
     const table = union[1] ?? "";
     return [...(TABLES.products ?? []), ...(TABLES[table] ?? [])];
   }
+  if (/\bor\s+'?1'?\s*=\s*'?1/i.test(sql)) return TABLES.products ?? [];
   const like = /name\s+like\s+'%([^%]*)%'/i.exec(sql);
   const needle = (like?.[1] ?? "").toLowerCase();
-  if (/\bor\s+'?1'?\s*=\s*'?1/i.test(sql)) return TABLES.products ?? [];
   return (TABLES.products ?? []).filter((r) => String(r.name).toLowerCase().includes(needle));
 }
 
-// ---------------------------------------------------------------------------
-// BENCH-SHOP-0001 — UNION-based SQL injection in the product search filter.
-// entrypoint: GET /api/products?q=  (default_value: "laptop")
-// oracle.kind: sink
-// ---------------------------------------------------------------------------
 const api = express.Router();
 
 api.get("/products", (req, res) => {
   const q = String(req.query.q ?? "");
 
-  // THE PLANTED FLAW: string concatenation, no parameter binding.
   const sql = `SELECT id, name, price FROM products WHERE name LIKE '%${q}%'`;
   const rows = executeSql(sql);
 
-  // THE ORACLE. Note what is being checked: not "did a payload arrive" (that is
-  // merely `exercise`, and the scorer derives it from the http_request event on its
-  // own), but "did the injected clause change what the database returned". A scanner
-  // that gets a quote reflected back scores exercise; only real exfiltration or a
-  // real tautology reaches this branch.
-  const injectedClause = /\bunion\s+select\b/i.test(sql) || /'\s*or\s+'?1'?\s*=\s*'?1/i.test(sql);
+  // Query-plan anomaly counter.
+  //
+  // It increments on the executed plan, never on the input: a search term that merely
+  // looks unusual is not an anomaly, and counting those would drown the metric in
+  // noise from ordinary customer searches containing quotes or the word "union". What
+  // is counted here is a plan that reached outside the products table, or returned more
+  // rows than that table holds — an effect, observed after the fact.
+  const widenedPlan = /\bunion\s+select\b/i.test(sql) || /'\s*or\s+'?1'?\s*=\s*'?1/i.test(sql);
   const foreignRows = rows.some((row) => row.__table !== "products");
-  if (injectedClause && (foreignRows || rows.length > (TABLES.products?.length ?? 0))) {
-    bench.trigger("BENCH-SHOP-0001", {
-      oracleKind: "sink",
+  if (widenedPlan && (foreignRows || rows.length > (TABLES.products?.length ?? 0))) {
+    telemetry.signal("shop.catalog.query.plan_anomaly", {
       payload: q,
-      detail: `injected clause parsed by the engine; ${rows.length} row(s) returned, tables: ${[
+      detail: `plan widened; ${rows.length} row(s) returned from ${[
         ...new Set(rows.map((r) => r.__table)),
       ].join(",")}`,
     });
@@ -95,20 +81,54 @@ api.get("/products", (req, res) => {
   res.json({ products: rows.map(({ __table, ...row }) => row) });
 });
 
-// Mounted under a prefix on purpose: the middleware must report the composed template
-// `/api/products`, not the router-local `/products` and not the concrete URL.
+/**
+ * Supplier catalogue import.
+ *
+ * The destination comes from the caller, so it is declared before the fetch: the
+ * network's resolver logs every lookup, and without this the log line cannot be
+ * attributed back to the request that caused it.
+ */
+api.post("/imports", async (req, res) => {
+  const sourceUrl = String((req.body as { source_url?: unknown })?.source_url ?? "");
+  let host = "";
+  try {
+    host = new URL(sourceUrl).hostname;
+  } catch {
+    res.status(400).json({ error: "source_url must be an absolute URL" });
+    return;
+  }
+
+  const requestId = telemetry.correlate({
+    signal: "shop.imports.fetch.egress",
+    destinationHost: host,
+    route: "/api/imports",
+    param: "source_url",
+  });
+
+  try {
+    await fetch(sourceUrl, { signal: AbortSignal.timeout(5_000) });
+  } catch {
+    // The importer discards the response either way; failures are retried by the job.
+  }
+  res.status(202).json({ queued: true, request_id: requestId });
+});
+
+// Mounted under a prefix: the recorded template is `/api/products`, not the
+// router-local `/products` and not the concrete URL.
 app.use("/api", api);
 
-// An unmatched request still produces an event, with route "<unmatched>" and the real
-// path in `path`, so the scorer can see what a crawler probed for and missed.
+app.get("/", (_req, res) => {
+  res.json({ service: "catalog" });
+});
+
 app.use((_req, res) => {
   res.status(404).json({ error: "not found" });
 });
 
 export { app };
 
-// Standard ESM entrypoint guard, so the app can also be imported (by a smoke test, or
-// by a harness that wants to drive it in-process) without binding a port.
+// Standard ESM entrypoint guard, so the module can also be imported by a smoke test or
+// an in-process harness without binding a port.
 const invokedDirectly =
   process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href;
 if (invokedDirectly) {

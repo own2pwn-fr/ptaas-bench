@@ -1,13 +1,14 @@
+import { flattenInto, observe, observeRecord, type FlattenOptions } from "./attributes.js";
 import type { ResolvedConfig } from "./config.js";
-import { flattenInto, observe, observeRecord, type FlattenOptions } from "./params.js";
-import type { ParamObservation } from "./types.js";
+import type { Attribute } from "./types.js";
 
 /**
- * Headers a handler could plausibly be injected through.
+ * Headers worth recording.
  *
- * Deliberately narrow: dumping every header would bury the signal the scorer needs
- * (did the tool touch `host`? did it forge `x-forwarded-for`?) under Accept-* noise,
- * and would inflate every event with values no catalog entry ever names.
+ * Intentionally narrow. Recording every header would bury the few that actually explain
+ * a request's behaviour — which virtual host it hit, which proxy forwarded it, where it
+ * was linked from — under Accept-* and Sec-* noise, and would inflate every event with
+ * values no dashboard ever reads.
  */
 const HEADER_ALLOWLIST = new Set([
   "host",
@@ -17,9 +18,6 @@ const HEADER_ALLOWLIST = new Set([
   "origin",
   "content-type",
 ]);
-
-/** Everything the platform stamps on its own traffic; never a tool's input. */
-const HEADER_DENY_PREFIX = "x-bench-";
 
 export interface RequestLike {
   method?: string;
@@ -43,10 +41,11 @@ export function headerValue(req: RequestLike, name: string): string | undefined 
 }
 
 /**
- * Parse the `Cookie` header ourselves instead of trusting `req.cookies`.
+ * Parse the `Cookie` header directly rather than trusting `req.cookies`.
  *
- * Targets are not required to install cookie-parser, and a tool that plants a payload
- * in a cookie the app never reads still deserves credit for having fuzzed it.
+ * cookie-parser is not always installed, and a cookie the application never reads is
+ * still part of what the client sent — often the most useful part when a session
+ * behaves differently between two deployments.
  */
 export function parseCookieHeader(header: string | undefined): Record<string, string> {
   const out: Record<string, string> = {};
@@ -61,15 +60,15 @@ export function parseCookieHeader(header: string | undefined): Record<string, st
     try {
       value = decodeURIComponent(value);
     } catch {
-      // Malformed percent-escapes are exactly the sort of thing a fuzzer sends;
-      // keep the raw bytes rather than dropping the observation.
+      // Broken percent-escapes are exactly the case worth seeing on a dashboard;
+      // keep the raw bytes instead of dropping the observation.
     }
     out[name] = value;
   }
   return out;
 }
 
-function bodyLocation(contentType: string | undefined): "json" | "body" | "multipart" | "raw" {
+function bodySource(contentType: string | undefined): "json" | "body" | "multipart" | "raw" {
   if (!contentType) return "body";
   const ct = contentType.toLowerCase();
   if (ct.includes("json")) return "json";
@@ -78,7 +77,7 @@ function bodyLocation(contentType: string | undefined): "json" | "body" | "multi
   return "raw";
 }
 
-function collectFiles(out: ParamObservation[], req: RequestLike, options: FlattenOptions): void {
+function collectFiles(out: Attribute[], req: RequestLike, options: FlattenOptions): void {
   const candidates: unknown[] = [];
   if (req.file) candidates.push(req.file);
   if (Array.isArray(req.files)) candidates.push(...req.files);
@@ -90,48 +89,49 @@ function collectFiles(out: ParamObservation[], req: RequestLike, options: Flatte
   }
 
   for (const file of candidates) {
-    if (out.length >= options.maxParams) return;
+    if (out.length >= options.maxAttributes) return;
     if (!file || typeof file !== "object") continue;
     const f = file as { fieldname?: unknown; originalname?: unknown; name?: unknown };
-    const field = typeof f.fieldname === "string" ? f.fieldname : typeof f.name === "string" ? f.name : "file";
-    // The filename is the injectable half of a file part (traversal, XSS, polyglot
-    // extensions); the content is not hashed because it can be arbitrarily large and
-    // no catalog entry addresses it.
+    const field =
+      typeof f.fieldname === "string" ? f.fieldname : typeof f.name === "string" ? f.name : "file";
+    // The client-supplied name is the interesting half of a file part; the bytes are
+    // not hashed because they can be arbitrarily large and nothing addresses them.
     const filename = typeof f.originalname === "string" ? f.originalname : "";
     out.push(observe(field, "multipart", filename));
   }
 }
 
 /**
- * Enumerate every input the handler could have observed.
+ * Record every input the handler could have read.
  *
- * Runs after the response has been flushed (see the middleware), so body parsers have
- * already populated `req.body`, and so none of this work sits on the response path.
+ * Runs once the response has been flushed, so body parsers have already populated
+ * `req.body` and none of this work lands in the endpoint's latency.
  */
-export function collectParams(
+export function collectAttributes(
   req: RequestLike,
   pathParams: Record<string, unknown>,
   config: ResolvedConfig,
-): ParamObservation[] {
-  const out: ParamObservation[] = [];
-  const options: FlattenOptions = { maxDepth: config.maxBodyDepth, maxParams: config.maxParams };
+): Attribute[] {
+  const out: Attribute[] = [];
+  const options: FlattenOptions = {
+    maxDepth: config.maxBodyDepth,
+    maxAttributes: config.maxAttributes,
+  };
 
   observeRecord(out, req.query, "query", options);
   observeRecord(out, pathParams, "path", options);
 
   const contentType = headerValue(req, "content-type");
-  const location = bodyLocation(contentType);
+  const source = bodySource(contentType);
   const body = req.body;
   if (body !== undefined && body !== null) {
     if (Buffer.isBuffer(body) || typeof body === "string") {
-      if (Buffer.isBuffer(body) ? body.length > 0 : body.length > 0) {
-        out.push(observe("body", location === "json" ? "json" : "raw", body));
-      }
+      if (body.length > 0) out.push(observe("body", source === "json" ? "json" : "raw", body));
     } else if (typeof body === "object") {
-      // An empty parsed body is indistinguishable from "no body at all" and would
-      // add a meaningless `body` entry to every GET.
+      // An empty parsed body is indistinguishable from no body at all, and would add a
+      // meaningless `body` row to every GET.
       if (Object.keys(body as object).length > 0) {
-        flattenInto(out, body, location === "raw" ? "body" : location, "", options);
+        flattenInto(out, body, source === "raw" ? "body" : source, "", options);
       }
     }
   }
@@ -140,21 +140,20 @@ export function collectParams(
   const cookies = parseCookieHeader(headerValue(req, "cookie"));
   observeRecord(out, cookies, "cookie", options);
   if (req.cookies && typeof req.cookies === "object") {
-    // cookie-parser may have decoded (or signed-verified) values the raw header does
-    // not expose; only add names the header did not already yield.
+    // cookie-parser may expose decoded or signature-verified values the raw header does
+    // not; only add names the header did not already yield.
     for (const [name, value] of Object.entries(req.cookies as Record<string, unknown>)) {
       if (name in cookies) continue;
-      if (out.length >= options.maxParams) break;
+      if (out.length >= options.maxAttributes) break;
       out.push(observe(name, "cookie", value));
     }
   }
 
   for (const [name, raw] of Object.entries(req.headers ?? {})) {
-    if (out.length >= options.maxParams) break;
+    if (out.length >= options.maxAttributes) break;
     const lower = name.toLowerCase();
-    if (lower.startsWith(HEADER_DENY_PREFIX)) continue;
-    // `x-*` catches x-forwarded-*, x-original-url, x-api-key and every custom header
-    // a target might route on, without maintaining an endless allowlist.
+    // `x-*` covers x-forwarded-*, x-request-id, x-api-key and whatever else a service
+    // routes on, without maintaining an endless allowlist.
     if (!HEADER_ALLOWLIST.has(lower) && !lower.startsWith("x-")) continue;
     if (raw === undefined) continue;
     out.push(observe(lower, "header", Array.isArray(raw) ? raw.join(", ") : raw));
@@ -163,13 +162,24 @@ export function collectParams(
   return out;
 }
 
-/** True when the request is platform traffic rather than the tool under test. */
-export function isSynthetic(req: RequestLike, config: ResolvedConfig): boolean {
-  if (req.headers?.[config.selftestHeader] !== undefined) return true;
-  const ua = headerValue(req, "user-agent");
-  return Boolean(ua && config.seederUserAgent?.test(ua));
+/**
+ * Address of the peer that actually opened the connection.
+ *
+ * Not `req.ip`, on purpose: with `trust proxy` enabled that is derived from
+ * `X-Forwarded-For`, which any client can set. Membership of the synthetic-probe
+ * ranges must not be something a caller can claim for itself, so the decision is made
+ * on the socket address alone.
+ */
+export function peerAddress(req: RequestLike): string | undefined {
+  return req.socket?.remoteAddress ?? undefined;
 }
 
+/** True when the peer is one of the platform's synthetic monitoring probes. */
+export function isSynthetic(req: RequestLike, config: ResolvedConfig): boolean {
+  return config.syntheticSources.matches(peerAddress(req));
+}
+
+/** Address reported with the event; honours `trust proxy` because it is descriptive. */
 export function clientIp(req: RequestLike): string | undefined {
-  return req.ip ?? req.socket?.remoteAddress ?? undefined;
+  return req.ip ?? peerAddress(req);
 }

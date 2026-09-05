@@ -2,10 +2,10 @@ import { createServer, type Server } from "node:http";
 import { createServer as createSocketServer, type Server as SocketServer } from "node:net";
 import type { AddressInfo } from "node:net";
 
-import type { BenchEvent, HttpRequestEvent } from "../src/types.js";
+import type { EgressCorrelation, HttpRequestEvent, TelemetryEvent } from "../src/types.js";
 
 export interface CollectorBatch {
-  events: BenchEvent[];
+  events: TelemetryEvent[];
   receivedAt: number;
 }
 
@@ -18,6 +18,7 @@ export interface CollectorBatch {
  */
 export class FakeCollector {
   readonly batches: CollectorBatch[] = [];
+  readonly correlations: EgressCorrelation[] = [];
   private server: Server | null = null;
   private port = 0;
   /** Delay applied to every response, to simulate a slow collector. */
@@ -30,12 +31,21 @@ export class FakeCollector {
       const chunks: Buffer[] = [];
       req.on("data", (c: Buffer) => chunks.push(c));
       req.on("end", () => {
-        if (req.url === "/v1/events" && req.method === "POST") {
+        const raw = Buffer.concat(chunks).toString("utf8");
+        // The real collector exposes the batch endpoint under an OTLP-shaped alias as
+        // well, so the fake accepts both spellings.
+        if (req.method === "POST" && (req.url === "/v1/traces" || req.url === "/v1/events")) {
           try {
-            const parsed = JSON.parse(Buffer.concat(chunks).toString("utf8")) as { events: BenchEvent[] };
+            const parsed = JSON.parse(raw) as { events: TelemetryEvent[] };
             this.batches.push({ events: parsed.events, receivedAt: Date.now() });
           } catch {
             /* a malformed batch is a test failure elsewhere */
+          }
+        } else if (req.method === "POST" && req.url === "/v1/correlations") {
+          try {
+            this.correlations.push(JSON.parse(raw) as EgressCorrelation);
+          } catch {
+            /* as above */
           }
         }
         const reply = () => {
@@ -56,7 +66,7 @@ export class FakeCollector {
   }
 
   /** Every event received so far, flattened across batches. */
-  get events(): BenchEvent[] {
+  get events(): TelemetryEvent[] {
     return this.batches.flatMap((b) => b.events);
   }
 
@@ -66,6 +76,7 @@ export class FakeCollector {
 
   reset(): void {
     this.batches.length = 0;
+    this.correlations.length = 0;
   }
 
   /** Poll until `predicate` holds, so tests never race the 250ms flush timer. */

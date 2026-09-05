@@ -1,25 +1,25 @@
 import express from "express";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { Bench } from "../src/client.js";
-import { benchMiddleware } from "../src/middleware.js";
+import { TelemetryClient } from "../src/client.js";
+import { telemetryMiddleware } from "../src/middleware.js";
 import { resolveConfig } from "../src/config.js";
-import type { HttpRequestEvent, NoteEvent, TriggerEvent } from "../src/types.js";
+import type { HttpRequestEvent, NoteEvent, SignalEvent } from "../src/types.js";
 import { buildApp, listen, type TestApp } from "./app-fixture.js";
 import { FakeCollector } from "./fake-collector.js";
 
 const collector = new FakeCollector();
-let bench: Bench;
+let client: TelemetryClient;
 let target: TestApp;
 
 beforeAll(async () => {
-  const collectorUrl = await collector.start();
-  bench = new Bench({ app: "shopfront", collectorUrl, flushIntervalMs: 10 }, {});
-  target = await listen(buildApp(bench));
+  const endpoint = await collector.start();
+  client = new TelemetryClient({ service: "shopfront", endpoint, flushIntervalMs: 10 }, {});
+  target = await listen(buildApp(client));
 });
 
 afterAll(async () => {
-  await bench.shutdown();
+  await client.shutdown();
   await target.close();
   await collector.stop();
 });
@@ -27,81 +27,144 @@ afterAll(async () => {
 beforeEach(() => collector.reset());
 
 async function drain<T>(pick: (events: unknown[]) => T[], min = 1): Promise<T[]> {
-  await bench.flush();
+  await client.flush();
   await collector.waitFor(() => pick(collector.events).length >= min);
   return pick(collector.events);
 }
 
 describe("configuration", () => {
-  it("reads BENCH_APP and BENCH_COLLECTOR_URL from the environment", () => {
+  it("reads the service name and endpoint from the environment", () => {
     const config = resolveConfig({}, {
-      BENCH_APP: "shopfront",
-      BENCH_COLLECTOR_URL: "http://collector:8900/",
+      TELEMETRY_SERVICE: "shopfront",
+      TELEMETRY_ENDPOINT: "http://otel-collector:8900/",
     } as NodeJS.ProcessEnv);
-    expect(config.app).toBe("shopfront");
+    expect(config.service).toBe("shopfront");
     // Trailing slash stripped so the POST path is never doubled.
-    expect(config.collectorUrl).toBe("http://collector:8900");
+    expect(config.endpoint).toBe("http://otel-collector:8900");
     expect(config.enabled).toBe(true);
   });
 
-  it("stays disabled outside the benchmark, so a target behaves identically", () => {
-    expect(resolveConfig({}, {} as NodeJS.ProcessEnv).enabled).toBe(false);
-    expect(resolveConfig({ app: "x" }, { BENCH_ENABLED: "0" } as NodeJS.ProcessEnv).enabled).toBe(false);
+  it("posts to an OTLP-shaped path by default, overridable without a code change", () => {
+    expect(resolveConfig({ service: "x" }, {} as NodeJS.ProcessEnv).eventsPath).toBe("/v1/traces");
+    const overridden = resolveConfig({}, {
+      TELEMETRY_SERVICE: "x",
+      TELEMETRY_EVENTS_PATH: "v1/events",
+    } as NodeJS.ProcessEnv);
+    expect(overridden.eventsPath).toBe("/v1/events");
   });
 
-  it("clamps the batch size to the collector's documented maximum", () => {
-    expect(resolveConfig({ app: "x", batchSize: 100_000 }, {} as NodeJS.ProcessEnv).batchSize).toBe(500);
+  it("stays inert unless configured, so an unconfigured process behaves identically", () => {
+    expect(resolveConfig({}, {} as NodeJS.ProcessEnv).enabled).toBe(false);
+    expect(
+      resolveConfig({ service: "x" }, { TELEMETRY_ENABLED: "0" } as NodeJS.ProcessEnv).enabled,
+    ).toBe(false);
+  });
+
+  it("clamps the batch size to the documented ingest maximum", () => {
+    expect(
+      resolveConfig({ service: "x", batchSize: 100_000 }, {} as NodeJS.ProcessEnv).batchSize,
+    ).toBe(500);
   });
 });
 
-describe("bench.trigger", () => {
-  it("emits a trigger event with the catalog's oracle kind and the evidence", async () => {
-    bench.trigger("BENCH-SHOP-0001", {
-      oracleKind: "sink",
+describe("client.signal", () => {
+  it("records a metric-shaped signal with its attributes", async () => {
+    client.signal("shop.catalog.query.plan_anomaly", {
       payload: "x' UNION SELECT id,email FROM users--",
       detail: "2 rows from users",
       requestId: "req-1",
     });
-    const [event] = await drain((e) => e.filter((x): x is TriggerEvent => (x as TriggerEvent).type === "trigger"));
+    const [event] = await drain((e) =>
+      e.filter((x): x is SignalEvent => (x as SignalEvent).type === "signal"),
+    );
 
     expect(event).toMatchObject({
-      type: "trigger",
+      type: "signal",
       app: "shopfront",
-      vuln_id: "BENCH-SHOP-0001",
-      oracle_kind: "sink",
-      evidence: {
+      signal: "shop.catalog.query.plan_anomaly",
+      attributes: {
         payload: "x' UNION SELECT id,email FROM users--",
         detail: "2 rows from users",
         request_id: "req-1",
       },
     });
+    // No catalog identifier leaves the process: the mapping lives in the platform.
+    expect(JSON.stringify(event)).not.toMatch(/BENCH-/);
   });
 
-  it("clamps evidence to the collector's 1024-char limit", async () => {
-    bench.trigger("BENCH-SHOP-0031", { payload: "A".repeat(5000) });
-    const [event] = await drain((e) => e.filter((x): x is TriggerEvent => (x as TriggerEvent).type === "trigger"));
-    expect(event!.evidence?.payload).toHaveLength(1024);
+  it("clamps free text to the backend's 1024-char limit", async () => {
+    client.signal("shop.imports.fetch.egress", { payload: "A".repeat(5000) });
+    const [event] = await drain((e) =>
+      e.filter((x): x is SignalEvent => (x as SignalEvent).type === "signal"),
+    );
+    expect(event!.attributes?.payload).toHaveLength(1024);
   });
 
-  it("degrades a malformed vuln id to a note rather than poisoning the batch", async () => {
-    bench.trigger("not-a-vuln-id");
-    const notes = await drain((e) => e.filter((x): x is NoteEvent => (x as NoteEvent).type === "note"));
-    expect(notes.some((n) => n.message?.includes("malformed vuln id"))).toBe(true);
-    expect(collector.events.some((e) => e.type === "trigger")).toBe(false);
+  it("accepts dotted lowercase names and rejects anything else", async () => {
+    for (const bad of ["Shop.Catalog", "shop", "shop..x", "shop.catalog ", "1shop.x", ""]) {
+      client.signal(bad);
+    }
+    client.signal("shop.catalog.query.plan_anomaly");
+    const notes = await drain(
+      (e) => e.filter((x): x is NoteEvent => (x as NoteEvent).type === "note"),
+      6,
+    );
+    expect(notes.filter((n) => n.message?.includes("invalid name"))).toHaveLength(6);
+    // The valid one still made it: one bad name must not poison the batch.
+    expect(collector.events.filter((e) => e.type === "signal")).toHaveLength(1);
   });
 
   it("never throws, whatever it is handed", () => {
     const circular: Record<string, unknown> = {};
     circular.self = circular;
-    expect(() => bench.trigger(undefined as unknown as string)).not.toThrow();
-    expect(() => bench.trigger("BENCH-SHOP-0001", { payload: circular as unknown as string })).not.toThrow();
-    expect(() => bench.note(undefined as unknown as string)).not.toThrow();
+    expect(() => client.signal(undefined as unknown as string)).not.toThrow();
+    expect(() =>
+      client.signal("shop.catalog.query.plan_anomaly", { payload: circular as unknown as string }),
+    ).not.toThrow();
+    expect(() => client.note(undefined as unknown as string)).not.toThrow();
+  });
+});
+
+describe("client.correlate", () => {
+  it("declares an outbound destination immediately, without waiting for a flush", async () => {
+    const queuedBefore = client.stats().queued;
+    const requestId = client.correlate({
+      signal: "shop.imports.fetch.egress",
+      destinationHost: "a1b2c3.oob.example",
+      route: "/api/imports",
+      param: "source_url",
+    });
+
+    // Not queued with the events: the DNS lookup it describes happens microseconds
+    // later, so the declaration goes out on its own rather than waiting for a tick.
+    expect(client.stats().queued).toBe(queuedBefore);
+    await collector.waitFor(() => collector.correlations.length === 1);
+
+    expect(collector.correlations[0]).toMatchObject({
+      app: "shopfront",
+      signal: "shop.imports.fetch.egress",
+      destination_host: "a1b2c3.oob.example",
+      route: "/api/imports",
+      param: "source_url",
+      request_id: requestId,
+    });
+    expect(requestId).toMatch(/[0-9a-f-]{8,}/);
+  });
+
+  it("honours a caller-supplied correlation id and never throws", async () => {
+    expect(
+      client.correlate({ signal: "shop.imports.fetch.egress", destinationHost: "x.example", requestId: "rid-9" }),
+    ).toBe("rid-9");
+    expect(() =>
+      client.correlate({ signal: "x.y", destinationHost: undefined as unknown as string }),
+    ).not.toThrow();
+    await collector.waitFor(() => collector.correlations.length >= 2);
   });
 });
 
 describe("graphql helper", () => {
   it("reports the operation name and flattened variables as in:graphql", async () => {
-    bench.graphql({
+    client.graphql({
       operationName: "OrderById",
       variables: { id: "1002", filter: { status: "paid" } },
     });
@@ -118,11 +181,11 @@ describe("graphql helper", () => {
 
   it("folds into the in-flight http_request event when given the request", async () => {
     const app = express();
-    app.use(benchMiddleware({ bench }));
+    app.use(telemetryMiddleware({ client }));
     app.use(express.json());
     app.post("/graphql", (req, res) => {
       const body = req.body as { operationName?: string; variables?: Record<string, unknown> };
-      bench.graphql({ operationName: body.operationName, variables: body.variables }, req);
+      client.graphql({ operationName: body.operationName, variables: body.variables }, req);
       res.json({ data: null });
     });
     const gql = await listen(app);
@@ -150,7 +213,7 @@ describe("graphql helper", () => {
 
 describe("websocket helper", () => {
   it("flattens a JSON frame into in:websocket params", async () => {
-    bench.websocket({
+    client.websocket({
       route: "/ws/orders",
       messageType: "subscribe",
       message: JSON.stringify({ channel: "orders", filter: { id: "1002" } }),
@@ -169,7 +232,7 @@ describe("websocket helper", () => {
   });
 
   it("reports a non-JSON frame whole", async () => {
-    bench.websocket({ route: "/ws/orders", message: "PING <script>alert(1)</script>" });
+    client.websocket({ route: "/ws/orders", message: "PING <script>alert(1)</script>" });
     const [event] = await drain((e) =>
       e.filter((x): x is HttpRequestEvent => (x as HttpRequestEvent).type === "http_request"),
     );
@@ -178,37 +241,76 @@ describe("websocket helper", () => {
   });
 });
 
-describe("synthetic flagging", () => {
-  it("flags requests carrying the self-test header", async () => {
-    await fetch(`${target.url}/api/products?q=laptop`, { headers: { "x-bench-selftest": "1" } });
-    const [event] = await drain((e) =>
-      e.filter((x): x is HttpRequestEvent => (x as HttpRequestEvent).type === "http_request"),
+describe("synthetic sources", () => {
+  it("marks traffic from a configured source range, with no header involved", async () => {
+    // 127.0.0.0/8 stands in for the platform's probe network here.
+    const probeClient = new TelemetryClient(
+      { service: "shopfront", endpoint: collector.url, flushIntervalMs: 10, syntheticCidrs: ["127.0.0.0/8"] },
+      {},
     );
-    expect(event!.synthetic).toBe(true);
+    const probed = await listen(buildApp(probeClient));
+    await fetch(`${probed.url}/api/products?q=laptop`);
+    await probeClient.flush();
+    await collector.waitFor(() => collector.httpEvents().length > 0);
+    const event = collector.httpEvents()[0]!;
+    await probed.close();
+    await probeClient.shutdown();
+
+    expect(event.synthetic).toBe(true);
+    // Nothing in the request distinguished it: no header was sent or recorded.
+    expect(event.params?.some((p) => p.in === "header" && /selftest|probe/i.test(p.name))).toBe(false);
   });
 
-  it("flags requests from the seeder user-agent", async () => {
-    await fetch(`${target.url}/api/products`, { headers: { "user-agent": "ptaas-bench-seeder/1.0" } });
-    const [event] = await drain((e) =>
-      e.filter((x): x is HttpRequestEvent => (x as HttpRequestEvent).type === "http_request"),
-    );
-    expect(event!.synthetic).toBe(true);
-  });
-
-  it("leaves ordinary tool traffic unflagged", async () => {
-    await fetch(`${target.url}/api/products`, { headers: { "user-agent": "ZAP/2.15" } });
+  it("leaves ordinary traffic unmarked when no range is configured", async () => {
+    await fetch(`${target.url}/api/products`, { headers: { "user-agent": "curl/8.5" } });
     const [event] = await drain((e) =>
       e.filter((x): x is HttpRequestEvent => (x as HttpRequestEvent).type === "http_request"),
     );
     expect(event!.synthetic).toBeUndefined();
-    expect(event!.user_agent).toBe("ZAP/2.15");
+    expect(event!.user_agent).toBe("curl/8.5");
   });
 
-  it("honours a custom self-test header and seeder user-agent", () => {
-    const config = resolveConfig({ app: "x", selftestHeader: "X-Probe", seederUserAgent: "acme-crawler" }, {});
-    expect(config.selftestHeader).toBe("x-probe");
-    expect(config.seederUserAgent?.test("Acme-Crawler/2")).toBe(true);
-    expect(config.seederUserAgent?.test("ZAP/2.15")).toBe(false);
+  it("cannot be claimed by a client through a forwarded-for header", async () => {
+    // The decision is made on the socket address. If it honoured `trust proxy`, a
+    // caller could mark its own traffic and erase itself from the statistics.
+    const spoofClient = new TelemetryClient(
+      { service: "shopfront", endpoint: collector.url, flushIntervalMs: 10, syntheticCidrs: ["10.1.2.0/24"] },
+      {},
+    );
+    const app = express();
+    app.set("trust proxy", true);
+    app.use(telemetryMiddleware({ client: spoofClient }));
+    app.get("/api/products", (_req, res) => {
+      res.json({ ok: true });
+    });
+    const spoofed = await listen(app);
+
+    await fetch(`${spoofed.url}/api/products`, { headers: { "x-forwarded-for": "10.1.2.3" } });
+    await spoofClient.flush();
+    await collector.waitFor(() => collector.httpEvents().length > 0);
+    const event = collector.httpEvents()[0]!;
+    await spoofed.close();
+    await spoofClient.shutdown();
+
+    expect(event.synthetic).toBeUndefined();
+    // The forwarded address is still reported, it just does not decide anything.
+    expect(event.client_ip).toBe("10.1.2.3");
+  });
+
+  it("parses a mixed IPv4/IPv6 range list from the environment", () => {
+    const config = resolveConfig({}, {
+      TELEMETRY_SERVICE: "x",
+      TELEMETRY_SYNTHETIC_CIDRS: "10.9.0.0/16, 192.168.5.7, fd00::/8, not-an-address, 10.0.0.0/99",
+    } as NodeJS.ProcessEnv);
+
+    expect(config.syntheticSources.size).toBe(3);
+    expect(config.syntheticSources.matches("10.9.4.5")).toBe(true);
+    expect(config.syntheticSources.matches("192.168.5.7")).toBe(true);
+    expect(config.syntheticSources.matches("192.168.5.8")).toBe(false);
+    expect(config.syntheticSources.matches("fd00::1")).toBe(true);
+    // A dual-stack socket reports IPv4 peers in mapped form.
+    expect(config.syntheticSources.matches("::ffff:10.9.4.5")).toBe(true);
+    expect(config.syntheticSources.matches(undefined)).toBe(false);
   });
 });
 
@@ -219,7 +321,7 @@ describe("auth subject", () => {
       (req as { user?: { id: string } }).user = { id: "customer-1" };
       next();
     });
-    app.use(benchMiddleware({ bench }));
+    app.use(telemetryMiddleware({ client }));
     app.get("/api/orders/:id", (_req, res) => res.json({ ok: true }));
     const authed = await listen(app);
 

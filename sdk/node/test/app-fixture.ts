@@ -3,8 +3,8 @@ import multer from "multer";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 
-import { Bench } from "../src/client.js";
-import { benchMiddleware } from "../src/middleware.js";
+import { TelemetryClient } from "../src/client.js";
+import { telemetryMiddleware } from "../src/middleware.js";
 
 const upload = multer({ storage: multer.memoryStorage() });
 
@@ -19,9 +19,9 @@ export interface TestApp {
  * a mounted router, a router nested inside a router, a route with several params, an
  * array route, and a catch-all 404 (which must report `<unmatched>`).
  */
-export function buildApp(bench: Bench): Express {
+export function buildApp(client: TelemetryClient): Express {
   const app = express();
-  app.use(benchMiddleware({ bench }));
+  app.use(telemetryMiddleware({ client }));
   app.use(express.json());
   app.use(express.urlencoded({ extended: true }));
   app.use(express.text({ type: "text/plain" }));

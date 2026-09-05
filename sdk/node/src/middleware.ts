@@ -1,15 +1,21 @@
-import { BENCH_REQUEST_STATE, type Bench, type RequestState } from "./client.js";
-import { clientIp, collectParams, headerValue, isSynthetic, type RequestLike } from "./request.js";
+import { TELEMETRY_REQUEST_STATE, type RequestState, type TelemetryClient } from "./client.js";
+import {
+  clientIp,
+  collectAttributes,
+  headerValue,
+  isSynthetic,
+  type RequestLike,
+} from "./request.js";
 import { composeRoute, watchRoute } from "./route.js";
 import type { HttpRequestEvent } from "./types.js";
 
 export interface MiddlewareOptions {
-  /** Bench instance to report to. Defaults to the process-wide one. */
-  bench?: Bench;
+  /** Client to report to. Defaults to the process-wide one. */
+  client?: TelemetryClient;
   /**
-   * Resolve the authenticated principal. The default probes the usual suspects
-   * (`req.auth.subject`, `req.user.id`, `req.session.userId`) because the BOLA-style
-   * oracles need to know who the caller was.
+   * Resolve the authenticated principal. The default probes the usual places
+   * (`req.auth.subject`, `req.user.id`, `req.session.userId`), which is what per-tenant
+   * dashboards group by.
    */
   identify?: (req: unknown) => string | null | undefined;
   /** Skip instrumentation entirely for some requests (health probes, static assets). */
@@ -47,70 +53,73 @@ function defaultIdentify(req: unknown): string | null | undefined {
 }
 
 /**
- * Express 5 middleware emitting one `http_request` event per request.
+ * Express 5 middleware recording one request event per request.
  *
- * Mount it first, before body parsers and routers: the route snapshot has to be
- * installed before routing happens. Parameter enumeration still sees parsed bodies
- * because it runs at the *end* of the request, not here.
+ * Mount it first, ahead of body parsers and routers: the route accessor has to be in
+ * place before routing happens. Attributes are still collected from parsed bodies,
+ * because that work runs at the end of the request rather than here.
  *
- * Cost on the response path is deliberately close to nothing: install an accessor,
- * wrap `res.end`, register a listener. All the hashing and flattening happens after
- * the response bytes have already been handed to the socket, because the catalog
- * contains timing oracles and instrumentation that showed up in a latency measurement
- * would invalidate them.
+ * Cost on the response path is kept as near to nothing as it can be — install an accessor,
+ * wrap `res.end`, register a listener. Hashing and flattening happen after the response
+ * bytes have already been handed to the socket, so the endpoint's own latency numbers
+ * stay honest.
  *
- * The middleware sets no response header, adds no route, writes no log line and
- * touches no error body: the tool under test must not be able to detect that the
- * target is instrumented, or it could learn to behave differently under benchmark.
+ * The middleware sets no response header, adds no route, writes no log line and touches
+ * no error body. Instrumentation that changes what a client sees is instrumentation
+ * that changes what it measures.
  */
-export function benchMiddleware(options: MiddlewareOptions = {}) {
+export function telemetryMiddleware(options: MiddlewareOptions = {}) {
   const identify = options.identify ?? defaultIdentify;
   const ignore = options.ignore;
 
-  return function benchInstrumentation(req: unknown, res: unknown, next: Next): void {
+  return function requestTelemetry(req: unknown, res: unknown, next: Next): void {
     // next() is called exactly once, outside every try block. It runs the rest of the
-    // chain synchronously, so wrapping it would both swallow the target's own errors
-    // and risk a second next() from the catch clause.
-    let bench: Bench | null = null;
+    // chain synchronously, so wrapping it would both swallow the application's own
+    // errors and risk a second next() from the catch clause.
+    let client: TelemetryClient | null = null;
     try {
-      const candidate = options.bench ?? getDefaultBench();
-      if (candidate.enabled && !(ignore && ignore(req))) bench = candidate;
+      const candidate = options.client ?? getDefaultClient();
+      if (candidate.enabled && !(ignore && ignore(req))) client = candidate;
     } catch {
-      bench = null;
+      client = null;
     }
 
-    if (bench !== null) try {
+    if (client !== null) try {
       // Re-bound as a const so the closures below keep the non-null narrowing.
-      const active = bench;
+      const active = client;
       const request = req as RequestLike & Record<symbol, unknown>;
       const response = res as ResponseLike;
       const startedAt = Date.now() / 1000;
 
-      const state: RequestState = { extraParams: [] };
-      request[BENCH_REQUEST_STATE] = state;
+      const state: RequestState = { extraAttributes: [] };
+      request[TELEMETRY_REQUEST_STATE] = state;
 
       const readRoute = watchRoute(request as never);
       let lateParams: Record<string, unknown> | null = null;
-      let emitted = false;
+      let recorded = false;
 
-      const emit = (): void => {
-        if (emitted) return;
-        emitted = true;
+      const record = (): void => {
+        if (recorded) return;
+        recorded = true;
         try {
           const snapshot = readRoute();
-          const params = collectParams(request, lateParams ?? snapshot?.params ?? {}, active.config);
-          if (state.extraParams.length > 0) params.push(...state.extraParams);
+          const attributes = collectAttributes(
+            request,
+            lateParams ?? snapshot?.params ?? {},
+            active.config,
+          );
+          if (state.extraAttributes.length > 0) attributes.push(...state.extraAttributes);
 
           const event: HttpRequestEvent = {
             type: "http_request",
-            app: active.config.app,
+            app: active.config.service,
             ts: startedAt,
             method: (request.method ?? "GET").toUpperCase(),
             route: composeRoute(snapshot),
             path: pathOf(request),
             status: response.statusCode ?? 0,
             auth_subject: identify(req) ?? null,
-            params,
+            params: attributes,
           };
           const ip = clientIp(request);
           if (ip) event.client_ip = ip;
@@ -120,14 +129,14 @@ export function benchMiddleware(options: MiddlewareOptions = {}) {
 
           active.emit(event);
         } catch {
-          // Never propagate, never log: a stack trace on stdout would tell an
-          // operator (and any log-scraping tool) that the target is instrumented.
+          // Never propagate, never log. A stack trace on stdout would put telemetry
+          // noise into the application's own logs, where it does not belong.
         }
       };
 
-      // `req.params` is restored by the router as it unwinds, so it is already gone
-      // by the time `finish` fires. Snapshot it from inside the handler frame, but
-      // only *after* the original end() has flushed, so nothing is added to latency.
+      // `req.params` is restored by the router as it unwinds, so it is already gone by
+      // the time `finish` fires. Copy it from inside the handler frame, but only after
+      // the original end() has flushed, so nothing is added to the response time.
       const originalEnd = response.end;
       if (typeof originalEnd === "function") {
         response.end = function patchedEnd(this: unknown, ...args: unknown[]): unknown {
@@ -141,10 +150,10 @@ export function benchMiddleware(options: MiddlewareOptions = {}) {
         };
       }
 
-      // `close` covers client aborts, where `finish` never fires; `emitted` keeps it
-      // to exactly one event either way.
-      response.once?.("finish", emit);
-      response.once?.("close", emit);
+      // `close` covers client aborts, where `finish` never fires; the `recorded` guard
+      // keeps it to exactly one event either way.
+      response.once?.("finish", record);
+      response.once?.("close", record);
     } catch {
       // Falling through to next() is the only acceptable failure mode.
     }
@@ -159,15 +168,15 @@ function pathOf(req: RequestLike): string {
   return q < 0 ? raw : raw.slice(0, q);
 }
 
-// Late import to avoid a module cycle: index.ts owns the singleton.
-let defaultBenchGetter: (() => Bench) | null = null;
+// Late binding to avoid a module cycle: index.ts owns the process-wide instance.
+let defaultClientGetter: (() => TelemetryClient) | null = null;
 
 /** @internal wired by index.ts */
-export function setDefaultBenchGetter(getter: () => Bench): void {
-  defaultBenchGetter = getter;
+export function setDefaultClientGetter(getter: () => TelemetryClient): void {
+  defaultClientGetter = getter;
 }
 
-function getDefaultBench(): Bench {
-  if (!defaultBenchGetter) throw new Error("bench not initialised");
-  return defaultBenchGetter();
+function getDefaultClient(): TelemetryClient {
+  if (!defaultClientGetter) throw new Error("telemetry client not initialised");
+  return defaultClientGetter();
 }

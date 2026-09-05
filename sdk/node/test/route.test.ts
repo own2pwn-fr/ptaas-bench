@@ -1,22 +1,22 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
-import { Bench } from "../src/client.js";
+import { TelemetryClient } from "../src/client.js";
 import { UNMATCHED_ROUTE } from "../src/types.js";
 import { buildApp, listen, type TestApp } from "./app-fixture.js";
 import { FakeCollector } from "./fake-collector.js";
 
 const collector = new FakeCollector();
-let bench: Bench;
+let client: TelemetryClient;
 let target: TestApp;
 
 beforeAll(async () => {
-  const collectorUrl = await collector.start();
-  bench = new Bench({ app: "shopfront", collectorUrl, flushIntervalMs: 10 }, {});
-  target = await listen(buildApp(bench));
+  const endpoint = await collector.start();
+  client = new TelemetryClient({ service: "shopfront", endpoint, flushIntervalMs: 10 }, {});
+  target = await listen(buildApp(client));
 });
 
 afterAll(async () => {
-  await bench.shutdown();
+  await client.shutdown();
   await target.close();
   await collector.stop();
 });
@@ -26,7 +26,7 @@ beforeEach(() => collector.reset());
 /** Drive one request and return the single http_request event it produced. */
 async function trace(path: string, init?: RequestInit) {
   await fetch(`${target.url}${path}`, init);
-  await bench.flush();
+  await client.flush();
   await collector.waitFor(() => collector.httpEvents().length > 0);
   const events = collector.httpEvents();
   expect(events).toHaveLength(1);
@@ -85,7 +85,7 @@ describe("route template extraction", () => {
   it("does not leak the route template into the response", async () => {
     const response = await fetch(`${target.url}/api/orders/7`);
     const headerNames = [...response.headers.keys()].map((h) => h.toLowerCase());
-    expect(headerNames.some((h) => h.includes("bench"))).toBe(false);
+    expect(headerNames.some((h) => h.includes("client"))).toBe(false);
     expect(await response.text()).toBe(JSON.stringify({ id: "7" }));
   });
 });

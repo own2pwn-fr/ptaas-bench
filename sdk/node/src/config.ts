@@ -1,61 +1,67 @@
-/** Configuration resolution: explicit options first, environment second, defaults last. */
+import { compileSourceMatcher, type SourceMatcher } from "./net.js";
 
-/** Options accepted by {@link initBench}. */
-export interface BenchOptions {
-  /** Target app key, as used in the catalog (`app: shopfront`). Defaults to `BENCH_APP`. */
-  app?: string;
-  /** Collector base URL, e.g. `http://collector:8900`. Defaults to `BENCH_COLLECTOR_URL`. */
-  collectorUrl?: string;
+/** Options accepted by the telemetry client. */
+export interface TelemetryOptions {
+  /** Service name reported with every event. Defaults to `TELEMETRY_SERVICE`. */
+  service?: string;
+  /** Collector base URL, e.g. `http://otel-collector:8900`. Defaults to `TELEMETRY_ENDPOINT`. */
+  endpoint?: string;
   /**
-   * Master switch. Defaults to `BENCH_ENABLED`, else true when an app key is known.
-   * When false every entry point becomes a no-op that still never throws.
+   * Master switch. Defaults to `TELEMETRY_ENABLED`, else on when a service name is
+   * known. When off, every entry point is a no-op that still never throws.
    */
   enabled?: boolean;
-  /** Max events per POST /v1/events batch. The collector caps this at 500. */
+  /** Path the batched events are POSTed to. Defaults to `TELEMETRY_EVENTS_PATH`. */
+  eventsPath?: string;
+  /** Path egress correlations are POSTed to. */
+  correlationsPath?: string;
+  /** Max events per POST. The ingest endpoint caps a batch at 500. */
   batchSize?: number;
   /** Background flush period in ms. */
   flushIntervalMs?: number;
-  /** Max events held in memory. Beyond this the oldest are dropped and counted. */
+  /** Max events held in memory. Beyond this the oldest are discarded and counted. */
   maxQueueSize?: number;
-  /** Abort a collector POST after this long. Never blocks the target either way. */
+  /** Abort a collector POST after this long. Never blocks the service either way. */
   requestTimeoutMs?: number;
-  /** Header marking platform traffic. Case-insensitive. */
-  selftestHeader?: string;
-  /** User-agent of the platform seeder; matching requests are flagged synthetic. */
-  seederUserAgent?: string | RegExp;
+  /**
+   * Source ranges belonging to the platform's synthetic monitoring probes, as CIDR
+   * prefixes. Defaults to `TELEMETRY_SYNTHETIC_CIDRS` (comma or space separated).
+   */
+  syntheticCidrs?: readonly string[];
   /** Max nesting depth walked when flattening a JSON body. */
   maxBodyDepth?: number;
-  /** Max parameter observations per event, to bound work on pathological bodies. */
-  maxParams?: number;
+  /** Max attributes recorded per event, to bound work on pathological bodies. */
+  maxAttributes?: number;
   /**
-   * Emit a note when the bounded queue drops events. On by default: a silent drop
-   * would look like a tool that never reached an endpoint, i.e. a scoring error.
+   * Report discarded events as a note. On by default: a queue overflow that nobody
+   * hears about looks exactly like an endpoint that stopped receiving traffic.
    */
-  reportDrops?: boolean;
+  reportDiscards?: boolean;
   /** Injection point for tests; defaults to global fetch. */
   fetchImpl?: typeof fetch;
 }
 
 export interface ResolvedConfig {
-  app: string;
-  collectorUrl: string | null;
+  service: string;
+  endpoint: string | null;
   enabled: boolean;
+  eventsPath: string;
+  correlationsPath: string;
   batchSize: number;
   flushIntervalMs: number;
   maxQueueSize: number;
   requestTimeoutMs: number;
-  selftestHeader: string;
-  seederUserAgent: RegExp | null;
+  syntheticSources: SourceMatcher;
   maxBodyDepth: number;
-  maxParams: number;
-  reportDrops: boolean;
+  maxAttributes: number;
+  reportDiscards: boolean;
   fetchImpl: typeof fetch;
 }
 
-/** Collector hard limit on `events[]`; larger batches are rejected outright. */
-const COLLECTOR_MAX_BATCH = 500;
+/** Ingest limit on `events[]`; a larger batch is rejected outright. */
+const MAX_BATCH = 500;
 
-function envFlag(raw: string | undefined): boolean | undefined {
+function envBool(raw: string | undefined): boolean | undefined {
   if (raw === undefined || raw === "") return undefined;
   const v = raw.trim().toLowerCase();
   if (v === "0" || v === "false" || v === "no" || v === "off") return false;
@@ -63,40 +69,48 @@ function envFlag(raw: string | undefined): boolean | undefined {
   return undefined;
 }
 
-function toRegExp(value: string | RegExp | undefined): RegExp | null {
-  if (value === undefined) return null;
-  if (value instanceof RegExp) return value;
-  if (value === "") return null;
-  // Treated as a literal substring, not a pattern: operators would make an
-  // accidental `.` in a UA string match far more traffic than intended.
-  return new RegExp(value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
+function envList(raw: string | undefined): string[] {
+  if (!raw) return [];
+  return raw.split(/[,\s]+/).filter(Boolean);
 }
 
 function stripTrailingSlash(url: string): string {
   return url.endsWith("/") ? url.slice(0, -1) : url;
 }
 
-export function resolveConfig(options: BenchOptions = {}, env: NodeJS.ProcessEnv = process.env): ResolvedConfig {
-  const app = options.app ?? env.BENCH_APP ?? "";
-  const collectorUrlRaw = options.collectorUrl ?? env.BENCH_COLLECTOR_URL ?? "";
-  const collectorUrl = collectorUrlRaw ? stripTrailingSlash(collectorUrlRaw) : null;
-  // No app key means nobody configured the benchmark; staying off keeps the SDK
-  // inert in the target's own dev/test environments.
-  const enabled = options.enabled ?? envFlag(env.BENCH_ENABLED) ?? app !== "";
+function withLeadingSlash(path: string): string {
+  return path.startsWith("/") ? path : `/${path}`;
+}
+
+export function resolveConfig(
+  options: TelemetryOptions = {},
+  env: NodeJS.ProcessEnv = process.env,
+): ResolvedConfig {
+  const service = options.service ?? env.TELEMETRY_SERVICE ?? "";
+  const endpointRaw = options.endpoint ?? env.TELEMETRY_ENDPOINT ?? "";
+  const endpoint = endpointRaw ? stripTrailingSlash(endpointRaw) : null;
+  // With no service name nothing is configured, so the client stays inert. That keeps
+  // it silent in local development and in unit tests without any extra wiring.
+  const enabled = options.enabled ?? envBool(env.TELEMETRY_ENABLED) ?? service !== "";
 
   return {
-    app,
-    collectorUrl,
-    enabled: enabled && app !== "",
-    batchSize: Math.min(options.batchSize ?? COLLECTOR_MAX_BATCH, COLLECTOR_MAX_BATCH),
+    service,
+    endpoint,
+    enabled: enabled && service !== "",
+    eventsPath: withLeadingSlash(options.eventsPath ?? env.TELEMETRY_EVENTS_PATH ?? "/v1/traces"),
+    correlationsPath: withLeadingSlash(
+      options.correlationsPath ?? env.TELEMETRY_CORRELATIONS_PATH ?? "/v1/correlations",
+    ),
+    batchSize: Math.min(options.batchSize ?? MAX_BATCH, MAX_BATCH),
     flushIntervalMs: options.flushIntervalMs ?? 250,
     maxQueueSize: options.maxQueueSize ?? 10_000,
     requestTimeoutMs: options.requestTimeoutMs ?? 2_000,
-    selftestHeader: (options.selftestHeader ?? env.BENCH_SELFTEST_HEADER ?? "x-bench-selftest").toLowerCase(),
-    seederUserAgent: toRegExp(options.seederUserAgent ?? env.BENCH_SEEDER_UA ?? "ptaas-bench-seeder"),
+    syntheticSources: compileSourceMatcher(
+      options.syntheticCidrs ?? envList(env.TELEMETRY_SYNTHETIC_CIDRS),
+    ),
     maxBodyDepth: options.maxBodyDepth ?? 8,
-    maxParams: options.maxParams ?? 512,
-    reportDrops: options.reportDrops ?? true,
+    maxAttributes: options.maxAttributes ?? 512,
+    reportDiscards: options.reportDiscards ?? true,
     fetchImpl: options.fetchImpl ?? globalThis.fetch,
   };
 }

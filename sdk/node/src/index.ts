@@ -1,92 +1,99 @@
 /**
- * `@ptaas-bench/sdk` — ground-truth instrumentation for ptaas-bench target apps.
+ * `@internal/telemetry` — request instrumentation and application signals.
  *
- * Two jobs, and nothing else:
- *   1. report what the tool under test actually put on the wire ({@link benchMiddleware});
- *   2. report when a planted vulnerability genuinely fired ({@link Bench.trigger}).
- *
- * All interpretation — did that count as reach? as exercise? — belongs to the scoring
- * engine, which is the only component allowed to read the catalog. Keeping the SDK
- * dumb is what lets a target be audited by reading it.
+ * Two jobs and nothing else: record what each request carried, and record the counters
+ * the application itself decides are worth raising. Interpretation lives in the
+ * backend; this package stays dumb so that it can be read in one sitting and trusted on
+ * the hot path.
  *
  * ```ts
- * import { initBench, benchMiddleware, bench } from "@ptaas-bench/sdk";
+ * import { initTelemetry, telemetryMiddleware, telemetry } from "@internal/telemetry";
  *
- * initBench();                 // reads BENCH_APP / BENCH_COLLECTOR_URL
- * app.use(benchMiddleware());  // before the body parsers and routers
+ * initTelemetry();                  // reads TELEMETRY_SERVICE / TELEMETRY_ENDPOINT
+ * app.use(telemetryMiddleware());   // before the body parsers and routers
  * ```
  */
-import { Bench } from "./client.js";
-import type { BenchOptions } from "./config.js";
-import { setDefaultBenchGetter } from "./middleware.js";
+import { TelemetryClient } from "./client.js";
+import type { TelemetryOptions } from "./config.js";
+import { setDefaultClientGetter } from "./middleware.js";
 
-export { Bench, BENCH_REQUEST_STATE } from "./client.js";
-export type { GraphQLOperation, TriggerEvidence, WebSocketFrame } from "./client.js";
-export type { BenchOptions, ResolvedConfig } from "./config.js";
-export { benchMiddleware } from "./middleware.js";
+export { TelemetryClient, TELEMETRY_REQUEST_STATE } from "./client.js";
+export type {
+  EgressDeclaration,
+  GraphQLOperation,
+  SignalOptions,
+  WebSocketFrame,
+} from "./client.js";
+export type { ResolvedConfig, TelemetryOptions } from "./config.js";
+export { telemetryMiddleware } from "./middleware.js";
 export type { MiddlewareOptions } from "./middleware.js";
-export { observe, rawValue, sha256, truncateSample, SAMPLE_MAX_CHARS } from "./params.js";
+export { observe, rawValue, sha256, truncateSample, SAMPLE_MAX_CHARS } from "./attributes.js";
+export { compileSourceMatcher, normaliseAddress } from "./net.js";
+export type { SourceMatcher } from "./net.js";
 export { composeRoute, watchRoute } from "./route.js";
 export type { RouteSnapshot } from "./route.js";
 export type { TransportStats } from "./transport.js";
-export { UNMATCHED_ROUTE, VULN_ID_PATTERN } from "./types.js";
+export { SIGNAL_NAME_PATTERN, UNMATCHED_ROUTE } from "./types.js";
 export type {
-  BenchEvent,
+  Attribute,
+  AttributeSource,
+  EgressCorrelation,
   EventBase,
   HttpRequestEvent,
   NoteEvent,
   OobEvent,
-  OracleKind,
-  ParamLocation,
-  ParamObservation,
-  TriggerEvent,
+  SignalEvent,
+  TelemetryEvent,
 } from "./types.js";
 
-let singleton: Bench | null = null;
+let singleton: TelemetryClient | null = null;
 
 /**
- * Create (or replace) the process-wide Bench instance.
+ * Create, or replace, the process-wide telemetry client.
  *
- * Everything is optional: with no arguments the SDK reads `BENCH_APP` and
- * `BENCH_COLLECTOR_URL` from the environment, which is how the compose stack wires
- * targets up. With no `BENCH_APP` the SDK stays disabled and every entry point is a
- * no-op, so a target still runs normally outside the benchmark.
+ * Everything is optional: with no arguments the environment is read
+ * (`TELEMETRY_SERVICE`, `TELEMETRY_ENDPOINT`, `TELEMETRY_ENABLED`). With no service
+ * name the client stays inert and every entry point is a no-op, so an application runs
+ * unchanged without a collector.
  */
-export function initBench(options: BenchOptions = {}): Bench {
+export function initTelemetry(options: TelemetryOptions = {}): TelemetryClient {
   const previous = singleton;
-  singleton = new Bench(options);
-  // Fire-and-forget: replacing the instance must not make the caller await a flush.
+  singleton = new TelemetryClient(options);
+  // Fire-and-forget: replacing the client must not make the caller await a flush.
   if (previous) void previous.shutdown().catch(() => undefined);
   return singleton;
 }
 
-/** The process-wide Bench instance, created from the environment on first use. */
-export function getBench(): Bench {
-  if (!singleton) singleton = new Bench();
+/** The process-wide client, created from the environment on first use. */
+export function getTelemetry(): TelemetryClient {
+  if (!singleton) singleton = new TelemetryClient();
   return singleton;
 }
 
-setDefaultBenchGetter(getBench);
+setDefaultClientGetter(getTelemetry);
 
 /**
- * Convenience facade over {@link getBench}.
+ * Convenience facade over {@link getTelemetry}.
  *
- * Target code is meant to read as `bench.trigger("BENCH-SHOP-0001", …)` — one
- * greppable line inside the vulnerable sink, no plumbing.
+ * Application code reads as `telemetry.signal("shop.catalog.query.plan_anomaly", …)`:
+ * one line at the point of interest, no plumbing.
  */
-export const bench = {
-  get app(): string {
-    return getBench().app;
+export const telemetry = {
+  get service(): string {
+    return getTelemetry().service;
   },
   get enabled(): boolean {
-    return getBench().enabled;
+    return getTelemetry().enabled;
   },
-  trigger: (...args: Parameters<Bench["trigger"]>): void => getBench().trigger(...args),
-  note: (...args: Parameters<Bench["note"]>): void => getBench().note(...args),
-  graphql: (...args: Parameters<Bench["graphql"]>): void => getBench().graphql(...args),
-  websocket: (...args: Parameters<Bench["websocket"]>): void => getBench().websocket(...args),
-  emit: (...args: Parameters<Bench["emit"]>): void => getBench().emit(...args),
-  flush: (): Promise<void> => getBench().flush(),
-  stats: (): ReturnType<Bench["stats"]> => getBench().stats(),
-  shutdown: (): Promise<void> => getBench().shutdown(),
+  signal: (...args: Parameters<TelemetryClient["signal"]>): void => getTelemetry().signal(...args),
+  note: (...args: Parameters<TelemetryClient["note"]>): void => getTelemetry().note(...args),
+  correlate: (...args: Parameters<TelemetryClient["correlate"]>): string =>
+    getTelemetry().correlate(...args),
+  graphql: (...args: Parameters<TelemetryClient["graphql"]>): void => getTelemetry().graphql(...args),
+  websocket: (...args: Parameters<TelemetryClient["websocket"]>): void =>
+    getTelemetry().websocket(...args),
+  emit: (...args: Parameters<TelemetryClient["emit"]>): void => getTelemetry().emit(...args),
+  flush: (): Promise<void> => getTelemetry().flush(),
+  stats: (): ReturnType<TelemetryClient["stats"]> => getTelemetry().stats(),
+  shutdown: (): Promise<void> => getTelemetry().shutdown(),
 };
