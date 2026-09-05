@@ -31,7 +31,7 @@ oracle:
     however it is retried, never fires it.
 
     '
-  poc: POST /api/gift-cards/redeem {"code":"4831-2205-7719"} x8 issued concurrently on one session
+  poc: POST /api/gift-cards/redeem {"code":"4831-2205-7719"} x24 issued together on one session, every connection opened and every request sent bar its last byte first
   signal: shop.wallet.redemption.double_spend
 tags:
 - rest

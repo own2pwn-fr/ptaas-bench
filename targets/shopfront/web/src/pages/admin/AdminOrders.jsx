@@ -4,7 +4,7 @@ import { DataTable, ErrorNote, Loading, Notice, Section, StatusBadge } from "../
 import { api, useAction, useResource } from "../../lib/api.js";
 import { formatDateTime, humanise, listOf, money } from "../../lib/store.js";
 
-const NEXT_STATES = ["paid", "packing", "dispatched", "delivered", "cancelled"];
+const NEXT_STATES = ["paid", "picking", "fulfilled", "refunded", "cancelled"];
 
 export default function AdminOrders() {
   const [status, setStatus] = useState("");

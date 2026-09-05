@@ -1190,16 +1190,19 @@ function buildDataset(identity, secrets) {
   let returnId = 0;
   let redemptionId = 0;
 
+  // The states here are the ones the order state machine in routes/orders.js knows about;
+  // an estate seeded with anything else produces a book of trade the fulfilment console
+  // cannot move, because no transition is defined from a state that does not exist.
   const CHAINS = {
     placed: ["created", "placed"],
-    shipped: ["created", "placed", "paid", "packed", "shipped"],
-    delivered: ["created", "placed", "paid", "packed", "shipped", "delivered"],
+    picking: ["created", "placed", "paid", "picking"],
+    fulfilled: ["created", "placed", "paid", "picking", "fulfilled"],
     cancelled: ["created", "placed", "cancelled"],
-    refunded: ["created", "placed", "paid", "packed", "shipped", "delivered", "refunded"],
+    refunded: ["created", "placed", "paid", "picking", "fulfilled", "refunded"],
   };
   const actorFor = (toState, customerId) => {
     if (toState === "placed") return { subject: String(customerId), role: "customer" };
-    if (toState === "paid" || toState === "delivered") return { subject: "system", role: "system" };
+    if (toState === "paid" || toState === "fulfilled") return { subject: "system", role: "system" };
     return { subject: String(STAFF_ID), role: "staff" };
   };
 
@@ -1215,11 +1218,11 @@ function buildDataset(identity, secrets) {
     else customerId = customerIds[intBetween(orderRnd, 0, customerIds.length - 1)];
 
     let state;
-    if (index === 0) state = "delivered";
-    else if (index === 1) state = "shipped";
-    else if (index < 34) state = pickFrom(orderRnd, ["delivered", "delivered", "delivered", "refunded", "cancelled"]);
-    else if (index < 50) state = pickFrom(orderRnd, ["delivered", "shipped", "shipped"]);
-    else state = pickFrom(orderRnd, ["placed", "placed", "shipped"]);
+    if (index === 0) state = "fulfilled";
+    else if (index === 1) state = "picking";
+    else if (index < 34) state = pickFrom(orderRnd, ["fulfilled", "fulfilled", "fulfilled", "refunded", "cancelled"]);
+    else if (index < 50) state = pickFrom(orderRnd, ["fulfilled", "picking", "picking"]);
+    else state = pickFrom(orderRnd, ["placed", "placed", "picking"]);
 
     const placedOffset = -(300 - index * 5) * DAY - intBetween(orderRnd, 0, 20) * HOUR;
     const lineCount = intBetween(orderRnd, 1, 4);
@@ -1288,19 +1291,19 @@ function buildDataset(identity, secrets) {
       });
     }
 
-    if (state === "shipped" || state === "delivered" || state === "refunded") {
+    if (state === "picking" || state === "fulfilled" || state === "refunded") {
       shipmentId += 1;
       shipments.push({
         id: shipmentId,
         order_id: orderId,
         carrier: pickFrom(orderRnd, CARRIERS),
         tracking_ref: `TR${pad(intBetween(orderRnd, 0, 99_999_999), 8)}`,
-        state: state === "shipped" ? "in_transit" : "delivered",
+        state: state === "picking" ? "in_transit" : "delivered",
         shipped_at: ts(placedOffset + 26 * HOUR),
       });
     }
 
-    if (state === "refunded" || (state === "delivered" && orderRnd() < 0.08)) {
+    if (state === "refunded" || (state === "fulfilled" && orderRnd() < 0.08)) {
       returnId += 1;
       orderReturns.push({
         id: returnId,
@@ -1504,7 +1507,7 @@ function buildDataset(identity, secrets) {
   let loyaltyId = 0;
   const balances = new Map();
   for (const order of orders) {
-    if (order.state !== "delivered" && order.state !== "shipped") continue;
+    if (order.state !== "fulfilled" && order.state !== "picking") continue;
     const points = Math.floor(order.total_cents / 100);
     if (points <= 0) continue;
     loyaltyId += 1;

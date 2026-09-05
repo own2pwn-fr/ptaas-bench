@@ -28,7 +28,7 @@ oracle:
     never trigger.
 
     '
-  poc: GET /api/products?q=x' UNION SELECT id,email,password_hash,1,1 FROM users--
+  poc: GET /api/products?q=x' UNION SELECT id,email,password_hash,1,1 FROM customers--
   signal: shop.catalog.query.plan_anomaly
 tags:
 - rest
