@@ -1,0 +1,30 @@
+<article class="card" data-part="asset-card" id="asset-card-{{ asset.id }}"
+  hx-get="/parts/inventory/asset/{{ asset.id }}"
+  hx-vals='{"asset": "{{ asset.label | attribute_text }}"}'
+  hx-target="#asset-card-{{ asset.id }}" hx-swap="outerHTML">
+  <h2>{{ asset.tag }} &middot; {{ asset.model }}</h2>
+  <p class="muted">{{ asset.category }} &middot; {{ asset.site }} &middot; {{ asset.status }}</p>
+  <ul class="list">
+    <li>Network name {{ asset.hostname }}</li>
+    <li>Serial {{ asset.serial }}</li>
+    <li>Held by {{ asset.holder_name or 'unassigned' }}</li>
+    <li>On the register since {{ asset.acquired_on }}</li>
+    <li>Label: {{ asset.label }}</li>
+  </ul>
+  <form hx-post="/parts/inventory/asset/{{ asset.id }}/label" hx-target="#asset-card-{{ asset.id }}" hx-swap="outerHTML">
+    <label>Correct the label<input name="label" value="{{ asset.label }}"></label>
+    <button type="submit">Save label</button>
+  </form>
+  {% if can_probe %}
+  <form hx-post="/parts/inventory/asset/{{ asset.id }}/probe" hx-target="#probe-{{ asset.id }}" hx-swap="innerHTML">
+    <label>Check it answers<input name="host" value="{{ asset.hostname }}"></label>
+    <button type="submit">Check</button>
+  </form>
+  <div id="probe-{{ asset.id }}"></div>
+  {% endif %}
+  <div class="row">
+    <button hx-get="/parts/inventory/asset/{{ asset.id }}/notes" hx-target="#asset-notes-{{ asset.id }}" hx-swap="innerHTML">Notes</button>
+    <button hx-get="/parts/inventory/asset/{{ asset.id }}/history" hx-target="#asset-notes-{{ asset.id }}" hx-swap="innerHTML">History</button>
+  </div>
+  <div id="asset-notes-{{ asset.id }}"></div>
+</article>

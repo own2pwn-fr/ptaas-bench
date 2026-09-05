@@ -1,0 +1,20 @@
+{% extends "layout.html" %}
+{% block title %}Your account{% endblock %}
+{% block body %}
+<h1>Your account</h1>
+<p class="who">Signed in as {{ me.display_name }} ({{ me.email }}).</p>
+<div class="row">
+  <button hx-get="/parts/account/profile" hx-target="#account-panel" hx-swap="innerHTML">Your details</button>
+  <button hx-get="/parts/account/sessions" hx-target="#account-panel" hx-swap="innerHTML">Where you are signed in</button>
+</div>
+<div id="account-panel" hx-get="/parts/account/profile" hx-trigger="load" hx-swap="innerHTML"></div>
+<section class="panel">
+  <h2>Change your password</h2>
+  <form hx-post="/parts/account/password" hx-target="#password-outcome" hx-swap="innerHTML">
+    <input type="hidden" name="ft" value="{{ form_token() }}">
+    <label>New password<input type="password" name="password" minlength="12" required></label>
+    <button type="submit">Save</button>
+  </form>
+  <div id="password-outcome"></div>
+</section>
+{% endblock %}

@@ -1,0 +1,45 @@
+id: BENCH-INTR-0001
+title: Blind command injection in the equipment reachability probe
+app: intranet
+component: web
+class: cmdi_blind
+severity: critical
+entrypoint:
+  method: POST
+  path: /parts/inventory/asset/<int:asset_id>/probe
+  auth: admin
+  param: host
+  param_in: body
+  default_value: ap-yard-01.lanmarkfreight.net
+  content_type: application/x-www-form-urlencoded
+discovery:
+  render: htmx
+  reachable_from:
+  - /inventory
+  - /parts/inventory/asset/1
+  requires:
+  - js-execution
+  - multi-step-flow
+  difficulty: 4
+oracle:
+  kind: sink
+  condition: 'The probe hands the operator-supplied hostname to a shell without quoting it. The probe
+    response is identical whether the command succeeded or failed, so nothing is reflected and nothing
+    can be read back. The counter moves when the shell actually executed a program other than the single
+    ping the handler intended: the runner traces the commands the shell ran and compares the programs
+    against the one it asked for. A payload that is submitted but never breaks out of the argument - a
+    quoted string, a metacharacter the shell swallows - leaves exactly one program in the trace and never
+    moves the counter, so submitting shell syntax scores exercise, not exploitation.
+
+    '
+  poc: POST /parts/inventory/asset/4/probe with host=ap-yard-01.lanmarkfreight.net;id
+  signal: intra.exec.shell_spawned
+tags:
+- form
+- htmx
+- authenticated
+- admin
+- rce
+introduced: '2026-09-05'
+decoy_note: The reachability button was added so the service desk could stop asking the network team to
+  ping a switch; it shells out because that is what the runbook it replaced did.

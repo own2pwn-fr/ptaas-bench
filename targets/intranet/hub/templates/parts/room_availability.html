@@ -1,0 +1,10 @@
+<h2>Bookings{% if day %} on {{ day }}{% endif %}</h2>
+<table class="grid">
+  <thead><tr><th>Day</th><th>Slot</th><th>Room</th><th>Site</th><th>Who</th><th>Why</th></tr></thead>
+  <tbody>
+  {% for b in bookings %}
+  <tr><td>{{ b.day }}</td><td>{{ b.slot }}</td><td>{{ b.room }}</td><td>{{ b.site }}</td>
+      <td>{{ b.who }}</td><td>{{ b.purpose }}</td></tr>
+  {% else %}<tr><td colspan="6">Nothing booked.</td></tr>{% endfor %}
+  </tbody>
+</table>

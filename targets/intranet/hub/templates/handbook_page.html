@@ -1,0 +1,10 @@
+{% extends "layout.html" %}
+{% block title %}{{ entry.title }}{% endblock %}
+{% block body %}
+<article class="panel">
+  <p class="muted">{{ entry.section }}</p>
+  <h1>{{ entry.title }}</h1>
+  <p>{{ entry.body }}</p>
+  <p><a href="/handbook">Back to the handbook</a></p>
+</article>
+{% endblock %}

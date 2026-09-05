@@ -1,0 +1,9 @@
+<h2>Where you are signed in</h2>
+<table class="grid">
+  <thead><tr><th>Started</th><th>Last seen</th><th>State</th></tr></thead>
+  <tbody>
+  {% for r in rows %}<tr><td>{{ r.created_at }}</td><td>{{ r.last_seen_at }}</td>
+      <td>{{ 'signed out' if r.signed_out else 'active' }}</td></tr>{% endfor %}
+  </tbody>
+</table>
+<p class="muted">Ask the service desk to end a session on a handheld you no longer have.</p>

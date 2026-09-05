@@ -1,0 +1,5 @@
+<tr id="row-{{ row.id }}" class="clickable"
+    hx-get="/parts/leave/request/{{ row.id }}" hx-target="#drawer" hx-swap="innerHTML">
+  <td>{{ row.kind }}</td><td>{{ row.start_date }}</td><td>{{ row.end_date }}</td>
+  <td>{{ row.days }}</td><td>{{ row.status }}</td>
+</tr>

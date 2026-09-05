@@ -1,0 +1,9 @@
+<h3>Notes</h3>
+<ul class="list">
+  {% for c in items %}<li><strong>{{ c.who }}</strong> <span class="muted">{{ c.created_at[:16].replace('T', ' ') }}</span><br>{{ c.body }}</li>
+  {% else %}<li>No notes yet.</li>{% endfor %}
+</ul>
+<form hx-post="/parts/leave/request/{{ row.id }}/comment" hx-target="#notes-{{ row.id }}" hx-swap="innerHTML">
+  <label>Add a note<input name="comment" placeholder="Cover arranged with the depot."></label>
+  <button type="submit">Add</button>
+</form>

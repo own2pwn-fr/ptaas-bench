@@ -1,0 +1,42 @@
+id: BENCH-INTR-0008
+title: Signing out drops the cookie but leaves the session usable
+app: intranet
+component: web
+class: session_no_invalidate
+severity: medium
+entrypoint:
+  method: POST
+  path: /logout
+  auth: user
+  param: null
+  param_in: body
+  default_value: null
+  content_type: application/x-www-form-urlencoded
+discovery:
+  render: server-template
+  reachable_from:
+  - /
+  - /account
+  requires:
+  - form-submit
+  - state-change
+  difficulty: 2
+oracle:
+  kind: sink
+  condition: 'Signing out expires the cookie in the browser and marks the row signed out, but the session
+    lookup never consults that column, so a copy of the cookie taken beforehand still authenticates. The
+    counter moves on the first request that is served as an authenticated employee using a session that
+    had already been signed out - the effect is observed on the later request, not on the sign-out itself.
+    It is counted once per revived session, the way the other anomaly counters in this application are,
+    so a tool that replays the dead cookie repeatedly moves it once.
+
+    '
+  poc: POST /logout, then GET /parts/dashboard/summary re-sending the same session cookie
+  signal: intra.session.identity.revived
+tags:
+- server-rendered
+- authenticated
+- session
+introduced: '2026-09-05'
+decoy_note: The signed-out column was added when the security review asked for revocation, and the query
+  that reads sessions was never changed to look at it.

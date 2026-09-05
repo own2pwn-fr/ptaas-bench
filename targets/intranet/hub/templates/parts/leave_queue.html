@@ -1,0 +1,11 @@
+<h2>Your requests</h2>
+<table class="grid">
+  <thead><tr><th>Kind</th><th>From</th><th>To</th><th>Days</th><th>Status</th></tr></thead>
+  <tbody>
+  {% for row in rows %}
+    {% include "parts/leave_row.html" %}
+  {% else %}
+    <tr><td colspan="5">You have not booked anything yet.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>

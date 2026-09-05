@@ -1,0 +1,6 @@
+<h3>History</h3>
+<ul class="list">
+  <li>Added to the register {{ asset.acquired_on }}</li>
+  <li>Currently {{ asset.status }} at {{ asset.site }}</li>
+  {% for h in holders %}<li>Seen with {{ h.display_name }} ({{ h.team }})</li>{% endfor %}
+</ul>

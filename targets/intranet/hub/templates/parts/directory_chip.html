@@ -1,0 +1,5 @@
+<span class="chip" data-part="directory-chip" data-team="{{ team }}" data-sort={{ sort }}
+      hx-get="/parts/directory/list?team={{ team | urlencode }}&amp;sort={{ sort | urlencode }}"
+      hx-target="#people" hx-swap="innerHTML">
+  {{ team }} &middot; {{ people }} people &middot; {{ sort }}
+</span>

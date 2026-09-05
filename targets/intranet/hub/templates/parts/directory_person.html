@@ -1,0 +1,29 @@
+<section class="panel">
+  <h2>{{ person.display_name }}</h2>
+  {% if saved %}<p class="ok">Access updated.</p>{% endif %}
+  <p class="muted">{{ person.job_title }} &middot; {{ person.team }} &middot; {{ person.site }}</p>
+  <ul class="list">
+    <li>Staff number {{ person.id }}</li>
+    <li>{{ person.email }}</li>
+    <li>Extension {{ person.extension }}</li>
+    <li>Manager: {{ person.manager_name or 'none recorded' }}</li>
+    <li>Started {{ person.started_on }}</li>
+    {% if person.out_of_office %}<li>Away: {{ person.out_of_office }}</li>{% endif %}
+  </ul>
+  <h3>Equipment</h3>
+  <ul class="list">
+    {% for k in kit %}<li><a href="#" hx-get="/parts/inventory/asset/{{ k.id }}" hx-target="#asset" hx-swap="innerHTML">{{ k.tag }}</a> {{ k.model }} ({{ k.category }})</li>
+    {% else %}<li>Nothing signed out.</li>{% endfor %}
+  </ul>
+  <div id="asset"></div>
+  <button hx-get="/parts/directory/person/{{ person.id }}/reports" hx-target="#reports-{{ person.id }}" hx-swap="innerHTML">Who reports to them</button>
+  <div id="reports-{{ person.id }}"></div>
+  {% if can_set_access %}
+  <form hx-post="/parts/directory/person/{{ person.id }}/access" hx-target="#person" hx-swap="innerHTML">
+    <label>Role
+      <select name="role">{% for r in roles %}<option{% if r == person.role %} selected{% endif %}>{{ r }}</option>{% endfor %}</select>
+    </label>
+    <button type="submit">Save access</button>
+  </form>
+  {% endif %}
+</section>

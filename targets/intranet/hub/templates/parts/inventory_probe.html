@@ -1,0 +1,6 @@
+<p class="{{ 'ok' if result.answered else 'warn' }}">
+  {{ host }} {{ 'answered' if result.answered else 'did not answer' }}
+  after {{ result.elapsed_ms }} ms.
+</p>
+<p class="muted">The check sends one echo request. Ask the network team if a device that
+   should answer does not.</p>

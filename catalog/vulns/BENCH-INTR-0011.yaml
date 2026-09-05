@@ -1,0 +1,44 @@
+id: BENCH-INTR-0011
+title: Receipt authorization allows the request when the policy evaluation raises
+app: intranet
+component: web
+class: fail_open
+severity: high
+entrypoint:
+  method: GET
+  path: /parts/expenses/claim/<int:claim_id>/receipt
+  auth: other-user
+  param: as_of
+  param_in: query
+  default_value: '0'
+discovery:
+  render: htmx
+  reachable_from:
+  - /expenses
+  - /parts/expenses/claim/8821
+  requires:
+  - js-execution
+  - multi-step-flow
+  difficulty: 4
+oracle:
+  kind: differential
+  condition: 'Access to a receipt is decided by a policy evaluated against the claim, the caller and an
+    effective date taken from the query string. The date is parsed inside the evaluation, so a value that
+    is not a date makes the evaluation raise, and the handler treats a failed evaluation as a grant so
+    that a policy outage cannot stop a manager approving expenses. The counter moves only when all three
+    hold: the evaluation raised, the request was nevertheless served the receipt, and a re-evaluation
+    ignoring the bad input says the caller should have been refused - a document was handed over that
+    the policy denies. A malformed date on a claim the caller may read anyway leaves the counter alone.
+
+    '
+  poc: GET /parts/expenses/claim/8821/receipt?as_of=not-a-date with the session of an employee who is
+    not the claimant
+  signal: intra.policy.decision.degraded_grant
+tags:
+- htmx
+- fragment
+- authenticated
+- access-control
+introduced: '2026-09-05'
+decoy_note: The catch was added after a policy service outage blocked every approval for a morning; allowing
+  on failure was signed off as the lesser evil and never revisited.

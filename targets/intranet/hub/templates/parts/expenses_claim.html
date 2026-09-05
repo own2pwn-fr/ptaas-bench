@@ -1,0 +1,12 @@
+<section class="panel" id="claim-{{ claim.id }}">
+  <h2>Claim {{ claim.id }} &middot; {{ claim.title }}</h2>
+  <p class="muted">{{ claim.claimant_name }} &middot; {{ claim.stage }} &middot; total &pound;{{ '%.2f' % (total / 100) }}</p>
+  <ol class="timeline">
+    {% for s in stages %}<li>{{ s.stage }} &mdash; {{ s.at[:16].replace('T', ' ') }}</li>{% endfor %}
+  </ol>
+  <div class="row">
+    <button hx-get="/parts/expenses/claim/{{ claim.id }}/step/1" hx-target="#claim-panel" hx-swap="innerHTML">Open the wizard</button>
+    <button hx-get="/parts/expenses/claim/{{ claim.id }}/lines" hx-target="#claim-lines" hx-swap="innerHTML">Lines</button>
+  </div>
+  <div id="claim-lines"></div>
+</section>

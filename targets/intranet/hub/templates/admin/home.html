@@ -1,0 +1,17 @@
+{% extends "layout.html" %}
+{% block title %}Operations{% endblock %}
+{% block body %}
+<h1>Operations</h1>
+<ul class="tiles">
+  <li><span class="big">{{ counts.people }}</span> people</li>
+  <li><span class="big">{{ counts.assets }}</span> pieces of equipment</li>
+  <li><span class="big">{{ counts.open_claims }}</span> open claims</li>
+  <li><span class="big">{{ counts.waiting }}</span> requests waiting</li>
+</ul>
+<ul class="list">
+  <li><a href="/admin/people">People and access</a></li>
+  <li><a href="/admin/audit">Audit trail</a></li>
+  <li><a href="/admin/jobs">Overnight jobs</a></li>
+  <li><a href="/admin/reports/">Scheduled exports</a></li>
+</ul>
+{% endblock %}

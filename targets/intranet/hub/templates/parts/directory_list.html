@@ -1,0 +1,11 @@
+<table class="grid">
+  <thead><tr><th>Name</th><th>Role</th><th>Team</th><th>Site</th><th>Extension</th></tr></thead>
+  <tbody>
+  {% for r in rows %}
+  <tr class="clickable" hx-get="/parts/directory/person/{{ r.id }}" hx-target="#person" hx-swap="innerHTML">
+    <td>{{ r.display_name }}</td><td>{{ r.job_title }}</td><td>{{ r.team }}</td>
+    <td>{{ r.site }}</td><td>{{ r.extension }}</td>
+  </tr>
+  {% else %}<tr><td colspan="5">Nobody matches.</td></tr>{% endfor %}
+  </tbody>
+</table>

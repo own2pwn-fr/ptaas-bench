@@ -1,0 +1,47 @@
+id: BENCH-INTR-0012
+title: Granting approver rights is never written to the audit trail
+app: intranet
+component: web
+class: no_audit_trail
+severity: medium
+entrypoint:
+  method: POST
+  path: /parts/directory/person/<int:person_id>/access
+  auth: admin
+  param: role
+  param_in: body
+  default_value: viewer
+  content_type: application/x-www-form-urlencoded
+discovery:
+  render: htmx
+  reachable_from:
+  - /admin/people
+  - /parts/directory/person/1024
+  requires:
+  - js-execution
+  - multi-step-flow
+  - state-change
+  difficulty: 4
+oracle:
+  kind: sink
+  condition: 'The application''s own audit policy lists the actions that must leave a record, and a change
+    of a person''s role is on that list; the handler commits the change and returns the updated card without
+    ever calling the audit writer, so the trail shows the role changing hands with nobody responsible
+    for it. The counter is not raised by the action: it is raised when the action has completed, the role
+    on the row has actually changed, and no audit record was written for it. The effect being counted
+    is the missing record, so a role change that does write its record, or a submission that changes nothing,
+    leaves the counter alone.
+
+    '
+  poc: POST /parts/directory/person/1024/access with role=approver, then read /admin/audit and find no
+    entry
+  signal: intra.audit.event.absent
+tags:
+- htmx
+- fragment
+- authenticated
+- admin
+- logging
+introduced: '2026-09-05'
+decoy_note: Role changes used to be made in the database by hand; the screen that replaced them was written
+  against the directory module, which has no audit dependency.

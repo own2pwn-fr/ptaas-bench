@@ -1,0 +1,8 @@
+<h3>History</h3>
+<ol class="timeline">
+  <li>Raised {{ row.created_at[:16].replace('T', ' ') }} by {{ row.owner_name }}</li>
+  {% if row.decided_at %}<li>Decided {{ row.decided_at[:16].replace('T', ' ') }} &mdash; {{ row.status }}</li>
+  {% else %}<li>Waiting on {{ row.owner_team }}'s approver</li>{% endif %}
+</ol>
+<button hx-get="/parts/leave/request/{{ row.id }}/comments" hx-target="#notes-{{ row.id }}" hx-swap="innerHTML">Notes on this request</button>
+<div id="notes-{{ row.id }}"></div>

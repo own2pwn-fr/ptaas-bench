@@ -1,0 +1,10 @@
+{% if term %}<p class="muted">{{ rows | length }} match(es) for &ldquo;{{ term }}&rdquo;</p>{% endif %}
+<table class="grid">
+  <tbody>
+  {% for r in rows %}
+  <tr class="clickable" hx-get="/parts/directory/person/{{ r.id }}" hx-target="#person" hx-swap="innerHTML">
+    <td>{{ r.display_name }}</td><td>{{ r.job_title }}</td><td>{{ r.team }}</td><td>{{ r.extension }}</td>
+  </tr>
+  {% else %}<tr><td>Nobody matches.</td></tr>{% endfor %}
+  </tbody>
+</table>

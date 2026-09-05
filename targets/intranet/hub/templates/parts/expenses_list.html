@@ -1,0 +1,18 @@
+<h2>Your claims{% if stage %} ({{ stage }}){% endif %}</h2>
+<div class="row">
+  {% for s in ['draft', 'itemised', 'submitted', 'reviewed', 'reimbursed'] %}
+  <a href="#" hx-get="/parts/expenses/list?stage={{ s }}" hx-target="#claims" hx-swap="innerHTML">{{ s }}</a>
+  {% endfor %}
+  <a href="#" hx-get="/parts/expenses/list" hx-target="#claims" hx-swap="innerHTML">all</a>
+</div>
+<table class="grid">
+  <thead><tr><th>Reference</th><th>What for</th><th>Stage</th><th>Total</th></tr></thead>
+  <tbody>
+  {% for row in rows %}
+  <tr class="clickable" hx-get="/parts/expenses/claim/{{ row.id }}" hx-target="#claim-panel" hx-swap="innerHTML">
+    <td>{{ row.id }}</td><td>{{ row.title }}</td><td>{{ row.stage }}</td>
+    <td>&pound;{{ '%.2f' % (totals.get(row.id, 0) / 100) }}</td>
+  </tr>
+  {% else %}<tr><td colspan="4">Nothing claimed yet.</td></tr>{% endfor %}
+  </tbody>
+</table>

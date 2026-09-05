@@ -1,0 +1,44 @@
+id: BENCH-INTR-0010
+title: Expense claims can be reimbursed without passing through review
+app: intranet
+component: web
+class: workflow_bypass
+severity: high
+entrypoint:
+  method: POST
+  path: /parts/expenses/claim/<int:claim_id>/reimburse
+  auth: user
+  param: claim_id
+  param_in: path
+  default_value: '8815'
+  content_type: application/x-www-form-urlencoded
+discovery:
+  render: htmx
+  reachable_from:
+  - /expenses
+  - /parts/expenses/claim/8815/step/3
+  requires:
+  - js-execution
+  - multi-step-flow
+  - state-change
+  difficulty: 5
+oracle:
+  kind: state
+  condition: 'A claim is meant to walk draft, itemised, submitted, reviewed and only then reimbursed;
+    the reimbursement handler writes the final stage without asking which stage the claim is in, and the
+    control that posts to it only exists in the fragment served for the final step. The counter moves
+    when a claim reaches the reimbursed stage while its own stage history has no review entry, so the
+    money was released on a claim nobody approved. A claim reimbursed after a recorded review never moves
+    it.
+
+    '
+  poc: POST /parts/expenses/claim/8815/reimburse on a claim still in the draft stage
+  signal: intra.claim.stage.out_of_order
+tags:
+- htmx
+- fragment
+- authenticated
+- business-logic
+introduced: '2026-09-05'
+decoy_note: The stages were added to an existing screen and the reimbursement handler is the original
+  one, which only ever ran from the button at the end of the wizard.

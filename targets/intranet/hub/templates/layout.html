@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Staff services{% endblock %} &middot; {{ company }}</title>
+  <link rel="icon" href="/favicon.ico">
+  <link rel="stylesheet" href="/static/css/app.css">
+  <script src="/static/js/htmx.min.js" defer></script>
+  <script src="/static/js/insight.js" defer data-site="staff-services"></script>
+</head>
+<body>
+<header class="bar">
+  <a class="brand" href="/">{{ company }}<span>staff services</span></a>
+  {% if me %}
+  <nav>
+    <a href="/leave">Leave</a>
+    <a href="/expenses">Expenses</a>
+    <a href="/directory">Directory</a>
+    <a href="/inventory">Equipment</a>
+    <a href="/handbook">Handbook</a>
+    <a href="/support">Service desk</a>
+    {% if me.role == 'operations' %}<a href="/admin/">Operations</a>{% endif %}
+  </nav>
+  <form class="out" method="post" action="/logout">
+    <span class="who">Signed in as {{ me.display_name }}</span>
+    <button type="submit">Sign out</button>
+  </form>
+  {% else %}
+  <nav><a href="/login">Sign in</a></nav>
+  {% endif %}
+</header>
+<main>
+{% block body %}{% endblock %}
+</main>
+<footer>
+  <p>{{ company }} staff services. Internal use only. Problems? Call the service desk on 2200
+     or raise a ticket.</p>
+  <p class="cookie" id="cookie-note">We keep one cookie so you stay signed in.
+     <button type="button" onclick="document.getElementById('cookie-note').hidden=true">Understood</button></p>
+</footer>
+</body>
+</html>

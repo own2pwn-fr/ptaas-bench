@@ -1,0 +1,16 @@
+{% extends "layout.html" %}
+{% block title %}Expenses{% endblock %}
+{% block body %}
+<h1>Expenses</h1>
+<div class="row">
+  <form hx-post="/parts/expenses/new" hx-target="#claim-panel" hx-swap="innerHTML">
+    <input type="hidden" name="ft" value="{{ form_token() }}">
+    <input name="title" placeholder="What is the claim for?" required>
+    <button type="submit">Start a claim</button>
+  </form>
+  <button hx-get="/parts/expenses/summary" hx-target="#claim-panel" hx-swap="innerHTML">This year</button>
+  <button hx-get="/parts/expenses/categories" hx-target="#claim-panel" hx-swap="innerHTML">Categories</button>
+</div>
+<div id="claims" hx-get="/parts/expenses/list" hx-trigger="load" hx-swap="innerHTML"></div>
+<div id="claim-panel"></div>
+{% endblock %}

@@ -1,0 +1,12 @@
+{% extends "layout.html" %}
+{% block title %}Service desk{% endblock %}
+{% block body %}
+<h1>Service desk</h1>
+<form hx-post="/parts/support/tickets" hx-target="#tickets" hx-swap="innerHTML">
+  <input type="hidden" name="ft" value="{{ form_token() }}">
+  <label>Subject<input name="subject" required></label>
+  <label>What is happening?<textarea name="body" rows="3"></textarea></label>
+  <button type="submit">Raise a ticket</button>
+</form>
+<div id="tickets" hx-get="/parts/support/tickets" hx-trigger="load" hx-swap="innerHTML"></div>
+{% endblock %}

@@ -1,0 +1,8 @@
+<table class="grid">
+  <thead><tr><th>When</th><th>Who</th><th>What</th><th>About</th><th>Detail</th></tr></thead>
+  <tbody>
+  {% for r in rows %}<tr><td>{{ r.at }}</td><td>{{ r.actor }}</td><td>{{ r.action }}</td>
+      <td>{{ r.subject }}</td><td>{{ r.detail }}</td></tr>
+  {% else %}<tr><td colspan="5">Nothing recorded.</td></tr>{% endfor %}
+  </tbody>
+</table>

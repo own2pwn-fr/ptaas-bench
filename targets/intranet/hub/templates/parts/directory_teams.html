@@ -1,0 +1,7 @@
+<table class="grid">
+  <thead><tr><th>Team</th><th>People</th><th>Approvers</th></tr></thead>
+  <tbody>{% for r in rows %}
+  <tr class="clickable" hx-get="/parts/directory/filter?team={{ r.team | urlencode }}" hx-target="#chip" hx-swap="innerHTML">
+    <td>{{ r.team }}</td><td>{{ r.people }}</td><td>{{ r.approvers }}</td></tr>
+  {% endfor %}</tbody>
+</table>

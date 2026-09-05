@@ -1,0 +1,18 @@
+{% extends "layout.html" %}
+{% block title %}Choose a password{% endblock %}
+{% block body %}
+<section class="panel narrow">
+{% if person %}
+  <h1>Choose a new password</h1>
+  <p>For {{ person.display_name }} ({{ person.email }}).</p>
+  <form hx-post="/parts/account/password" hx-target="#reset-outcome" hx-swap="innerHTML">
+    <label>New password<input type="password" name="password" minlength="12" required></label>
+    <button type="submit">Save</button>
+  </form>
+  <div id="reset-outcome"></div>
+{% else %}
+  <h1>That link has expired</h1>
+  <p>Reset links are good for the hour they were made. Call the service desk for a new one.</p>
+{% endif %}
+</section>
+{% endblock %}

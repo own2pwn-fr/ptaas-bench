@@ -1,0 +1,10 @@
+<section class="panel">
+  <h2>Receipt for claim {{ claim.id }}</h2>
+  <p class="muted">{{ claim.claimant_name }} &middot; reference {{ claim.receipt_ref }}
+     {% if degraded %}&middot; shown without a current rule decision{% endif %}</p>
+  <table class="grid">
+    <tbody>{% for l in lines %}<tr><td>{{ l.spent_on }}</td><td>{{ l.description }}</td>
+      <td>&pound;{{ '%.2f' % (l.amount_cents / 100) }}</td></tr>{% endfor %}</tbody>
+  </table>
+  <p>Total &pound;{{ '%.2f' % (total / 100) }}.</p>
+</section>

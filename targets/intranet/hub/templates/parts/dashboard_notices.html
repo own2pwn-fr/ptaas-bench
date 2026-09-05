@@ -1,0 +1,7 @@
+<h2>Notices</h2>
+<ul class="list">
+  {% for n in items %}
+  <li><a href="#" hx-get="/parts/notices/{{ n.id }}" hx-target="#notices-tile" hx-swap="innerHTML">{{ n.title }}</a>
+      <span class="muted">{{ n.at[:10] }}</span></li>
+  {% endfor %}
+</ul>

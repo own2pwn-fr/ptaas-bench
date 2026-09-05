@@ -1,0 +1,46 @@
+id: BENCH-INTR-0013
+title: Stored attribute injection through an equipment label
+app: intranet
+component: web
+class: xss_attribute
+severity: high
+entrypoint:
+  method: POST
+  path: /parts/inventory/asset/<int:asset_id>/label
+  auth: user
+  param: label
+  param_in: body
+  default_value: Depot spare
+  content_type: application/x-www-form-urlencoded
+discovery:
+  render: htmx
+  reachable_from:
+  - /inventory
+  - /parts/inventory/asset/4
+  requires:
+  - js-execution
+  - multi-step-flow
+  - state-change
+  difficulty: 5
+oracle:
+  kind: sink
+  condition: 'The saved label is echoed into the asset card the handler returns, inside a single-quoted
+    attribute that carries the fragment''s own parameters, and the escaper used there leaves single quotes
+    alone. The counter moves when the card that goes back is parsed and the element carries attributes
+    the template does not define, or its parameter attribute no longer parses as the object the template
+    wrote - the stored value changed the shape of the element rather than its text. It is counted once
+    per asset, the way the other anomaly counters here are. A label that renders as text, however odd
+    it looks, never moves it.
+
+    '
+  poc: POST /parts/inventory/asset/4/label with label=spare' hx-on:load='fetch(1)
+  signal: intra.inventory.label.attribute_escaped
+tags:
+- htmx
+- fragment
+- authenticated
+- xss
+- stored
+introduced: '2026-09-05'
+decoy_note: Labels were made editable in place so depot staff could correct them from a phone; the card
+  template passes them back through the same attribute it uses for its own parameters.

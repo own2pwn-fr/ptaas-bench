@@ -1,0 +1,11 @@
+# Pinned exactly. Two workers of the same image in two estates behaving differently
+# because a patch release moved under us is a whole afternoon nobody gets back.
+Flask==3.1.3
+Werkzeug==3.1.8
+Jinja2==3.1.6
+MarkupSafe==3.0.3
+itsdangerous==2.2.0
+click==8.5.0
+blinker==1.9.0
+gunicorn==23.0.0
+httpx==0.28.1

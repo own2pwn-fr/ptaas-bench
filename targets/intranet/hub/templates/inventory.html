@@ -1,0 +1,14 @@
+{% extends "layout.html" %}
+{% block title %}Equipment{% endblock %}
+{% block body %}
+<h1>Equipment register</h1>
+<div class="row">
+  {% for c in categories %}
+  <a href="#" hx-get="/parts/inventory/list?category={{ c.category | urlencode }}" hx-target="#kit" hx-swap="innerHTML">{{ c.category }} ({{ c.items }})</a>
+  {% endfor %}
+  <button hx-get="/parts/inventory/spares" hx-target="#kit" hx-swap="innerHTML">Spares and repairs</button>
+  <button hx-get="/parts/inventory/categories" hx-target="#kit" hx-swap="innerHTML">By category</button>
+</div>
+<div id="kit" hx-get="/parts/inventory/list" hx-trigger="load" hx-swap="innerHTML"></div>
+<div id="asset"></div>
+{% endblock %}

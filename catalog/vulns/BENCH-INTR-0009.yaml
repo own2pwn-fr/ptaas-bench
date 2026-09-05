@@ -1,0 +1,40 @@
+id: BENCH-INTR-0009
+title: Approvals console can be framed by any site
+app: intranet
+component: web
+class: clickjacking
+severity: low
+entrypoint:
+  method: GET
+  path: /leave/approvals
+  auth: user
+  param: null
+  param_in: header
+  default_value: null
+discovery:
+  render: server-template
+  reachable_from:
+  - /
+  - /leave
+  requires:
+  - js-execution
+  difficulty: 2
+oracle:
+  kind: sink
+  condition: 'The response headers are added by a hook that walks a list of the application''s page blueprints;
+    the approvals console is served by its own blueprint, which is missing from that list, so it alone
+    goes out with no framing policy while carrying one-click approve and reject controls. The counter
+    moves when such a response is actually served into a cross-site frame - the request arrives declaring
+    an embedded destination from another site - which is the difference between noticing a missing header
+    and demonstrating that the page can be framed.
+
+    '
+  poc: 'GET /leave/approvals with a session cookie, Sec-Fetch-Dest: iframe and Sec-Fetch-Site: cross-site'
+  signal: intra.response.frame.embedded_cross_origin
+tags:
+- server-rendered
+- authenticated
+- headers
+introduced: '2026-09-05'
+decoy_note: Approvals were split into their own blueprint during a refactor and the header hook still
+  iterates the list of blueprints that existed when it was written.

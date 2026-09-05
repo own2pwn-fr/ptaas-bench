@@ -1,0 +1,10 @@
+{% extends "layout.html" %}
+{% block title %}Rooms{% endblock %}
+{% block body %}
+<h1>Meeting rooms</h1>
+<table class="grid">
+  <thead><tr><th>Room</th><th>Site</th><th>Seats</th><th>Kit</th></tr></thead>
+  <tbody>{% for r in items %}<tr><td>{{ r.name }}</td><td>{{ r.site }}</td><td>{{ r.seats }}</td><td>{{ r.kit }}</td></tr>{% endfor %}</tbody>
+</table>
+<div id="availability" hx-get="/parts/rooms/availability" hx-trigger="load" hx-swap="innerHTML"></div>
+{% endblock %}

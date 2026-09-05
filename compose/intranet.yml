@@ -1,0 +1,129 @@
+# Staff services: one Flask application, its SQLite file and nothing else.
+#
+# Relative paths are resolved against this file's directory (compose/), per the
+# `include` semantics of the Compose specification.
+#
+# WHY THE VERSIONS ARE PINNED
+# ---------------------------
+# The interesting property of this target is what a crawler can and cannot reach, and
+# that is decided by the version of htmx the pages load and by how the framework
+# renders its route templates. A floating tag would change that without changing
+# anything in this repository, and the crawl numbers from two runs would stop being
+# comparable. The interpreter is pinned here; the application's own dependencies are
+# pinned to the patch release in targets/intranet/requirements.txt, and htmx is
+# vendored into the image rather than fetched from a CDN -- the customer-facing
+# network has no route out, so a page that loaded its own script from the internet
+# would simply not work, and every tool would score the same zero for the wrong reason.
+#
+# NAMES
+# -----
+# The hostname and the network aliases are the company's own and are overridable per
+# deployment, because anything on the same network can resolve them and a name is a
+# statement about what this is.
+
+x-site-domain: &site-domain ${INTRANET_SITE_DOMAIN:-lanmarkfreight.net}
+
+services:
+
+  intranet-hub:
+    build:
+      context: ../targets/intranet
+      dockerfile: Dockerfile
+      # The platform team's observability agent is built from the internal package
+      # tree rather than copied into this target's context, so the image never
+      # contains anything from the rest of the repository.
+      additional_contexts:
+        agent: ../sdk/python
+    image: ${INTRANET_IMAGE:-lanmark/staff-services:4.2.1}
+    container_name: intranet-hub
+    hostname: hub
+    profiles: [targets, intranet]
+    environment:
+      TELEMETRY_SERVICE: intranet
+      TELEMETRY_ENDPOINT: http://otel-collector:8900
+      # The estate's own range. Requests whose socket peer falls inside it are our own
+      # tooling -- the deployment checks, the release probe -- and are recorded as
+      # such. Staff traffic arrives from the other network and never matches.
+      TELEMETRY_SYNTHETIC_CIDRS: "10.77.0.0/24"
+
+      SITE_DOMAIN: *site-domain
+      CANONICAL_HOST: hub.${INTRANET_SITE_DOMAIN:-lanmarkfreight.net}
+      COMPANY_NAME: ${INTRANET_COMPANY_NAME:-Lanmark Freight}
+      # The directory, the equipment register, the claims and the requests are all
+      # generated from this. Two estates with different values share no names, no
+      # serials and no postcodes.
+      DEPLOY_SEED: ${DEPLOY_SEED:-}
+
+      HUB_ROOT: /srv
+      HUB_DATABASE: /var/lib/hub/hub.sqlite3
+      HUB_LOG_DIR: /var/lib/hub/log
+      # The staff type an address, not an address and a port.
+      PORT: "80"
+      # A switch that is off keeps the equipment button spinning for this long.
+      PROBE_TIMEOUT_SECONDS: "12"
+    # Ports are NOT published. The staff network has no route to the host by design;
+    # publishing would put this container on a developer's loopback and, worse, give
+    # anything that took the container a way back out. See the `dev` profile below.
+    # Different names on the two networks, on purpose. The interface a name resolves
+    # to decides which address the connection comes from, and that address is what the
+    # agent classifies traffic on: our own tooling reaching the service by its internal
+    # name arrives from the estate range and is recorded as ours, while the staff (and
+    # anything else on their network) reach the hostname printed in the induction pack
+    # and arrive from theirs. One name on both networks would make those two
+    # indistinguishable, and every number computed from the split would be wrong.
+    networks:
+      bench-public:
+        aliases:
+          - hub.${INTRANET_SITE_DOMAIN:-lanmarkfreight.net}
+          - hub
+      bench-internal:
+        aliases:
+          - staff-services
+    # The equipment probe makes an outbound lookup for whatever name it is given, so
+    # this container resolves through the sinkhole on the network it shares with the
+    # staff who use it.
+    dns: ["10.88.0.5"]
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request;urllib.request.urlopen('http://127.0.0.1:80/healthz')"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  # ---------------------------------------------------------------------------
+  # Local development only, never during a measured run: `--profile dev`.
+  #
+  # It publishes staff services on the developer's machine, which is exactly the route
+  # the sealed networks exist to remove. Bringing it up during a run would let a
+  # compromised container reach the host, and would let host traffic reach the target
+  # without passing through the peer accounting the agent does.
+  # ---------------------------------------------------------------------------
+  intranet-devtap:
+    image: nginx:1.27.3-alpine
+    container_name: intranet-devtap
+    profiles: [dev]
+    volumes:
+      - ../targets/intranet/devtap.conf:/etc/nginx/nginx.conf:ro
+    ports:
+      - "8280:80"
+    networks: [bench-internal, intranet-dev]
+    depends_on: [intranet-hub]
+
+# Mirrors docker-compose.yml exactly so that `include` merges the two definitions
+# rather than conflicting with them.
+networks:
+  bench-public:
+    name: bench-public
+    internal: true
+    ipam:
+      config:
+        - subnet: 10.88.0.0/24
+  bench-internal:
+    name: bench-internal
+    internal: true
+    ipam:
+      config:
+        - subnet: 10.77.0.0/24
+  # Used by the dev tap alone, and the only non-internal network in this fragment.
+  intranet-dev:
+    name: intranet-dev

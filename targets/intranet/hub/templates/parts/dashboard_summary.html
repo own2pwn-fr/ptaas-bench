@@ -1,0 +1,20 @@
+<ul class="tiles">
+  <li><span class="big">{{ pending }}</span> requests waiting on a decision</li>
+  <li><span class="big">{{ claims }}</span> open claims</li>
+  <li><span class="big">{{ kit }}</span> pieces of equipment signed out to you</li>
+  <li><span class="big">{{ approvals }}</span> approvals waiting on you</li>
+</ul>
+<div class="split">
+  <section id="notices-tile" hx-get="/parts/dashboard/notices" hx-trigger="load" hx-swap="innerHTML">
+    <p class="loading">Notices&hellip;</p>
+  </section>
+  <section id="balance-tile">
+    <button hx-get="/parts/dashboard/balance" hx-target="#balance-tile" hx-swap="innerHTML">Show your leave balance</button>
+  </section>
+</div>
+<!-- The queue is drawn when the reader scrolls to it: on a depot handheld the first
+     paint matters more than the list nobody has looked at yet. -->
+<section id="queue-tile" hx-get="/parts/leave/queue" hx-trigger="revealed once" hx-target="#queue-tile" hx-swap="innerHTML">
+  <p class="loading">Your leave&hellip;</p>
+</section>
+<div id="drawer"></div>

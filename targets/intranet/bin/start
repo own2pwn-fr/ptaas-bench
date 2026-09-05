@@ -1,0 +1,22 @@
+#!/bin/sh
+# Bring the estate up: seed the database on a cold container, then serve.
+set -e
+
+DB="${HUB_DATABASE:-/var/lib/hub/hub.sqlite3}"
+if [ ! -f "$DB" ]; then
+    /usr/local/bin/state-reset >/dev/null
+fi
+
+# One worker with a pool of threads: the database is a file, and serialising writes
+# through a single process is worth more here than a second core. The master binds the
+# port and then drops every worker to the service account.
+exec gunicorn \
+    --bind "0.0.0.0:${PORT:-80}" \
+    --user app --group app \
+    --workers 1 \
+    --threads 8 \
+    --worker-class gthread \
+    --timeout 30 \
+    --access-logfile - \
+    --error-logfile - \
+    hub:app

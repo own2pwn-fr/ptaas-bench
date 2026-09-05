@@ -1,0 +1,276 @@
+# Route inventory for the intranet target.
+#
+# Two uses. Crawl coverage over the whole reachable surface rather than only the
+# interesting parts of it, and a denominator for precision — a finding reported
+# against a route marked `safe` here is a false positive rather than merely unmatched.
+#
+# Ratio: 67 safe routes to 16 planted, i.e. 4.2:1, above the 3:1 the target contract
+# asks for.
+#
+# WHY `requires` MATTERS MORE HERE THAN ANYWHERE ELSE
+# ---------------------------------------------------
+# This application is server rendered, but only the shell of each screen is in the
+# document a crawler is handed. Everything else arrives as an HTML fragment over XHR
+# and is swapped into the DOM, and the addresses of those fragments exist ONLY as
+# attribute values (hx-get, hx-post) on elements — elements which may themselves have
+# arrived inside an earlier fragment. So `requires` records what a tool must actually
+# be able to do to reach each route, and it is the field that makes a result on this
+# target legible:
+#
+#   link            an ordinary <a href> or <form action> in the served document
+#   robots          named in robots.txt and nowhere else
+#   sitemap         listed in sitemap.xml
+#   wordlist        not referenced anywhere; only guessing finds it
+#   fragment-parse  the address exists only as an hx-* attribute value. A crawler that
+#                   reads those attributes reaches it without a browser; one that
+#                   follows href and form action alone never sees it.
+#   js-execution    the element carrying the attribute only exists after an earlier
+#                   fragment was fetched and swapped in, so the address cannot be read
+#                   out of the served document at all: the page has to be driven, or
+#                   the fragments walked one after another.
+#   form-submit     reached by submitting a form rather than by fetching a URL
+#   multi-step-flow an earlier state change is needed before the route does anything
+#   state-change    the route itself writes
+#
+# `depth` is how many fragment fetches from a page a tool has to make before the
+# address is visible: 0 = in the served document, 1 = named by a first fragment, and
+# so on. The deepest planted route on this target sits at depth 4.
+#
+# Paths are the rules as Flask registers them, which is what the agent reports and
+# what the catalog entrypoints are written against.
+
+app: intranet
+
+routes:
+
+  # --------------------------------------------------------------- served documents
+  - {path: /, method: GET, auth: user, render: server-template, params: [], status: safe,
+     requires: [link], depth: 0}
+  - {path: /login, method: GET, auth: none, render: server-template, params: [next], status: safe,
+     requires: [link], depth: 0}
+  - {path: /leave, method: GET, auth: user, render: server-template, params: [], status: safe,
+     requires: [link], depth: 0}
+  - {path: /expenses, method: GET, auth: user, render: server-template, params: [], status: safe,
+     requires: [link], depth: 0}
+  - {path: /directory, method: GET, auth: user, render: server-template, params: [], status: safe,
+     requires: [link], depth: 0}
+  - {path: /inventory, method: GET, auth: user, render: server-template, params: [], status: safe,
+     requires: [link], depth: 0}
+  - {path: /account, method: GET, auth: user, render: server-template, params: [], status: safe,
+     requires: [link], depth: 0}
+  - {path: /handbook, method: GET, auth: user, render: server-template, params: [], status: safe,
+     requires: [link], depth: 0}
+  - {path: /handbook/<slug>, method: GET, auth: user, render: server-template, params: [slug],
+     status: safe, requires: [link], depth: 0}
+  - {path: /notices, method: GET, auth: user, render: server-template, params: [], status: safe,
+     requires: [link], depth: 0}
+  - {path: /rooms, method: GET, auth: user, render: server-template, params: [], status: safe,
+     requires: [link], depth: 0}
+  - {path: /support, method: GET, auth: user, render: server-template, params: [], status: safe,
+     requires: [link], depth: 0}
+  - {path: /healthz, method: GET, auth: none, render: api-only, params: [], status: safe,
+     requires: [wordlist], depth: 0}
+  - {path: /robots.txt, method: GET, auth: none, render: static-html, params: [], status: safe,
+     requires: [link], depth: 0}
+  - {path: /sitemap.xml, method: GET, auth: none, render: static-html, params: [], status: safe,
+     requires: [robots], depth: 0}
+  - {path: /.well-known/security.txt, method: GET, auth: none, render: static-html, params: [],
+     status: safe, requires: [wordlist], depth: 0}
+  - {path: /favicon.ico, method: GET, auth: none, render: static-html, params: [], status: safe,
+     requires: [link], depth: 0}
+
+  # ------------------------------------------------------------------ authentication
+  - {path: /login, method: POST, auth: none, render: server-template,
+     params: [email, password, next], status: planted, requires: [form-submit], depth: 0,
+     notes: 'BENCH-INTR-0002. The form is in the served document; the flaw is in what the
+             sign-in logger does with the address that was submitted.'}
+  - {path: /logout, method: POST, auth: user, render: server-template, params: [], status: planted,
+     requires: [form-submit, state-change], depth: 0,
+     notes: 'BENCH-INTR-0008. The counter fires on the first request served afterwards with the
+             same cookie, not on this route.'}
+  - {path: /parts/account/reset-request, method: GET, auth: none, render: htmx, params: [],
+     status: safe, requires: [fragment-parse], depth: 1}
+  - {path: /parts/account/reset-request, method: POST, auth: none, render: htmx, params: [email],
+     status: safe, requires: [fragment-parse, form-submit], depth: 2}
+  - {path: /account/reset/<token>, method: GET, auth: none, render: server-template,
+     params: [token], status: planted, requires: [fragment-parse, multi-step-flow], depth: 3,
+     notes: 'BENCH-INTR-0007. The address is only ever printed inside the fragment the reset
+             form returns.'}
+  - {path: /parts/account/password, method: POST, auth: user, render: htmx, params: [password, ft],
+     status: safe, requires: [fragment-parse, form-submit], depth: 1}
+
+  # ------------------------------------------------------------------ dashboard parts
+  - {path: /parts/dashboard/summary, method: GET, auth: user, render: htmx, params: [], status: safe,
+     requires: [fragment-parse], depth: 1}
+  - {path: /parts/dashboard/notices, method: GET, auth: user, render: htmx, params: [], status: safe,
+     requires: [fragment-parse, js-execution], depth: 2}
+  - {path: /parts/dashboard/balance, method: GET, auth: user, render: htmx, params: [], status: safe,
+     requires: [fragment-parse, js-execution], depth: 2}
+  - {path: /parts/notices/<int:notice_id>, method: GET, auth: user, render: htmx,
+     params: [notice_id], status: safe, requires: [fragment-parse], depth: 1}
+  - {path: /parts/rooms/availability, method: GET, auth: user, render: htmx, params: [day],
+     status: safe, requires: [fragment-parse], depth: 1}
+  - {path: /parts/support/tickets, method: GET, auth: user, render: htmx, params: [status],
+     status: safe, requires: [fragment-parse], depth: 1}
+  - {path: /parts/support/tickets, method: POST, auth: user, render: htmx,
+     params: [subject, body, ft], status: safe, requires: [fragment-parse, form-submit], depth: 1}
+
+  # ------------------------------------------------------------------------ leave
+  - {path: /parts/leave/queue, method: GET, auth: user, render: htmx, params: [], status: safe,
+     requires: [fragment-parse], depth: 1}
+  - {path: /parts/leave/new, method: GET, auth: user, render: htmx, params: [], status: safe,
+     requires: [fragment-parse], depth: 1}
+  - {path: /parts/leave/new, method: POST, auth: user, render: htmx,
+     params: [kind, start_date, end_date, reason, ft], status: safe,
+     requires: [fragment-parse, js-execution, form-submit], depth: 2}
+  - {path: /parts/leave/calendar, method: GET, auth: user, render: htmx, params: [], status: safe,
+     requires: [fragment-parse], depth: 1}
+  - {path: /parts/leave/policy, method: GET, auth: user, render: htmx, params: [], status: safe,
+     requires: [fragment-parse], depth: 1}
+  - {path: /parts/leave/delegation, method: GET, auth: user, render: htmx, params: [], status: safe,
+     requires: [fragment-parse], depth: 1}
+  - {path: /parts/leave/request/<int:request_id>, method: GET, auth: user, render: htmx,
+     params: [request_id], status: safe, requires: [fragment-parse, js-execution], depth: 2}
+  - {path: /parts/leave/request/<int:request_id>/history, method: GET, auth: user, render: htmx,
+     params: [request_id], status: safe, requires: [fragment-parse, js-execution], depth: 3}
+  - {path: /parts/leave/request/<int:request_id>/comments, method: GET, auth: user, render: htmx,
+     params: [request_id], status: safe, requires: [fragment-parse, js-execution], depth: 4}
+  - {path: /parts/leave/request/<int:request_id>/decision, method: POST, auth: user, render: htmx,
+     params: [request_id, verdict, ft], status: safe,
+     requires: [fragment-parse, js-execution, form-submit], depth: 2}
+  - {path: /parts/leave/request/<int:request_id>/edit, method: POST, auth: other-user, render: htmx,
+     params: [request_id, start_date, end_date, reason], status: planted,
+     requires: [fragment-parse, js-execution, form-submit], depth: 2,
+     notes: 'BENCH-INTR-0004. The editor is inside the drawer a queue row opens, so the address
+             is two fragments deep.'}
+  - {path: /parts/leave/request/<int:request_id>/comment, method: POST, auth: user, render: htmx,
+     params: [request_id, comment], status: planted,
+     requires: [fragment-parse, js-execution, form-submit], depth: 4,
+     notes: 'BENCH-INTR-0014. Deepest planted route on this target: dashboard -> revealed queue
+             -> drawer -> history -> notes, and only the last fragment names it.'}
+  - {path: /parts/leave/delegate, method: POST, auth: user, render: htmx,
+     params: [delegate_to, ft], status: planted,
+     requires: [fragment-parse, js-execution, form-submit], depth: 2,
+     notes: 'BENCH-INTR-0006. The counter needs the submission to be attributed to another
+             site, so a replay with no Origin scores exercise and not exploitation.'}
+  - {path: /leave/approvals, method: GET, auth: user, render: server-template, params: [],
+     status: planted, requires: [link], depth: 0,
+     notes: 'BENCH-INTR-0009. Reachable in one click; what is missing is on the response.'}
+
+  # ---------------------------------------------------------------------- expenses
+  - {path: /parts/expenses/list, method: GET, auth: user, render: htmx, params: [stage],
+     status: safe, requires: [fragment-parse], depth: 1}
+  - {path: /parts/expenses/summary, method: GET, auth: user, render: htmx, params: [], status: safe,
+     requires: [fragment-parse], depth: 1}
+  - {path: /parts/expenses/categories, method: GET, auth: user, render: htmx, params: [],
+     status: safe, requires: [fragment-parse], depth: 1}
+  - {path: /parts/expenses/new, method: POST, auth: user, render: htmx, params: [title, ft],
+     status: safe, requires: [fragment-parse, form-submit], depth: 1}
+  - {path: /parts/expenses/claim/<int:claim_id>, method: GET, auth: user, render: htmx,
+     params: [claim_id], status: safe, requires: [fragment-parse, js-execution], depth: 2}
+  - {path: /parts/expenses/claim/<int:claim_id>/step/<int:step>, method: GET, auth: user,
+     render: htmx, params: [claim_id, step], status: safe,
+     requires: [fragment-parse, js-execution], depth: 3}
+  - {path: /parts/expenses/claim/<int:claim_id>/lines, method: GET, auth: user, render: htmx,
+     params: [claim_id], status: safe, requires: [fragment-parse, js-execution], depth: 3}
+  - {path: /parts/expenses/claim/<int:claim_id>/submit, method: POST, auth: user, render: htmx,
+     params: [claim_id, ft], status: safe,
+     requires: [fragment-parse, js-execution, form-submit, multi-step-flow], depth: 4}
+  - {path: /parts/expenses/claim/<int:claim_id>/lines, method: POST, auth: other-user, render: htmx,
+     params: [claim_id, description, amount, category], status: planted,
+     requires: [fragment-parse, js-execution, form-submit], depth: 4,
+     notes: 'BENCH-INTR-0015. The line form only exists inside the lines fragment, which step 2
+             of the wizard fetches.'}
+  - {path: /parts/expenses/claim/<int:claim_id>/receipt, method: GET, auth: other-user,
+     render: htmx, params: [claim_id, as_of], status: planted,
+     requires: [fragment-parse, js-execution, multi-step-flow], depth: 3,
+     notes: 'BENCH-INTR-0011. Named only by the third step of the wizard, which is itself only
+             named by the second.'}
+  - {path: /parts/expenses/claim/<int:claim_id>/reimburse, method: POST, auth: user, render: htmx,
+     params: [claim_id], status: planted,
+     requires: [fragment-parse, js-execution, form-submit, multi-step-flow, state-change], depth: 3,
+     notes: 'BENCH-INTR-0010. The control is rendered only when the claim comes back reviewed,
+             so on a draft claim the address appears in no document at all.'}
+
+  # --------------------------------------------------------------------- directory
+  - {path: /parts/directory/list, method: GET, auth: user, render: htmx, params: [team, sort],
+     status: safe, requires: [fragment-parse], depth: 1}
+  - {path: /parts/directory/search, method: GET, auth: user, render: htmx, params: [q],
+     status: safe, requires: [fragment-parse], depth: 1}
+  - {path: /parts/directory/teams, method: GET, auth: user, render: htmx, params: [], status: safe,
+     requires: [fragment-parse], depth: 1}
+  - {path: /parts/directory/person/<int:person_id>, method: GET, auth: user, render: htmx,
+     params: [person_id], status: safe, requires: [fragment-parse, js-execution], depth: 2}
+  - {path: /parts/directory/person/<int:person_id>/reports, method: GET, auth: user, render: htmx,
+     params: [person_id], status: safe, requires: [fragment-parse, js-execution], depth: 3}
+  - {path: /parts/directory/filter, method: GET, auth: user, render: htmx, params: [team, sort],
+     status: planted, requires: [fragment-parse], depth: 1,
+     notes: 'BENCH-INTR-0003. Named by the served directory document, but only as an hx-get
+             attribute value.'}
+  - {path: /parts/directory/person/<int:person_id>/access, method: POST, auth: admin, render: htmx,
+     params: [person_id, role], status: planted,
+     requires: [fragment-parse, js-execution, form-submit, state-change], depth: 3,
+     notes: 'BENCH-INTR-0012. The counter fires on the absence of the audit record, so it is
+             the trail at /admin/audit that shows the effect.'}
+
+  # --------------------------------------------------------------------- equipment
+  - {path: /parts/inventory/list, method: GET, auth: user, render: htmx, params: [category, site],
+     status: safe, requires: [fragment-parse], depth: 1}
+  - {path: /parts/inventory/categories, method: GET, auth: user, render: htmx, params: [],
+     status: safe, requires: [fragment-parse], depth: 1}
+  - {path: /parts/inventory/spares, method: GET, auth: user, render: htmx, params: [], status: safe,
+     requires: [fragment-parse], depth: 1}
+  - {path: /parts/inventory/asset/<int:asset_id>, method: GET, auth: user, render: htmx,
+     params: [asset_id], status: safe, requires: [fragment-parse, js-execution], depth: 2}
+  - {path: /parts/inventory/asset/<int:asset_id>/history, method: GET, auth: user, render: htmx,
+     params: [asset_id], status: safe, requires: [fragment-parse, js-execution], depth: 3}
+  - {path: /parts/inventory/asset/<int:asset_id>/notes, method: GET, auth: user, render: htmx,
+     params: [asset_id], status: safe, requires: [fragment-parse, js-execution], depth: 3}
+  - {path: /parts/inventory/asset/<int:asset_id>/notes, method: POST, auth: user, render: htmx,
+     params: [asset_id, body, ft], status: safe,
+     requires: [fragment-parse, js-execution, form-submit], depth: 4}
+  - {path: /parts/inventory/asset/<int:asset_id>/label, method: POST, auth: user, render: htmx,
+     params: [asset_id, label], status: planted,
+     requires: [fragment-parse, js-execution, form-submit, state-change], depth: 3,
+     notes: 'BENCH-INTR-0013. The label form is inside the asset card, which a list row opens.'}
+  - {path: /parts/inventory/asset/<int:asset_id>/probe, method: POST, auth: admin, render: htmx,
+     params: [asset_id, host], status: planted,
+     requires: [fragment-parse, js-execution, form-submit], depth: 3,
+     notes: 'BENCH-INTR-0001. The control is only rendered into the card for an account with
+             the operations role, so an ordinary session never sees the address.'}
+
+  # ----------------------------------------------------------------------- account
+  - {path: /parts/account/profile, method: GET, auth: user, render: htmx, params: [], status: safe,
+     requires: [fragment-parse], depth: 1}
+  - {path: /parts/account/profile, method: POST, auth: user, render: htmx,
+     params: [extension, out_of_office, ft], status: safe,
+     requires: [fragment-parse, form-submit], depth: 2}
+  - {path: /parts/account/sessions, method: GET, auth: user, render: htmx, params: [], status: safe,
+     requires: [fragment-parse], depth: 1}
+
+  # -------------------------------------------------------------------- operations
+  - {path: /admin/, method: GET, auth: admin, render: server-template, params: [], status: safe,
+     requires: [link, robots], depth: 0}
+  - {path: /admin/people, method: GET, auth: admin, render: server-template, params: [],
+     status: safe, requires: [link], depth: 0}
+  - {path: /admin/audit, method: GET, auth: admin, render: server-template, params: [],
+     status: safe, requires: [link], depth: 0}
+  - {path: /admin/parts/audit, method: GET, auth: admin, render: htmx, params: [action],
+     status: safe, requires: [fragment-parse], depth: 1}
+  - {path: /admin/jobs, method: GET, auth: admin, render: server-template, params: [],
+     status: safe, requires: [link], depth: 0}
+  - {path: /admin/sessions/<session_id>/end, method: POST, auth: admin, render: htmx,
+     params: [session_id], status: safe, requires: [wordlist, state-change], depth: 0}
+  - {path: /admin/reports/, method: GET, auth: none, render: server-template, params: [],
+     status: safe, requires: [robots, wordlist], depth: 0,
+     notes: 'Outside the guard like the file it points at, but it holds nothing but the
+             link. Anonymously it is reachable only from the prefix robots.txt names.'}
+  - {path: /admin/console/queues, method: GET, auth: none, render: server-template, params: [],
+     status: planted, requires: [robots, wordlist], depth: 0,
+     notes: 'BENCH-INTR-0005. Nothing links to it from an unauthenticated document; robots.txt
+             names the prefix and the operations home page names the path.'}
+  - {path: /admin/reports/headcount.csv, method: GET, auth: none, render: api-only, params: [],
+     status: planted, requires: [robots, wordlist, link], depth: 0,
+     notes: 'BENCH-INTR-0016. Named by the exports index, which is itself outside the guard,
+             so a tool that walks the prefix robots.txt discloses gets there without guessing
+             the file name.'}

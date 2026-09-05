@@ -7,3 +7,4 @@ include:
   - intranet.yml
   - corp.yml
   - legacy.yml
+  - blog.yml

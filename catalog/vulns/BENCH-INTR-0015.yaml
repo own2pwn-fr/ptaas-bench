@@ -1,0 +1,42 @@
+id: BENCH-INTR-0015
+title: Expense lines can be added to another employee's claim
+app: intranet
+component: web
+class: idor_write
+severity: high
+entrypoint:
+  method: POST
+  path: /parts/expenses/claim/<int:claim_id>/lines
+  auth: other-user
+  param: claim_id
+  param_in: path
+  default_value: '8822'
+  content_type: application/x-www-form-urlencoded
+discovery:
+  render: htmx
+  reachable_from:
+  - /expenses
+  - /parts/expenses/claim/8822/step/2
+  requires:
+  - js-execution
+  - multi-step-flow
+  difficulty: 4
+oracle:
+  kind: state
+  condition: 'The line editor checks that the claim exists and that it is still open, but not that it
+    belongs to the caller, so an employee can attach expense lines - and therefore money - to somebody
+    else''s claim. The counter moves when a line is committed to a claim whose claimant is not the authenticated
+    caller. Adding lines to one''s own claim, or posting to a closed claim where the write is refused,
+    never moves it.
+
+    '
+  poc: POST /parts/expenses/claim/8822/lines with the session of an employee who does not own claim 8822
+  signal: intra.claim.line.owner_mismatch
+tags:
+- htmx
+- fragment
+- authenticated
+- idor
+introduced: '2026-09-05'
+decoy_note: The line editor is shared by the employee wizard and the finance screen, and the finance screen
+  legitimately edits other people's claims, so the check sits in the wrong layer.

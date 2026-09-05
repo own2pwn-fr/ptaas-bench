@@ -1,0 +1,42 @@
+id: BENCH-INTR-0004
+title: Leave request editor accepts any request id regardless of who raised it
+app: intranet
+component: web
+class: idor_write
+severity: critical
+entrypoint:
+  method: POST
+  path: /parts/leave/request/<int:request_id>/edit
+  auth: other-user
+  param: request_id
+  param_in: path
+  default_value: '4102'
+  content_type: application/x-www-form-urlencoded
+discovery:
+  render: htmx
+  reachable_from:
+  - /leave
+  - /parts/leave/queue
+  requires:
+  - js-execution
+  - multi-step-flow
+  difficulty: 4
+oracle:
+  kind: state
+  condition: 'The editor loads the request by primary key and writes the submitted dates and reason straight
+    back, without ever comparing the row''s owner with the session''s staff number. The counter moves
+    when a write is committed to a row whose owner is not the authenticated caller and who is not that
+    caller''s approver - the record of another employee actually changed. Reading a foreign request, or
+    submitting an edit that the validator rejects before the write, never moves it.
+
+    '
+  poc: POST /parts/leave/request/4102/edit with the session of the employee who owns request 4101
+  signal: intra.leave.record.owner_mismatch
+tags:
+- htmx
+- fragment
+- authenticated
+- idor
+introduced: '2026-09-05'
+decoy_note: The editor was written for the my-requests page where the id always came from the employee's
+  own list, so nobody thought the id could be anything else.

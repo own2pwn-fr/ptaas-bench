@@ -1,0 +1,10 @@
+<h3>Notes</h3>
+<ul class="list">
+  {% for n in items %}<li><strong>{{ n.who }}</strong> <span class="muted">{{ n.created_at[:16].replace('T', ' ') }}</span><br>{{ n.body }}</li>
+  {% else %}<li>No notes yet.</li>{% endfor %}
+</ul>
+<form hx-post="/parts/inventory/asset/{{ asset.id }}/notes" hx-target="#asset-notes-{{ asset.id }}" hx-swap="innerHTML">
+  <input type="hidden" name="ft" value="{{ form_token() }}">
+  <label>Add a note<input name="body"></label>
+  <button type="submit">Add</button>
+</form>

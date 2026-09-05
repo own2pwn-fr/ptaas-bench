@@ -1,0 +1,8 @@
+{% extends "layout.html" %}
+{% block title %}Dashboard{% endblock %}
+{% block body %}
+<h1>Good morning, {{ me.display_name.split(' ')[0] }}</h1>
+<div id="summary" hx-get="/parts/dashboard/summary" hx-trigger="load" hx-swap="innerHTML">
+  <p class="loading">Loading your week&hellip;</p>
+</div>
+{% endblock %}

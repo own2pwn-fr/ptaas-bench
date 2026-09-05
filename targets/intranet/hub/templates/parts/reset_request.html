@@ -1,0 +1,13 @@
+<h2>Reset your password</h2>
+{% if issued %}
+<p class="ok">Link made for {{ person.display_name }}. There is no mail relay on the staff
+   network, so read it out to them and let them type it in:</p>
+<p class="code"><a href="/account/reset/{{ issued }}">/account/reset/{{ issued }}</a></p>
+{% elif unknown %}
+<p class="warn">No staff account with that address.</p>
+{% else %}
+<form hx-post="/parts/account/reset-request" hx-target="#reset" hx-swap="innerHTML">
+  <label>Staff address<input name="email" type="email" required></label>
+  <button type="submit">Make a link</button>
+</form>
+{% endif %}

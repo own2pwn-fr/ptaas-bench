@@ -1,0 +1,42 @@
+id: BENCH-INTR-0002
+title: Sign-in failures are written to the sign-in log without escaping
+app: intranet
+component: web
+class: log_injection
+severity: medium
+entrypoint:
+  method: POST
+  path: /login
+  auth: none
+  param: username
+  param_in: body
+  default_value: j.hollis@lanmarkfreight.net
+  content_type: application/x-www-form-urlencoded
+discovery:
+  render: server-template
+  reachable_from:
+  - /
+  - /login
+  requires:
+  - form-submit
+  difficulty: 1
+oracle:
+  kind: sink
+  condition: 'Every sign-in attempt appends one line to the flat sign-in log the depot''s overnight reconciliation
+    reads, formatted by concatenating the submitted account name into a fixed field layout. The counter
+    moves when one call to the writer produced more than one parseable record, i.e. the value carried
+    the field and record separators and the log now contains an entry nobody wrote. It is the shape of
+    the file after the write that is examined, never the shape of the input: a name containing an encoded
+    newline that the writer flattens produces one record and does not move the counter.
+
+    '
+  poc: POST /login with username=j.hollis@lanmarkfreight.net%0a2026-01-06T09:14:22Z INFO auth.signin ok
+    actor=s.varga@lanmarkfreight.net
+  signal: intra.audit.record.split
+tags:
+- form
+- logging
+- unauthenticated
+introduced: '2026-09-05'
+decoy_note: 'Sign-in logging predates the structured logger: it is still an f-string in the auth module
+  because it was written before the audit format had a schema.'

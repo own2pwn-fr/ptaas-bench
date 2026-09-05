@@ -1,0 +1,12 @@
+{% extends "layout.html" %}
+{% block title %}Notices{% endblock %}
+{% block body %}
+<h1>Notices</h1>
+<ul class="list">
+  {% for n in items %}
+  <li><a href="#" hx-get="/parts/notices/{{ n.id }}" hx-target="#notice" hx-swap="innerHTML">{{ n.title }}</a>
+      <span class="muted">{{ n.at[:10] }} &middot; {{ n.author }}</span></li>
+  {% endfor %}
+</ul>
+<div id="notice"></div>
+{% endblock %}

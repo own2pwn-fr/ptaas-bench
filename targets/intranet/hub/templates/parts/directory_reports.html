@@ -1,0 +1,4 @@
+<ul class="list">
+  {% for r in rows %}<li>{{ r.display_name }} &middot; {{ r.job_title }}</li>
+  {% else %}<li>Nobody reports to them.</li>{% endfor %}
+</ul>

@@ -1,0 +1,40 @@
+id: BENCH-INTR-0007
+title: Password reset links are derived from the staff number and a timestamp
+app: intranet
+component: web
+class: predictable_token
+severity: high
+entrypoint:
+  method: GET
+  path: /account/reset/<token>
+  auth: none
+  param: token
+  param_in: path
+  default_value: 10240006e3ac
+discovery:
+  render: server-template
+  reachable_from:
+  - /login
+  - /parts/account/reset-request
+  requires:
+  - form-submit
+  difficulty: 2
+oracle:
+  kind: state
+  condition: 'The reset link is verified by recomputing it from the staff number and the hour it was minted
+    rather than by looking it up, so every value in that shape is accepted whether or not the application
+    ever issued it. The counter moves when a reset link is accepted - a password-change session is opened
+    for the named account - for a value that is not in the table of links the application issued. Redeeming
+    a link that was genuinely issued, or presenting one that fails verification, never moves it.
+
+    '
+  poc: GET /account/reset/<staff number of another employee, hour suffix copied from a link issued to
+    you>
+  signal: intra.credential.token.unissued_accepted
+tags:
+- server-rendered
+- unauthenticated
+- crypto
+introduced: '2026-09-05'
+decoy_note: Stateless reset links were chosen so the two application workers would not need a shared store,
+  and the issued table was kept only to show the requester in support tickets.

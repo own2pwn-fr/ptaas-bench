@@ -1,0 +1,9 @@
+{% extends "layout.html" %}
+{% block title %}Scheduled exports{% endblock %}
+{% block body %}
+<h1>Scheduled exports</h1>
+<p>The payroll provider collects these over the private link. Nothing here is sent by mail.</p>
+<ul class="list">
+  <li><a href="/admin/reports/headcount.csv">headcount.csv</a> &mdash; every person, their manager and their band, written at 02:40.</li>
+</ul>
+{% endblock %}

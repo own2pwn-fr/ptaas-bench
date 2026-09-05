@@ -1,0 +1,25 @@
+<section class="panel" id="request-{{ row.id }}">
+  <h2>{{ row.kind }} &middot; {{ row.start_date }} to {{ row.end_date }}</h2>
+  <p class="muted">Raised by {{ row.owner_name }} on {{ row.created_at[:10] }} &middot; {{ row.status }}</p>
+  <p>{{ row.reason }}</p>
+
+  <form hx-post="/parts/leave/request/{{ row.id }}/edit" hx-target="#row-{{ row.id }}" hx-swap="outerHTML">
+    <label>First day<input name="start_date" value="{{ row.start_date }}"></label>
+    <label>Last day<input name="end_date" value="{{ row.end_date }}"></label>
+    <label>Reason<input name="reason" value="{{ row.reason }}"></label>
+    <button type="submit">Save changes</button>
+  </form>
+
+  {% if can_decide %}
+  <form hx-post="/parts/leave/request/{{ row.id }}/decision" hx-target="#row-{{ row.id }}" hx-swap="outerHTML">
+    <input type="hidden" name="ft" value="{{ form_token() }}">
+    <button name="verdict" value="approved">Approve</button>
+    <button name="verdict" value="refused">Refuse</button>
+  </form>
+  {% endif %}
+
+  <div id="history-{{ row.id }}" hx-get="/parts/leave/request/{{ row.id }}/history"
+       hx-trigger="revealed once" hx-swap="innerHTML">
+    <p class="loading">History&hellip;</p>
+  </div>
+</section>

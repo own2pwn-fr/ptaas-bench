@@ -1,0 +1,19 @@
+{% extends "layout.html" %}
+{% block title %}Queues{% endblock %}
+{% block body %}
+<h1>Queue console</h1>
+<table class="grid">
+  <thead><tr><th>Queue</th><th>Runs</th><th>Waiting</th></tr></thead>
+  <tbody>
+  {% for key, name, when in queues %}
+    <tr><td>{{ name }}</td><td>{{ when }}</td><td>{{ depth.get(key, 0) }}</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+<h2>Workers</h2>
+<ul class="list">
+  {% for w in workers %}<li>{{ w.hostname }} &middot; {{ w.site }} &middot; {{ w.status }}</li>{% endfor %}
+</ul>
+<p class="muted">Payroll export writes to the finance share. Ask the on-call engineer before
+   holding a queue.</p>
+{% endblock %}

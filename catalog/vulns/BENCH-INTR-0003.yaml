@@ -1,0 +1,41 @@
+id: BENCH-INTR-0003
+title: Directory filter chip renders the sort order into an unquoted attribute
+app: intranet
+component: web
+class: xss_attribute
+severity: medium
+entrypoint:
+  method: GET
+  path: /parts/directory/filter
+  auth: user
+  param: sort
+  param_in: query
+  default_value: az
+discovery:
+  render: htmx
+  reachable_from:
+  - /directory
+  - /parts/directory/list
+  requires:
+  - js-execution
+  difficulty: 3
+oracle:
+  kind: sink
+  condition: 'The chip fragment interpolates the requested sort order into an attribute that the template
+    leaves unquoted, so HTML-escaping the value does not keep it inside the attribute: a space ends it
+    and whatever follows becomes further attributes on the element. The counter moves when the rendered
+    fragment is parsed and the chip element carries attributes the template does not define - the element''s
+    shape changed, which is the effect. A value containing angle brackets or quotes that the escaper neutralises
+    renders one attribute and never moves it.
+
+    '
+  poc: GET /parts/directory/filter?team=Depot%20Operations&sort=az%20onmouseover=fetch(1)
+  signal: intra.render.attribute.escaped
+tags:
+- htmx
+- fragment
+- authenticated
+- xss
+introduced: '2026-09-05'
+decoy_note: The chip was hand-written for a hotfix when the design system component did not support a
+  dismiss button; the quotes were lost in the copy-paste and escaping made it look safe.

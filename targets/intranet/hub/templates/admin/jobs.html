@@ -1,0 +1,9 @@
+{% extends "layout.html" %}
+{% block title %}Overnight jobs{% endblock %}
+{% block body %}
+<h1>Overnight jobs</h1>
+<p>The queue console lives at <a href="/admin/console/queues">/admin/console/queues</a>.</p>
+<h2>Recent approvals activity</h2>
+<pre class="log">{% for line in recent %}{{ line }}
+{% endfor %}</pre>
+{% endblock %}

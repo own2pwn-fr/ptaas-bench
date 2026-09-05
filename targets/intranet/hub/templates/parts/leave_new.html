@@ -1,0 +1,10 @@
+<h2>Book time off</h2>
+{% if error %}<p class="warn">{{ error }}</p>{% endif %}
+<form hx-post="/parts/leave/new" hx-target="#queue" hx-swap="innerHTML">
+  <input type="hidden" name="ft" value="{{ form_token() }}">
+  <label>Kind<select name="kind">{% for k in kinds %}<option>{{ k }}</option>{% endfor %}</select></label>
+  <label>First day<input name="start_date" placeholder="2026-02-02"></label>
+  <label>Last day<input name="end_date" placeholder="2026-02-06"></label>
+  <label>Reason<input name="reason"></label>
+  <button type="submit">Send to your approver</button>
+</form>

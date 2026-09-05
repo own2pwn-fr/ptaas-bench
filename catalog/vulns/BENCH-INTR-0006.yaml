@@ -1,0 +1,43 @@
+id: BENCH-INTR-0006
+title: Approval delegation is committed without the form token the rest of the application uses
+app: intranet
+component: web
+class: csrf
+severity: medium
+entrypoint:
+  method: POST
+  path: /parts/leave/delegate
+  auth: user
+  param: delegate_to
+  param_in: body
+  default_value: r.achterberg@lanmarkfreight.net
+  content_type: application/x-www-form-urlencoded
+discovery:
+  render: htmx
+  reachable_from:
+  - /leave/approvals
+  - /parts/leave/delegation
+  requires:
+  - js-execution
+  - multi-step-flow
+  difficulty: 4
+oracle:
+  kind: state
+  condition: 'Mutating handlers verify a per-session form token; the delegation handler was added without
+    it and accepts whatever the session cookie authenticates, whichever site sent the form. The counter
+    moves when a delegation is actually committed by a request that carried no valid form token and whose
+    declared origin is not this application - a state change caused by a foreign page. A request carrying
+    the token, or one that fails validation before the commit, never moves it.
+
+    '
+  poc: 'POST /parts/leave/delegate with a session cookie, Origin: https://staff-notices.example, no form
+    token'
+  signal: intra.form.token.absent_commit
+tags:
+- htmx
+- fragment
+- authenticated
+- csrf
+introduced: '2026-09-05'
+decoy_note: Delegation was shipped for the summer holiday cover and the fragment that renders it predates
+  the token helper the other forms pull in from the layout.

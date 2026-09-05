@@ -1,0 +1,15 @@
+{% extends "layout.html" %}
+{% block title %}Sign in{% endblock %}
+{% block body %}
+<section class="panel narrow">
+  <h1>Sign in</h1>
+  {% if failed %}<p class="warn">Those details did not match an account.</p>{% endif %}
+  <form method="post" action="/login">
+    <label>Staff address<input type="email" name="email" value="{{ submitted }}" autocomplete="username" required></label>
+    <label>Password<input type="password" name="password" autocomplete="current-password" required></label>
+    <button type="submit">Sign in</button>
+  </form>
+  <p><a href="#" hx-get="/parts/account/reset-request" hx-target="#reset" hx-swap="innerHTML">Forgotten your password?</a></p>
+  <div id="reset"></div>
+</section>
+{% endblock %}

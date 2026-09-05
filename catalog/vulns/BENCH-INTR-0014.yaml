@@ -1,0 +1,43 @@
+id: BENCH-INTR-0014
+title: Approval comments are concatenated into the approvals log
+app: intranet
+component: web
+class: log_injection
+severity: medium
+entrypoint:
+  method: POST
+  path: /parts/leave/request/<int:request_id>/comment
+  auth: user
+  param: comment
+  param_in: body
+  default_value: Cover arranged with the depot.
+  content_type: application/x-www-form-urlencoded
+discovery:
+  render: htmx
+  reachable_from:
+  - /leave
+  - /parts/leave/request/4101
+  requires:
+  - js-execution
+  - multi-step-flow
+  difficulty: 4
+oracle:
+  kind: sink
+  condition: 'Comments left on a leave request are appended to the approvals log with the author and the
+    request id in a fixed field layout, built by concatenation. The counter moves when a single comment
+    produced more than one parseable log record, so the log now carries a decision line that no approver
+    wrote - the same effect as the sign-in logger, reached from a different screen and behind a session.
+    What is inspected is the log after the append, never the submitted text.
+
+    '
+  poc: POST /parts/leave/request/4101/comment with a comment containing a newline and a forged approval
+    line
+  signal: intra.approvals.note.record_split
+tags:
+- htmx
+- fragment
+- authenticated
+- logging
+introduced: '2026-09-05'
+decoy_note: The approvals log is read by the payroll export, so it was kept as flat text when the rest
+  of the application moved to the structured logger.

@@ -1,0 +1,40 @@
+id: BENCH-INTR-0016
+title: Headcount export is served from the administration prefix without a session
+app: intranet
+component: web
+class: forced_browsing
+severity: high
+entrypoint:
+  method: GET
+  path: /admin/reports/headcount.csv
+  auth: none
+  param: null
+  param_in: query
+  default_value: null
+discovery:
+  render: api-only
+  reachable_from:
+  - /robots.txt
+  - /sitemap.xml
+  requires:
+  - robots
+  difficulty: 2
+oracle:
+  kind: differential
+  condition: 'The nightly export writes a file of every employee with their manager, salary band and home
+    postcode, and the route that serves it is registered on the reports module rather than on the guarded
+    administration blueprint. The counter moves when the file has been served to a caller without the
+    operations role, anonymous included - the rows left the application. Requesting the directory of the
+    reports module, which returns nothing, does not move it.
+
+    '
+  poc: GET /admin/reports/headcount.csv with no session cookie
+  signal: intra.reports.export.unscoped
+tags:
+- api-only
+- unauthenticated
+- access-control
+- data-exposure
+introduced: '2026-09-05'
+decoy_note: The export is fetched by the payroll provider over the private link with no credential, which
+  is why nobody noticed it answers the staff network too.

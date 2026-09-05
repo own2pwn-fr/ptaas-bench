@@ -1,0 +1,6 @@
+<h2>This year by category</h2>
+<table class="grid">
+  <thead><tr><th>Category</th><th>Total</th></tr></thead>
+  <tbody>{% for r in rows %}<tr><td>{{ r.category }}</td><td>&pound;{{ '%.2f' % (r.total / 100) }}</td></tr>
+  {% else %}<tr><td colspan="2">Nothing yet.</td></tr>{% endfor %}</tbody>
+</table>

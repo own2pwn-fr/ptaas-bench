@@ -1,0 +1,31 @@
+{% extends "layout.html" %}
+{% block title %}Approvals{% endblock %}
+{% block body %}
+<h1>Approvals</h1>
+<p>Requests waiting on you, and the approvals other people have handed over.</p>
+<table class="grid">
+  <thead><tr><th>Who</th><th>Kind</th><th>From</th><th>To</th><th>Days</th><th></th></tr></thead>
+  <tbody>
+  {% for row in waiting %}
+    <tr id="row-{{ row.id }}">
+      <td>{{ row.owner_name }}</td><td>{{ row.kind }}</td><td>{{ row.start_date }}</td>
+      <td>{{ row.end_date }}</td><td>{{ row.days }}</td>
+      <td>
+        <form hx-post="/parts/leave/request/{{ row.id }}/decision" hx-target="#row-{{ row.id }}" hx-swap="outerHTML">
+          <input type="hidden" name="ft" value="{{ form_token() }}">
+          <button name="verdict" value="approved">Approve</button>
+          <button name="verdict" value="refused">Refuse</button>
+        </form>
+      </td>
+    </tr>
+  {% else %}
+    <tr><td colspan="6">Nothing is waiting on you.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+<h2>Handed to you</h2>
+<ul>
+  {% for row in delegated %}<li>{{ row.from_name }} since {{ row.created_at }}</li>
+  {% else %}<li>Nobody has handed you their approvals.</li>{% endfor %}
+</ul>
+{% endblock %}

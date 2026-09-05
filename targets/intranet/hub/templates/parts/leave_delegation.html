@@ -1,0 +1,14 @@
+<h2>Cover while you are away</h2>
+{% if saved %}<p class="ok">{{ saved.display_name }} can now decide your approvals.</p>{% endif %}
+<form hx-post="/parts/leave/delegate" hx-target="#leave-panel" hx-swap="innerHTML">
+  <label>Hand my approvals to
+    <select name="delegate_to">
+      {% for c in colleagues %}<option value="{{ c.email }}">{{ c.display_name }}</option>{% endfor %}
+    </select>
+  </label>
+  <button type="submit">Hand over</button>
+</form>
+<ul class="list">
+  {% for r in rows %}<li>{{ r.delegate_to }} since {{ r.created_at[:16].replace('T', ' ') }}</li>
+  {% else %}<li>Nobody is covering for you.</li>{% endfor %}
+</ul>

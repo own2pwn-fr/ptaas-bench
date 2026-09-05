@@ -1,0 +1,15 @@
+{% extends "layout.html" %}
+{% block title %}Leave{% endblock %}
+{% block body %}
+<h1>Leave</h1>
+<div class="row">
+  <button hx-get="/parts/leave/new" hx-target="#leave-panel" hx-swap="innerHTML">Book time off</button>
+  <button hx-get="/parts/leave/calendar" hx-target="#leave-panel" hx-swap="innerHTML">Team calendar</button>
+  <button hx-get="/parts/leave/policy" hx-target="#leave-panel" hx-swap="innerHTML">How this works</button>
+  <button hx-get="/parts/leave/delegation" hx-target="#leave-panel" hx-swap="innerHTML">Cover while away</button>
+  <a href="/leave/approvals">Approvals waiting on me</a>
+</div>
+<div id="leave-panel"></div>
+<div id="queue" hx-get="/parts/leave/queue" hx-trigger="load" hx-swap="innerHTML"></div>
+<div id="drawer"></div>
+{% endblock %}

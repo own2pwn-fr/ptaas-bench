@@ -1,0 +1,16 @@
+{% extends "layout.html" %}
+{% block title %}People{% endblock %}
+{% block body %}
+<h1>People and access</h1>
+<table class="grid">
+  <thead><tr><th>Staff number</th><th>Name</th><th>Address</th><th>Team</th><th>Role</th><th>Site</th></tr></thead>
+  <tbody>
+  {% for r in rows %}
+    <tr><td>{{ r.id }}</td>
+        <td><a href="#" hx-get="/parts/directory/person/{{ r.id }}" hx-target="#person" hx-swap="innerHTML">{{ r.display_name }}</a></td>
+        <td>{{ r.email }}</td><td>{{ r.team }}</td><td>{{ r.role }}</td><td>{{ r.site }}</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+<div id="person"></div>
+{% endblock %}

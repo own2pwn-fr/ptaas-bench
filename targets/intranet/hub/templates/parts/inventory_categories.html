@@ -1,0 +1,5 @@
+<ul class="list">
+  {% for r in rows %}
+  <li><a href="#" hx-get="/parts/inventory/list?category={{ r.category | urlencode }}" hx-target="#kit" hx-swap="innerHTML">{{ r.category }}</a> &middot; {{ r.items }}</li>
+  {% endfor %}
+</ul>

@@ -1,0 +1,19 @@
+{% extends "layout.html" %}
+{% block title %}Directory{% endblock %}
+{% block body %}
+<h1>Directory</h1>
+<input class="search" name="q" placeholder="Search by name, role or team"
+       hx-get="/parts/directory/search" hx-trigger="keyup changed delay:300ms" hx-target="#people" hx-swap="innerHTML">
+<div class="row">
+  {% for t in teams %}
+  <a href="#" hx-get="/parts/directory/filter?team={{ t.team | urlencode }}" hx-target="#chip" hx-swap="innerHTML">{{ t.team }} ({{ t.people }})</a>
+  {% endfor %}
+  <button hx-get="/parts/directory/teams" hx-target="#chip" hx-swap="innerHTML">All teams</button>
+  {% for s in ['az', 'za', 'team', 'site'] %}
+  <a href="#" hx-get="/parts/directory/filter?team=&amp;sort={{ s }}" hx-target="#chip" hx-swap="innerHTML">order: {{ s }}</a>
+  {% endfor %}
+</div>
+<div id="chip"></div>
+<div id="people" hx-get="/parts/directory/list" hx-trigger="load" hx-swap="innerHTML"></div>
+<div id="person"></div>
+{% endblock %}

@@ -1,0 +1,27 @@
+<section class="panel wizard" id="wizard-{{ claim.id }}">
+  <p class="muted">Step {{ step }} of 3 &middot; claim {{ claim.id }} &middot; {{ claim.stage }}</p>
+{% if step == 1 %}
+  <h2>What the claim is for</h2>
+  <p>{{ claim.title }}</p>
+  <p>Raised {{ claim.created_at[:10] }} by {{ claim.claimant_name }}.</p>
+  <button hx-get="/parts/expenses/claim/{{ claim.id }}/step/2" hx-target="#wizard-{{ claim.id }}" hx-swap="outerHTML">Next: the lines</button>
+{% elif step == 2 %}
+  <h2>Lines</h2>
+  <div id="claim-lines" hx-get="/parts/expenses/claim/{{ claim.id }}/lines" hx-trigger="load" hx-swap="innerHTML"></div>
+  <button hx-get="/parts/expenses/claim/{{ claim.id }}/step/3" hx-target="#wizard-{{ claim.id }}" hx-swap="outerHTML">Next: check and send</button>
+{% else %}
+  <h2>Check and send</h2>
+  <p>{{ lines | length }} line(s), total &pound;{{ '%.2f' % (total / 100) }}.</p>
+  <form hx-post="/parts/expenses/claim/{{ claim.id }}/submit" hx-target="#wizard-{{ claim.id }}" hx-swap="outerHTML">
+    <input type="hidden" name="ft" value="{{ form_token() }}">
+    <button type="submit">Send to your manager</button>
+  </form>
+  <button hx-get="/parts/expenses/claim/{{ claim.id }}/receipt" hx-target="#claim-panel" hx-swap="innerHTML">Receipt reference</button>
+  {% if claim.stage == 'reviewed' %}
+  <!-- Finance releases the money once the claim comes back reviewed. -->
+  <form hx-post="/parts/expenses/claim/{{ claim.id }}/reimburse" hx-target="#claim-panel" hx-swap="innerHTML">
+    <button type="submit">Mark as reimbursed</button>
+  </form>
+  {% endif %}
+{% endif %}
+</section>

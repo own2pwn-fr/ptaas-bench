@@ -1,0 +1,14 @@
+{% extends "layout.html" %}
+{% block title %}Audit trail{% endblock %}
+{% block body %}
+<h1>Audit trail</h1>
+<div class="row">
+  {% for action in ['auth.signin', 'auth.signout', 'leave.decision', 'leave.delegation', 'access.role', 'account.password', 'session.revoke'] %}
+  <a href="#" hx-get="/admin/parts/audit?action={{ action }}" hx-target="#trail" hx-swap="innerHTML">{{ action }}</a>
+  {% endfor %}
+  <a href="#" hx-get="/admin/parts/audit" hx-target="#trail" hx-swap="innerHTML">everything</a>
+</div>
+<div id="trail">
+  {% include "parts/audit_rows.html" %}
+</div>
+{% endblock %}

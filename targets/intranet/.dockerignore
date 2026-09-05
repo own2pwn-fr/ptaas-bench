@@ -1,0 +1,11 @@
+# Only the application, its dependency pins and the two scripts belong in the image.
+# Everything else here is the deployment's own tooling and must not be inside a
+# container that people sign in to.
+*
+!hub
+!bin
+!requirements.txt
+
+# Never, under any circumstances, from inside hub/.
+hub/**/__pycache__
+hub/**/*.pyc

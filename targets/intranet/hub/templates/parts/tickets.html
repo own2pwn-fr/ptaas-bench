@@ -1,0 +1,10 @@
+<h2>Your tickets{% if status %} ({{ status }}){% endif %}</h2>
+<div class="row">
+  {% for s in ['open', 'waiting', 'closed'] %}
+  <a href="#" hx-get="/parts/support/tickets?status={{ s }}" hx-target="#tickets" hx-swap="innerHTML">{{ s }}</a>
+  {% endfor %}
+</div>
+<ul class="list">
+  {% for t in items %}<li><strong>{{ t.subject }}</strong> <span class="muted">{{ t.queue }} &middot; {{ t.status }} &middot; {{ t.created_at[:10] }}</span><br>{{ t.body }}</li>
+  {% else %}<li>Nothing raised yet.</li>{% endfor %}
+</ul>

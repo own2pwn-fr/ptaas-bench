@@ -1,0 +1,12 @@
+<h2>Your details</h2>
+{% if saved %}<p class="ok">Saved.</p>{% endif %}
+<form hx-post="/parts/account/profile" hx-target="#account-panel" hx-swap="innerHTML">
+  <input type="hidden" name="ft" value="{{ form_token() }}">
+  <label>Extension<input name="extension" value="{{ person.extension }}"></label>
+  <label>Out of office note<input name="out_of_office" value="{{ person.out_of_office }}"></label>
+  <button type="submit">Save</button>
+</form>
+<ul class="list">
+  <li>{{ person.email }}</li><li>{{ person.team }} &middot; {{ person.site }}</li>
+  <li>Started {{ person.started_on }}</li>
+</ul>

@@ -1,0 +1,40 @@
+id: BENCH-INTR-0005
+title: Operations queue console is registered outside the administration guard
+app: intranet
+component: web
+class: forced_browsing
+severity: high
+entrypoint:
+  method: GET
+  path: /admin/console/queues
+  auth: none
+  param: null
+  param_in: query
+  default_value: null
+discovery:
+  render: server-template
+  reachable_from:
+  - /robots.txt
+  requires:
+  - robots
+  - wordlist
+  difficulty: 3
+oracle:
+  kind: differential
+  condition: 'Every page under the administration prefix is gated by a hook registered on the administration
+    blueprint. The queue console was added later as a standalone route with the same path prefix, so the
+    hook never runs for it and the page renders its job queues, worker hostnames and pending payroll exports
+    to anyone. The counter moves when the console has been rendered to a caller who does not hold the
+    operations role, including an anonymous one. A redirect to the sign-in page, which is what the guarded
+    pages do, never moves it.
+
+    '
+  poc: GET /admin/console/queues with no session cookie
+  signal: intra.console.access.unscoped
+tags:
+- server-rendered
+- unauthenticated
+- access-control
+introduced: '2026-09-05'
+decoy_note: The console was written during an incident and registered on the application directly so it
+  would work before the operations role existed; the role arrived, the route did not move.

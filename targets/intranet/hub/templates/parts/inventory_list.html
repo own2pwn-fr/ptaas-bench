@@ -1,0 +1,11 @@
+<table class="grid">
+  <thead><tr><th>Tag</th><th>Model</th><th>Category</th><th>Site</th><th>Held by</th><th>State</th></tr></thead>
+  <tbody>
+  {% for r in rows %}
+  <tr class="clickable" hx-get="/parts/inventory/asset/{{ r.id }}" hx-target="#asset" hx-swap="innerHTML">
+    <td>{{ r.tag }}</td><td>{{ r.model }}</td><td>{{ r.category }}</td><td>{{ r.site }}</td>
+    <td>{{ r.holder_name or 'unassigned' }}</td><td>{{ r.status }}</td>
+  </tr>
+  {% else %}<tr><td colspan="6">Nothing matches.</td></tr>{% endfor %}
+  </tbody>
+</table>
