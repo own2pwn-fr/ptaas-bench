@@ -39,6 +39,12 @@ class FakeDocker:
     """Implements exactly the surface of DockerClient that the harness uses."""
 
     started_at: dict[str, str] = field(default_factory=dict)
+    # service -> ExecResult (or a queue of them) for `docker compose exec`
+    exec_results: dict[str, Any] = field(default_factory=dict)
+    # container ref -> State.Health.Status
+    health: dict[str, str] = field(default_factory=dict)
+    # container ref -> the `docker inspect` payload the topology capture reads
+    containers: dict[str, Any] = field(default_factory=dict)
     # container id -> how many polls it stays "running" before exiting
     runs_for_polls: dict[str, int] = field(default_factory=dict)
     default_runs_for_polls: int = 10_000  # effectively "never exits on its own"
@@ -67,10 +73,25 @@ class FakeDocker:
 
     def compose_exec(self, service: str, argv, *, stdin=None, timeout=None):
         self.calls.append(("compose_exec", (service, list(argv))))
-        return ExecResult(["docker", "compose", "exec"], 0, "{}", "")
+        # Scripted per service, so a test can make the reset command fail, print a
+        # different digest each time (a non-deterministic reset), or print nothing.
+        scripted = self.exec_results.get(service)
+        if scripted is None:
+            return ExecResult(["docker", "compose", "exec"], 0, "{}", "")
+        if isinstance(scripted, list):
+            return scripted.pop(0) if len(scripted) > 1 else scripted[0]
+        return scripted
 
     def container_started_at(self, ref: str) -> str | None:
         return self.started_at.get(ref)
+
+    def container_health(self, ref: str) -> str:
+        return self.health.get(ref, "healthy")
+
+    def inspect(self, ref: str, *, kind: str = "container"):
+        if kind == "image":
+            return {"RepoDigests": [f"{ref}@sha256:fake"], "Id": f"sha256:id-{ref}"}
+        return self.containers.get(ref)
 
     # -- containers ------------------------------------------------------------
 
@@ -92,7 +113,7 @@ class FakeDocker:
         )
         self.calls.append(("run_detached", name))
         return ContainerHandle(
-            container_id=name, argv=argv, image=image, image_digest=f"sha256:fake-{image}"
+            container_id=name, argv=argv, image=image, image_digest=f"{image}@sha256:fake"
         )
 
     def is_running(self, container_id: str) -> bool:
@@ -115,12 +136,16 @@ class FakeDocker:
     def close_logs(self, handle, *, timeout: float = 15) -> None:
         self.calls.append(("close_logs", handle.container_id))
 
-    def run_capture(self, image, args, *, entrypoint=None, network="none", timeout=180,
-                    allow_pull=True, build_spec=None, context_root=None):
+    def run_capture(self, image, args, *, entrypoint=None, network="none", volumes=(),
+                    env=None, timeout=180, allow_pull=True, build_spec=None,
+                    context_root=None):
+        self.calls.append(("run_capture", (image, list(args), network)))
         return ExecResult(["docker", "run", "--rm"], 0, "FakeTool 1.2.3\n", "")
 
     def image_digest(self, image: str) -> str:
-        return f"sha256:fake-{image}"
+        # Shaped like a real RepoDigests[0], because the run record's whole claim is
+        # that the digest it prints could be fed back to `docker run`.
+        return f"{image}@sha256:fake"
 
     def ensure_image(self, image: str, **kwargs) -> str:
         return self.image_digest(image)
@@ -151,3 +176,30 @@ def json_response(payload: dict[str, Any], status: int = 200) -> Response:
     import json
 
     return Response(status, json.dumps(payload))
+
+
+def reset_ok(digest: str = "sha256:seeded-1") -> ExecResult:
+    """What a conforming /usr/local/bin/state-reset prints."""
+    return ExecResult(["docker", "compose", "exec"], 0, f"{digest}\n", "")
+
+
+def container_inspect(
+    name: str,
+    *,
+    image: str = "nginx:1.21.6-alpine",
+    addresses: dict[str, str] | None = None,
+    started_at: str = "2026-09-05T18:01:00.000000000Z",
+) -> dict[str, Any]:
+    """A `docker inspect` payload with the fields the topology capture reads."""
+    return {
+        "Name": f"/{name}",
+        "Image": f"sha256:id-{image}",
+        "Config": {"Image": image},
+        "State": {"Running": True, "StartedAt": started_at, "Health": {"Status": "healthy"}},
+        "NetworkSettings": {
+            "Networks": {
+                network: {"IPAddress": ip}
+                for network, ip in (addresses or {"bench-public": "10.88.0.3"}).items()
+            }
+        },
+    }

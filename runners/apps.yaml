@@ -1,84 +1,145 @@
 # Target registry for the harness.
 #
 # This file is the contract between runners/ and targets/: the orchestrator needs to
-# know, for every application, which compose services to restart, which URL to point
-# a scanner at, and where the control plane (seed/state) lives. Nothing here is
-# discovered at run time on purpose -- a harness that guesses the target list is a
-# harness that silently scans seven of the eight applications.
+# know, for every application, which compose service owns its state, how to reset it,
+# and the two URLs below. Nothing is discovered at run time on purpose -- a harness
+# that guesses the target list is a harness that silently scans seven of the eight
+# applications and reports the eighth as clean.
 #
-# The URLs are written from inside the Docker networks: `http://shopfront:3000` is
-# what the tool container resolves on bench-public, and what the collector container
-# resolves on bench-internal. They are deliberately not localhost URLs; nothing is
-# published to the host (see docker-compose.yml).
+# THE TARGET OWNS ITS ADDRESS, THIS FILE OWNS THE PLUMBING
+# The customer-facing hostname and the seeded content are derived per deployment from
+# DEPLOY_SEED, so a URL written here is correct for exactly one deployment and
+# silently wrong for the next -- and wrong looks exactly like a tool that found
+# nothing. The base URL therefore comes from targets/<app>/bench-credentials.yaml,
+# which the target generates from the same seed. A `base_url` below is a FALLBACK for
+# a target that has not landed yet; the moment its file exists, the file wins, and the
+# run record says which of the two was used.
 #
-# `services` must match the service names in compose/<app>.yml. When a target lands,
-# the only thing to change here is that list and the port.
+# TWO URLS, AND USING THE WRONG ONE CORRUPTS THE SCORE
+#
+#   base_url      what the TOOL uses: the customer-facing name on bench-public,
+#                 normally supplied by the target's own credentials file.
+#   internal_url  what the HARNESS uses: the same application by its internal name.
+#                 Harness-owned, because it is a compose service name rather than
+#                 anything seed-derived.
+#                 The collector and the target SDKs classify traffic as the
+#                 platform's own by SOURCE ADDRESS -- never by a header, which a tool
+#                 could see through any reflection or verbose error. Harness traffic
+#                 (the logins performed for scanners that cannot log themselves in)
+#                 therefore goes through the dual-homed sinkhole and must arrive on
+#                 the internal side, or it is scored as the tool's crawl coverage.
+#
+# There are no published host ports. A target is reached by service name, from inside
+# the networks; publishing would put a target on a developer's loopback and give
+# anything that compromised it a route back to the host.
+#
+# RESET IS A COMMAND, NOT A ROUTE (targets/target-contract.yaml)
+#   reset_service     the compose service to `docker compose exec` into
+#   reset_command     default /usr/local/bin/state-reset; idempotent, exits non-zero
+#                     on failure, prints a one-line state digest
+#   restart_services  containers restarted before that command runs. Only for state
+#                     that lives outside the application process: a poisoned proxy
+#                     cache is in the proxy's memory and no script inside the origin
+#                     can flush it.
 
 version: 1
 
 platform:
-  compose_project: ptaas-bench
-  # Relative paths are resolved from this file; absolute is safer in CI.
+  # Overridable per deployment; it appears in container names and in /etc/hostname
+  # inside every target, so the default must stay unremarkable.
+  compose_project: ${COMPOSE_PROJECT_NAME:-platform-edge}
   compose_file: docker-compose.yml
-  collector_service: collector
-  collector_url: http://collector:8900
+  # Control-plane calls are made by executing inside this service and talking to its
+  # loopback: run management and event export answer 404 to every other source.
+  collector_service: otel-collector
+  collector_url: http://127.0.0.1:8900
+  # Harness traffic aimed at a target is made from here. It is dual-homed and its
+  # address is what both the collector and the target SDKs treat as synthetic.
+  platform_client_service: resolver
   network: bench-public
 
 apps:
+  # ---------------------------------------------------------------------------
+  # LANDED. Matches compose/edge.yml and targets/edge/.
+  # ---------------------------------------------------------------------------
+  edge:
+    services: [edge-nginx, edge-haproxy, edge-varnish, edge-origin]
+    # No base_url: targets/edge/bench-credentials.yaml carries it.
+    # nginx also carries an internal alias, which is how our own traffic arrives
+    # inside 10.77.0.0/24 -- the range the origin treats as its operator's tooling.
+    internal_url: http://nginx
+    reset_service: edge-origin
+    # Every flaw here is a disagreement between two HTTP parsers, and two of them
+    # persist in Varnish's cache rather than in the origin. Restarting the cache is
+    # the only way to clear a poisoned entry.
+    restart_services: [edge-varnish]
+    health_services: [edge-origin, edge-varnish]
+    notes: >
+      Proxy chain, no application logic. The tool must enter through the front door:
+      every oracle depends on knowing which hops a request passed through.
+
+  # ---------------------------------------------------------------------------
+  # FORWARD CONTRACT. These targets have not landed. Service names, ports and the
+  # internal aliases below are proposals, and the target's compose fragment wins.
+  # Each will ship targets/<app>/bench-credentials.yaml, which then supplies the
+  # base URL and the identities; the `base_url` lines here are placeholders that
+  # exist only so `--dry-run` works before a target lands, and preflight refuses to
+  # open a real run against an application whose credentials file is missing.
+  # ---------------------------------------------------------------------------
   shopfront:
     services: [shopfront-web, shopfront-api, shopfront-db]
-    base_url: http://shopfront-web:3000
-    # The React SPA is served by shopfront-web; the API it calls is the same origin
-    # through a path prefix, so one base_url covers both.
-    openapi_url: http://shopfront-web:3000/api/openapi.json
-    graphql_url: http://shopfront-web:3000/graphql
-    control_token: ${BENCH_CONTROL_TOKEN}
+    base_url: http://www.${SHOPFRONT_SITE_DOMAIN:-kestrelgoods.example}
+    internal_url: http://shopfront-web:3000
+    reset_service: shopfront-api
+    health_services: [shopfront-api, shopfront-db]
+    openapi_url: http://www.${SHOPFRONT_SITE_DOMAIN:-kestrelgoods.example}/api/openapi.json
+    graphql_url: http://www.${SHOPFRONT_SITE_DOMAIN:-kestrelgoods.example}/graphql
     notes: Reference SPA. Nothing in the initial HTML; JS-blind crawlers score ~0 here.
 
   admin:
     services: [admin-web, admin-api, admin-db, admin-ldap]
     base_url: http://admin-web:8080
+    internal_url: http://admin-api:8080
+    reset_service: admin-api
+    health_services: [admin-api, admin-db]
     openapi_url: http://admin-web:8080/v3/api-docs
-    control_token: ${BENCH_CONTROL_TOKEN}
     notes: Angular SPA over Spring Boot. Everything is behind a login.
 
   blog:
     services: [blog-web, blog-api, blog-mongo, blog-redis]
     base_url: http://blog-web:8000
+    internal_url: http://blog-api:8000
+    reset_service: blog-api
+    health_services: [blog-api, blog-mongo]
     openapi_url: http://blog-web:8000/openapi.json
-    control_token: ${BENCH_CONTROL_TOKEN}
 
   legacy:
-    # No ":80" anywhere: ZAP's context matching fails on a URL that spells out the
-    # default port. AppSpec strips it too, so a slip in this file is not fatal.
     services: [legacy-web, legacy-db]
     base_url: http://legacy-web
-    control_token: ${BENCH_CONTROL_TOKEN}
+    internal_url: http://legacy-web
+    reset_service: legacy-web
+    health_services: [legacy-web, legacy-db]
     notes: Server-rendered PHP. The one target every scanner should do well on.
 
   corp:
     services: [corp-web, corp-db]
     base_url: http://corp-web:8080
-    control_token: ${BENCH_CONTROL_TOKEN}
+    internal_url: http://corp-web:8080
+    reset_service: corp-web
+    health_services: [corp-web, corp-db]
 
   intranet:
     services: [intranet-web]
     base_url: http://intranet-web:5000
-    control_token: ${BENCH_CONTROL_TOKEN}
+    internal_url: http://intranet-web:5000
+    reset_service: intranet-web
+    health_services: [intranet-web]
     notes: HTMX fragments over XHR. Neither classic nor SPA crawling handles it well.
-
-  edge:
-    services: [edge-nginx, edge-haproxy, edge-varnish, edge-origin]
-    base_url: http://edge-nginx
-    # The proxy chain has no application and therefore no seed/state endpoints of its
-    # own: the origin serves them. Reset is still a real restart of all four hops,
-    # because cache poisoning findings persist in Varnish, not in a database.
-    control_url: http://edge-origin:8080
-    control_token: ${BENCH_CONTROL_TOKEN}
 
   infra:
     services: [infra-web, infra-redis, infra-mongo, infra-elastic]
     base_url: http://infra-web
-    control_url: http://infra-web
-    control_token: ${BENCH_CONTROL_TOKEN}
+    internal_url: http://infra-web
+    reset_service: infra-web
+    health_services: [infra-web]
     notes: Leftover artefacts and unauthenticated datastores. The floor every scanner should clear.

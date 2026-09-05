@@ -98,10 +98,27 @@ def test_logged_out_marker_also_fails_verification():
         establish(http, creds)
 
 
-def test_credentials_without_a_verify_url_are_rejected():
+def test_the_login_response_itself_verifies_when_there_is_no_verify_url():
+    """The target contract carries indicators but no verification URL: for a normal
+    login the proof is in the response the login returned."""
+    http = FakeHttp({LOGIN: Response(200, "<p>Welcome back, jdoe</p>", cookies=["sid=abc"])})
+    session = establish(http, form_creds(verify_url=None, logged_in_regex="Welcome back"))
+    assert session.verified
+    assert "the login response" in session.detail
+    # And it did not invent a URL to fetch.
+    assert [url for _, url in http.requests].count(LOGIN) == 2  # page GET + login POST
+
+
+def test_a_login_response_missing_the_indicator_is_still_a_failure():
+    http = FakeHttp({LOGIN: Response(200, "Those details did not match", cookies=["sid=abc"])})
+    with pytest.raises(LoginError, match="did not verify"):
+        establish(http, form_creds(verify_url=None, logged_in_regex="Welcome back"))
+
+
+def test_credentials_with_nothing_to_verify_against_are_rejected():
     http = FakeHttp({LOGIN: Response(200, "", cookies=["sid=abc"])})
-    with pytest.raises(LoginError, match="verify_url is required"):
-        establish(http, form_creds(verify_url=None))
+    with pytest.raises(LoginError, match="nothing to verify"):
+        establish(http, form_creds(verify_url=None, logged_in_regex=None))
 
 
 def test_non_strict_mode_records_the_doubt_instead_of_hiding_it():
@@ -111,7 +128,7 @@ def test_non_strict_mode_records_the_doubt_instead_of_hiding_it():
     })
     session = establish(http, form_creds(), strict=False)
     assert session.verified is False
-    assert "verify" in session.detail
+    assert "verified against" in session.detail
 
 
 def test_the_session_summary_never_carries_the_password():

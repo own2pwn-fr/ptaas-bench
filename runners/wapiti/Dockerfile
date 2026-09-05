@@ -4,7 +4,7 @@
 # the side benefit that the version is pinned in the repository rather than in a
 # floating tag.
 #
-#   docker build -t ptaas-bench/wapiti:3.3.2 runners/wapiti
+#   docker build -t local/wapiti:3.3.2 runners/wapiti
 #
 # (the orchestrator does this for you when tools.yaml carries the build stanza)
 FROM python:3.13-slim
@@ -21,6 +21,6 @@ RUN apt-get update \
 # The run directory is chmod 0777 by the harness for exactly this reason.
 RUN useradd --create-home --uid 1001 wapiti
 USER wapiti
-WORKDIR /bench
+WORKDIR /work
 
 ENTRYPOINT ["wapiti"]

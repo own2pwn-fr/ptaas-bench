@@ -25,18 +25,15 @@ from .._lib.driver import BaseDriver, Invocation, RunContext, write_text
 from .._lib.findings import NormaliseResult
 from .._lib.normalise import CweTable, normalise_zap
 
-# One user entry per context; the name is referenced by the spider/ascan jobs.
-USER_NAME = "bench-user"
+# One user entry per context; the name is referenced by the spider/ascan jobs. It
+# lands in the plan file, which is mounted inside the tool container, and in ZAP's
+# own report -- so it is an ordinary account label and names nothing.
+USER_NAME = "primary"
 
-# The target control plane must never be crawled or attacked: it can reset the app
-# mid-scan. It is meant to be bound to bench-internal only; excluding it here is the
-# second lock on that door.
-CONTROL_PATH_RE = r".*/__bench__/.*"
 
 
 class ZapDriver(BaseDriver):
     key = "zap"
-    container_workdir = "/bench"
     version_command = ["zap.sh", "-cmd", "-version"]
 
     # -- planning ---------------------------------------------------------------
@@ -203,7 +200,9 @@ class ZapDriver(BaseDriver):
                     "template": "traditional-json",
                     "reportDir": f"{self.container_workdir}/raw",
                     "reportFile": report_file,
-                    "reportTitle": f"ptaas-bench {ctx.tool.key}/{ctx.profile} {app.key}",
+                    # No project name in the title: this report is written into the
+                    # directory the tool itself can read.
+                    "reportTitle": f"{app.key} ({ctx.profile})",
                 },
                 # Everything, including informational: the scoring engine decides what
                 # counts, and a driver that pre-filters is a driver that hides false
@@ -229,7 +228,12 @@ class ZapDriver(BaseDriver):
         }
 
     def _exclude_paths(self, app: AppSpec, creds: Credentials | None) -> list[str]:
-        excludes = list(app.exclude_paths) + [CONTROL_PATH_RE]
+        # Only the logout, and whatever the target itself declares out of scope.
+        # There is no control-plane path to exclude any more: reset is a command
+        # inside the container, so there is nothing on the wire to name -- and naming
+        # it in a plan file that ships inside the tool's own mount would have been a
+        # tell in itself.
+        excludes = list(app.exclude_paths)
         for path in (creds.logout_paths if creds else []):
             excludes.append(f".*{path}.*")
         return excludes

@@ -56,8 +56,10 @@ DEFAULT_WORDLIST = "/usr/share/skipfish/dictionaries/complete.wl"
 FALLBACK_WORDLIST = "/usr/share/skipfish/dictionaries/minimal.wl"
 
 # Fixed, so two runs of the same version against the same target explore in the same
-# order. skipfish's crawl is randomised from this seed.
-SCAN_SEED = "0x7074616173"
+# order. skipfish's crawl and its injected markers are derived from this seed, so it
+# is an arbitrary constant rather than anything spelling out a word: the markers end
+# up in the target's logs.
+SCAN_SEED = "0x5c8f2a11"
 
 
 class SkipfishDriver(BaseDriver):
@@ -83,7 +85,7 @@ class SkipfishDriver(BaseDriver):
                 "-o",
                 out_dir,
                 "-W",
-                "/tmp/bench.wl",
+                "/tmp/wordlist.wl",
                 # Quiet: skipfish's live UI expects a TTY and floods the log file.
                 "-u",
                 "-q",
@@ -120,8 +122,8 @@ class SkipfishDriver(BaseDriver):
             # not one anybody should run.
             script = (
                 f"set -e; "
-                f"if [ -f {shlex.quote(wordlist)} ]; then cp {shlex.quote(wordlist)} /tmp/bench.wl; "
-                f"else cp {shlex.quote(FALLBACK_WORDLIST)} /tmp/bench.wl; fi; "
+                f"if [ -f {shlex.quote(wordlist)} ]; then cp {shlex.quote(wordlist)} /tmp/wordlist.wl; "
+                f"else cp {shlex.quote(FALLBACK_WORDLIST)} /tmp/wordlist.wl; fi; "
                 f"exec {shlex.join(scan)}"
             )
 
@@ -137,9 +139,10 @@ class SkipfishDriver(BaseDriver):
         return invocations
 
     def _exclusions(self, ctx: RunContext, app: Any) -> list[str]:
-        # -X blacklists a substring of the URL. The control plane and the logout
-        # endpoint are the two things a scanner must never reach.
-        args = ["-X", "/__bench__"]
+        # -X blacklists a substring of the URL. The logout is the one thing a scanner
+        # must not reach: it would spend the rest of the run as an anonymous user
+        # while still being reported as authenticated.
+        args: list[str] = []
         creds = ctx.creds_for(app.key)
         for path in (creds.logout_paths if creds else []):
             args += ["-X", path]

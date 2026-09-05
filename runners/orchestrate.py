@@ -37,10 +37,21 @@ budget, the reset evidence, the harness commit and both timestamps.
 **Authenticated scans are actually authenticated.** Each tool is given credentials
 in its own dialect, the harness verifies the session before the run starts, and it
 refuses to proceed with an unverified session rather than publishing an anonymous
-scan as an authenticated one.
+scan as an authenticated one. The harness's own login traffic goes through the
+platform's sinkhole so that it arrives from an address both the collector and the
+target SDKs classify as synthetic; sent from anywhere else it would be scored as the
+tool's crawl coverage.
+
+**Attribution does not rest on inference.** Targets are dual-homed, and the address
+the collector sees for a correlation hint (bench-internal) is not the address the
+sinkhole sees for the callback (bench-public). The orchestrator is the only component
+that can see both, so at run open it inspects every target container and hands the
+collector the real map. Anything cached across runs is wrong, because the reset path
+restarts containers and docker reassigns addresses.
 
 Exit codes: 0 success; 1 usage or configuration error; 2 target reset could not be
-verified; 3 authentication failed; 4 the tool produced no report; 5 scoring failed.
+verified; 3 authentication failed; 4 the tool produced no report; 5 scoring failed;
+6 preflight refused the run.
 """
 
 from __future__ import annotations
@@ -70,7 +81,14 @@ from runners._lib.findings import NormaliseResult
 from runners._lib.internal_http import DirectHttp, ExecHttp, HttpError
 from runners._lib.login import LoginError, Session, establish
 from runners._lib.normalise import CweTable, default_table
+from runners._lib.preflight import PreflightError, preflight
 from runners._lib.reset import ResetError, TargetResetter, reset_targets
+from runners._lib.topology import (
+    AppTopology,
+    address_payload,
+    duplicate_addresses,
+    inspect_apps,
+)
 
 log = logging.getLogger("bench.runners")
 
@@ -82,6 +100,7 @@ EXIT_RESET = 2
 EXIT_AUTH = 3
 EXIT_NO_REPORT = 4
 EXIT_SCORE = 5
+EXIT_PREFLIGHT = 6
 
 
 # --------------------------------------------------------------------------------
@@ -160,13 +179,26 @@ class Orchestrator:
             project=self.config.compose_project,
             dry_run=args.dry_run,
         )
-        http = (
-            DirectHttp()
-            if args.collector_transport == "direct"
-            else ExecHttp(self.docker, self.config.collector_service)
+        direct = args.collector_transport == "direct"
+        # Two transports, because the source address of a request decides how it is
+        # classified. Control-plane calls must come from the collector's own loopback
+        # (everything else gets 404); target-facing calls must come from the
+        # platform's own range (everything else is scored as the tool's traffic).
+        control_http = DirectHttp() if direct else ExecHttp(self.docker, self.config.collector_service)
+        self.target_http = (
+            DirectHttp() if direct else ExecHttp(self.docker, self.config.platform_client_service)
         )
-        self.http = http
-        self.collector = CollectorClient(http, args.collector_url or self.config.collector_url)
+        self.http = control_http
+        self.collector = CollectorClient(
+            control_http, args.collector_url or self.config.collector_url
+        )
+        self.resetter: Any = None
+        self.topology: dict[str, AppTopology] = {}
+        self.preflight_report: Any = None
+        # The target owns its address: the base URL comes from the file the target
+        # writes at seed time, because a hostname derived from DEPLOY_SEED is correct
+        # for exactly one deployment and silently wrong for the next.
+        self.url_fallbacks = self.config.resolve_urls()
         self.apps = self.config.select_apps(args.app)
         self.tool = self._tool_spec()
         self.driver = load_driver(args.tool)
@@ -232,6 +264,7 @@ class Orchestrator:
         except ResetError as exc:
             log.error("%s", exc)
             return EXIT_RESET
+        digests_before = {o.app: o.state_digest for o in resets if o.state_digest}
 
         # 2. Log in, and prove that too. Deliberately before the run is opened, so
         #    the harness's own login traffic is never attributed to the tool.
@@ -246,7 +279,51 @@ class Orchestrator:
         if not self.args.skip_version_probe:
             version = self._probe_version(profile)
 
-        # 4. Open the run. From here on, every request the targets see belongs to
+        # 4. Preparation. The tool network is sealed, so anything a tool needs to
+        #    fetch from the internet -- nuclei's templates above all -- is fetched
+        #    now, on a network with egress, and recorded. A tool that silently failed
+        #    to update and fell back to a stale corpus of checks would produce a
+        #    meaningless data point published as a real one.
+        preparation = self._prepare(profile)
+        preparation_ok = all(p.ok for p in preparation)
+
+        # 5. The address map. After the reset (which restarts containers, and docker
+        #    reassigns addresses when it does) and before the run opens, because it
+        #    must be true for exactly this run.
+        self.topology = inspect_apps(self.docker, self.apps)
+        for app_key, digest in digests_before.items():
+            if app_key in self.topology:
+                self.topology[app_key].state_digest_before = digest
+        clashes = duplicate_addresses(self.topology)
+        if clashes:
+            # Not fatal, because it can be a legitimate shared sidecar, but a blind
+            # finding involving one of these addresses cannot be attributed safely.
+            log.error(
+                "address(es) claimed by more than one application: %s. Out-of-band "
+                "attribution is ambiguous for those and any blind finding involving "
+                "them should not be published.",
+                clashes,
+            )
+
+        # 6. Preflight. Every check here guards a failure mode that produces a
+        #    plausible-looking empty result rather than an error.
+        report = preflight(
+            self.config,
+            self.apps,
+            self.docker,
+            tool_image=self.tool.image_ref,
+            topology={k: t.addresses for k, t in self.topology.items()},
+            allow_pull=not self.args.no_pull,
+            check_dns=not self.args.skip_dns_check,
+        )
+        self.preflight_report = report
+        try:
+            report.raise_if_failed()
+        except PreflightError as exc:
+            log.error("%s", exc)
+            return EXIT_PREFLIGHT
+
+        # 7. Open the run. From here on, every request the targets see belongs to
         #    this tool.
         run = self.collector.open_run(
             tool=self.tool.key,
@@ -255,6 +332,7 @@ class Orchestrator:
             targets=[a.key for a in self.apps],
             notes=self.args.notes,
             force=self.args.force,
+            addresses=address_payload(self.topology),
         )
         log.info("collector run %s open (%s/%s)", run.run_id, self.tool.key, profile)
 
@@ -270,16 +348,16 @@ class Orchestrator:
             run_dir=run_dir,
             docker=self.docker,
             network=self.config.network,
-            credentials={a.key: c for a in self.apps if (c := self.config.creds_for(a.key))},
+            credentials=self._credentials(),
             sessions=sessions,
             request_meter=self.collector.event_count,
             allow_pull=not self.args.no_pull,
             keep_containers=self.args.keep_containers,
             repo_root=REPO_ROOT,
-            options=self._driver_options(),
+            options={**self._driver_options(), "preparation_ok": preparation_ok},
         )
 
-        # 5. Run it. Any failure here still has to leave a record: a run that
+        # 8. Run it. Any failure here still has to leave a record: a run that
         #    crashed and a run that found nothing are different results, and only
         #    the record can tell them apart afterwards.
         results = []
@@ -293,12 +371,19 @@ class Orchestrator:
             run_error = f"{type(exc).__name__}: {exc}"
             log.exception("the tool run failed")
         finally:
-            # 6. Close the run *whatever happened*. An abandoned active run makes the
+            # 9. Close the run *whatever happened*. An abandoned active run makes the
             #    next tool's events land in this one's bucket.
             closed = self.collector.close_run(run.run_id)
             requests_observed = self.collector.count_http_requests(run.run_id)
 
-        # 7. Normalise, and keep the audit trail of what could not be mapped.
+        # 10. Reset again, and normalise. The second reset leaves the target clean for
+        #    whoever runs next and proves the reset command is deterministic: a
+        #    digest that differs from the one taken before the run means the target
+        #    does not return to the same state twice, and every comparison against it
+        #    is suspect.
+        self._digests_after()
+
+        # 11. Normalise, and keep the audit trail of what could not be mapped.
         normalised = self._normalise(ctx)
 
         self.record = self._build_record(
@@ -314,9 +399,10 @@ class Orchestrator:
             requests_observed=requests_observed,
             normalised=normalised,
             run_error=run_error,
+            preparation=preparation,
         )
 
-        # 8. Write the record, then score, then record the scoring outcome. In that
+        # 12. Write the record, then score, then record the scoring outcome. In that
         #    order: `bench score` reads run.json (budget, tool, targets), and the
         #    record has to survive a scoring failure rather than disappear with it.
         self._write_record(run_dir)
@@ -347,7 +433,7 @@ class Orchestrator:
 
     # -- individual steps -------------------------------------------------------
 
-    def _reset(self) -> list[dict[str, Any]]:
+    def _reset(self) -> list[Any]:
         if self.args.skip_reset:
             # Supported for debugging a driver, never for a published run, and it is
             # recorded so a results file produced this way is identifiable.
@@ -355,62 +441,140 @@ class Orchestrator:
                 "--skip-reset: targets keep the previous tool's state. Any stored-payload "
                 "finding in this run may belong to another scanner."
             )
-            return [{"app": a.key, "ok": False, "checks": [], "skipped": True} for a in self.apps]
+            return []
 
-        resetter = TargetResetter(self.docker, self.http, health_timeout_s=self.args.health_timeout)
-        previous = self._previous_seed_ids()
-        outcomes = reset_targets(resetter, self.apps, previous_seed_ids=previous, strict=True)
+        self.resetter = TargetResetter(self.docker, health_timeout_s=self.args.health_timeout)
+        references = self._reference_digests()
+        outcomes = reset_targets(
+            self.resetter, self.apps, reference_digests=references, strict=True
+        )
         for outcome in outcomes:
-            log.info("reset %s ok in %.1fs (seed %s)", outcome.app, outcome.duration_s, outcome.seed_id)
-        return [o.to_dict() for o in outcomes]
+            log.info(
+                "reset %s in %.1fs, state digest %s",
+                outcome.app,
+                outcome.duration_s,
+                outcome.state_digest,
+            )
+        return outcomes
 
-    def _previous_seed_ids(self) -> dict[str, str]:
-        """Seed ids from the most recent run, so a repeated seed id is detectable.
+    def _reference_digests(self) -> dict[str, str]:
+        """The seeded state digest each target must come back to.
 
-        A seed endpoint that returns the same id twice has not rebuilt anything; that
-        is exactly the silent failure this whole module exists to catch.
+        A pin in apps.yaml wins; otherwise the digest the previous run recorded. The
+        contract is that the reset command prints a digest which changes if and only
+        if the seeded state changed, so a digest that does not match the previous
+        run's means the target is not in the state the last tool was measured against
+        -- and comparing the two runs would be comparing two different applications.
         """
+        references = {app.key: app.expected_digest for app in self.apps if app.expected_digest}
         results_dir = Path(self.args.results_dir or self.config.results_dir)
         if not results_dir.exists():
-            return {}
+            return references
         records = sorted(results_dir.glob("*/run.json"), key=lambda p: p.stat().st_mtime)
-        if not records:
-            return {}
-        try:
-            previous = json.loads(records[-1].read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            return {}
-        return {
-            entry.get("app"): entry.get("seed_id")
-            for entry in previous.get("reset", [])
-            if entry.get("app") and entry.get("seed_id")
-        }
+        for record_path in reversed(records):
+            try:
+                previous = json.loads(record_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            for entry in previous.get("reset", []) or []:
+                app, digest = entry.get("app"), entry.get("state_digest")
+                if app and digest:
+                    references.setdefault(app, digest)
+            # The most recent record that carries digests is enough; older ones would
+            # only reintroduce a value that a later run already superseded.
+            if references:
+                break
+        return references
+
+    def _credentials(self) -> dict[str, Any]:
+        found = {}
+        for app in self.apps:
+            creds = self.config.creds_for(app, role=self.args.auth_role)
+            if creds is not None:
+                found[app.key] = creds
+        return found
 
     def _login(self) -> dict[str, Session]:
         sessions: dict[str, Session] = {}
         for app in self.apps:
-            creds = self.config.creds_for(app.key)
+            creds = self.config.creds_for(app, role=self.args.auth_role)
             if creds is None:
                 # Not an error -- part of the corpus is deliberately anonymous -- but
                 # never silent, because "the tool found nothing behind the login" and
                 # "we never logged in" look identical in a results table.
                 log.warning("%s: no credentials configured; scanning anonymously", app.key)
                 continue
-            sessions[app.key] = establish(self.http, creds, strict=not self.args.allow_unverified_auth)
+            if app.harness_url_is_the_tools:
+                # Without an internal name our login lands on the same address the
+                # tool uses, so the target cannot tell us apart and credits the
+                # requests to the scanner's crawl.
+                log.warning(
+                    "%s: no internal_url configured; the harness's own login traffic "
+                    "will arrive on the tool's network and may be scored as the tool's.",
+                    app.key,
+                )
+            sessions[app.key] = establish(
+                self.target_http, creds, strict=not self.args.allow_unverified_auth
+            )
             log.info("%s: session established (%s)", app.key, sessions[app.key].detail)
         return sessions
 
-    def _probe_version(self, profile: str) -> str | None:
-        ctx = RunContext(
-            run_id="version-probe",
+    def _prepare(self, profile: str) -> list[Any]:
+        """Run the tool's preparation steps on a network with egress."""
+        if self.args.skip_prepare:
+            log.warning(
+                "--skip-prepare: the tool runs with whatever content its image ships "
+                "with. Recorded, but not comparable with a prepared run."
+            )
+            return []
+        ctx = self._bare_context(profile, Path(self.args.results_dir or self.config.results_dir) / "_prepare")
+        results = self.driver.run_preparation(ctx)
+        for result in results:
+            log.info(
+                "prepared %s/%s on %s: exit %s%s",
+                self.tool.key, result.name, result.network, result.returncode,
+                f", version {result.version}" if result.version else "",
+            )
+        return results
+
+    def _digests_after(self) -> None:
+        """Re-run the reset once the tool has stopped and record the digest."""
+        if self.resetter is None:
+            return
+        for app in self.apps:
+            digest, detail = self.resetter.digest_after_run(app)
+            topology = self.topology.get(app.key)
+            if topology is not None:
+                topology.state_digest_after = digest
+            before = topology.state_digest_before if topology else None
+            if digest is None:
+                log.error("%s: post-run reset failed (%s)", app.key, detail)
+            elif before and digest != before:
+                log.error(
+                    "%s: the reset command is not deterministic (%s before the run, %s "
+                    "after). Comparisons against this target are not sound until that "
+                    "is fixed.",
+                    app.key, before, digest,
+                )
+
+    def _bare_context(self, profile: str, run_dir: Path) -> RunContext:
+        return RunContext(
+            run_id=run_dir.name,
             tool=self.tool,
             profile=profile,
             apps=self.apps,
             budget=self.budget,
-            run_dir=Path(self.args.results_dir or self.config.results_dir) / "_probe",
+            run_dir=run_dir,
             docker=self.docker,
+            network=self.config.network,
             allow_pull=not self.args.no_pull,
             repo_root=REPO_ROOT,
+            options=self._driver_options(),
+        )
+
+    def _probe_version(self, profile: str) -> str | None:
+        ctx = self._bare_context(
+            profile, Path(self.args.results_dir or self.config.results_dir) / "_probe"
         )
         version = self.driver.version(ctx)
         if version is None:
@@ -431,6 +595,7 @@ class Orchestrator:
             "rate_limit": self.args.rate_limit,
             "wordlist": self.args.wordlist,
             "offline": self.args.offline,
+            "skip_prepare": self.args.skip_prepare,
         }
         return {k: v for k, v in options.items() if v is not None}
 
@@ -513,7 +678,35 @@ class Orchestrator:
                 "argv": sys.argv,
                 "user": os.environ.get("USER"),
             },
-            "reset": kw["resets"],
+            "preflight": self.preflight_report.to_dict() if self.preflight_report else [],
+            "url_source": {
+                app.key: (
+                    "apps.yaml fallback (not seed-derived; wrong after a redeploy)"
+                    if app.key in self.url_fallbacks
+                    else str(app.default_credentials_file())
+                )
+                for app in self.apps
+            },
+            "reset": [o.to_dict() for o in kw["resets"]],
+            # The address map handed to the collector, plus the image actually running
+            # for each target and the state digest either side of the run. Everything
+            # here is captured at run open because container addresses are reassigned
+            # on restart and the reset path restarts containers.
+            "target_topology": {app: t.to_dict() for app, t in self.topology.items()},
+            "address_map_accepted_by_collector": self.collector.addresses_accepted,
+            "preparation": [p.to_dict() for p in kw.get("preparation") or []],
+            "synthetic_traffic": {
+                "rule": "classified by socket peer address, never by a header",
+                "harness_client_service": self.config.platform_client_service,
+                "harness_transport": self.args.collector_transport,
+                "note": (
+                    "An implausibly low event count for the tool is most often traffic "
+                    "being classified as the platform's own. Check the collector's "
+                    "TELEMETRY_SYNTHETIC_CIDRS against the addresses in target_topology, "
+                    "and /v1/stats discarded_idle for events that arrived with no run open."
+                ),
+                "collector_stats": self.collector.stats(),
+            },
             "auth": {app: session.to_dict() for app, session in kw["sessions"].items()},
             "invocations": [r.to_dict() for r in results],
             "normalisation": {
@@ -600,7 +793,7 @@ class Orchestrator:
             run_dir=run_dir,
             docker=self.docker,
             network=self.config.network,
-            credentials={a.key: c for a in self.apps if (c := self.config.creds_for(a.key))},
+            credentials=self._credentials(),
             sessions={},
             repo_root=REPO_ROOT,
             options=self._driver_options(),
@@ -610,11 +803,25 @@ class Orchestrator:
         print(f"# {self.tool.key}/{profile}  image={self.tool.image_ref}")
         print(f"# budget: {self.budget.describe()}")
         print(f"# generated config: {ctx.conf_dir}")
+        for prep in self.driver.prepare(ctx):
+            import shlex as _shlex
+
+            prep_argv = ["docker", "run", "--rm", "--network", self.tool.prep_network]
+            for host, container in prep.volumes:
+                prep_argv += ["-v", f"{host}:{container}"]
+            prep_argv += [self.tool.image_ref, *prep.args]
+            print("\n# preparation (before the run opens; this network has egress)")
+            print(_shlex.join(prep_argv))
         for inv in invocations:
+            # Mirrors what BaseDriver actually mounts, or the printed command would
+            # misrepresent the run it is supposed to make reviewable.
             argv = [
                 "docker", "run", "--rm", "--network", self.config.network,
-                "-v", f"{run_dir}:{self.driver.container_workdir}",
+                "-v", f"{ctx.raw_dir}:{self.driver.container_workdir}/raw",
+                "-v", f"{ctx.conf_dir}:{self.driver.container_workdir}/conf:ro",
             ]
+            for host, container in inv.volumes:
+                argv += ["-v", f"{host}:{container}"]
             for key in inv.env:
                 argv += ["-e", f"{key}=<from environment>"]
             if inv.entrypoint or self.driver.default_entrypoint:
@@ -687,9 +894,28 @@ def build_parser() -> argparse.ArgumentParser:
         help="DEBUG ONLY. Proceed when the login could not be verified.",
     )
     behaviour.add_argument("--health-timeout", type=float, default=120.0)
+    behaviour.add_argument(
+        "--auth-role",
+        default="user",
+        help="Which role from the target's credentials file to scan as "
+        "(user, other-user, admin). Default: user.",
+    )
+    behaviour.add_argument(
+        "--skip-prepare",
+        action="store_true",
+        help="Skip the tool's preparation step (template/signature update). The run "
+        "then uses whatever the image shipped with, which is recorded but is not "
+        "comparable with a prepared run.",
+    )
     behaviour.add_argument("--no-pull", action="store_true", help="Fail instead of pulling an image")
     behaviour.add_argument("--keep-containers", action="store_true", help="Do not docker rm afterwards")
     behaviour.add_argument("--skip-version-probe", action="store_true")
+    behaviour.add_argument(
+        "--skip-dns-check",
+        action="store_true",
+        help="DEBUG ONLY. Skips checking that the tool-facing hostname resolves to "
+        "the target from the tool's own network.",
+    )
     behaviour.add_argument("--no-score", action="store_true")
     behaviour.add_argument(
         "--score-command", nargs="+", help="Default: bench score --run <run dir>"

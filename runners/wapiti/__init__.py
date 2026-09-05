@@ -107,8 +107,7 @@ class WapitiDriver(BaseDriver):
     def _exclusions(self, ctx: RunContext, app: Any) -> list[str]:
         args: list[str] = []
         base = app.base_url.rstrip("/")
-        # The control plane can reset the target mid-scan; never let a scanner near it.
-        for path in ["/__bench__"] + list(getattr(app, "exclude_paths", []) or []):
+        for path in list(getattr(app, "exclude_paths", []) or []):
             args += ["--exclude", f"{base}{path}"]
         creds = ctx.creds_for(app.key)
         for path in (creds.logout_paths if creds else []):

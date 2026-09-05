@@ -1,23 +1,30 @@
-"""HTTP access to services that live on the `internal: true` bench-internal network.
+"""HTTP from inside the platform, because there is no way in from outside.
 
-The collector and the targets' control endpoints are deliberately unreachable from
-the host: `bench-internal` is declared `internal: true` and nothing publishes a port.
-That is not an accident to work around, it is the property that makes the scores
-meaningful -- a scanner on bench-public cannot read the answer key or forge trigger
-events, and a harness that punched a hole in that isolation for its own convenience
-would quietly invalidate every published number.
+Two separate problems this solves, and they have different answers.
 
-So the orchestrator does not open a hole. It borrows the network namespace of a
-container that is already legitimately on the network (the collector) and performs
-the request from there, using nothing but the Python standard library that container
-already ships. No extra image, no published port, no new attack path.
+**Reaching the collector.** It publishes no port, and its run management, event
+export, stats and correlation endpoints answer 404 -- not 403, because a refusal
+confirms there is something to refuse -- to every source except its own loopback and
+the sinkhole. That is deliberate and it is not merely network separation: targets are
+dual-homed, and a target is exactly what a tool takes RCE on, so being "on the
+internal network" was never protection for the answer key. The orchestrator therefore
+executes inside the collector's own container and talks to 127.0.0.1.
+
+**Reaching a target.** The platform's own traffic (a login the harness performs on
+behalf of a scanner that cannot log itself in) must not be scored as the tool's. The
+collector and the target SDKs classify synthetic traffic *by source address*, never
+by a header -- a header would be visible to a tool through any reflection or verbose
+error and would hand it the shape of the grader. So harness traffic aimed at a target
+goes through the dual-homed sinkhole, whose address sits in the range both sides
+treat as the platform's own.
 
 Two transports, same interface:
 
-* ``ExecHttp``   -- `docker compose exec -T collector python -c ...`. The default.
-* ``DirectHttp`` -- plain urllib. For running the orchestrator from inside the
-  network (e.g. as a container itself) or against a dev stack that does publish a
-  port. Never the default, because the default must be the safe one.
+* ``ExecHttp``   -- `docker compose exec -T <service> python -c ...`. The default,
+  instantiated once per role (collector, platform client).
+* ``DirectHttp`` -- plain urllib, for running the orchestrator from inside the
+  networks. Never the default, because the default must be the one that cannot
+  accidentally attribute our traffic to the tool.
 """
 
 from __future__ import annotations
@@ -109,9 +116,14 @@ class Http(Protocol):
 
 
 class ExecHttp:
-    """Perform the request from inside a container already on bench-internal."""
+    """Perform the request from inside a container that is already where it needs to be.
 
-    def __init__(self, docker: Any, service: str = "collector"):
+    ``service`` decides whose address the request appears to come from, which is the
+    whole point: the collector for control-plane calls, the sinkhole for anything
+    aimed at a target.
+    """
+
+    def __init__(self, docker: Any, service: str = "otel-collector"):
         self.docker = docker
         self.service = service
 

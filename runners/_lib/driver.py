@@ -13,6 +13,15 @@ recording digests -- lives in ``BaseDriver.run`` so that all five tools are subj
 to exactly the same treatment. A benchmark where each driver implements its own stop
 condition is a benchmark where the differences between tools include the harness.
 
+* ``prepare(ctx)``   -- optional. The tool network is sealed (`internal: true`, the
+  sinkhole as its resolver), which is what makes blind vulnerabilities measurable: a
+  callback to a tool's own collaborator domain is captured instead of vanishing. The
+  price is that a tool needing the internet to fetch templates or signatures cannot
+  do it during the run. Preparation runs BEFORE the run opens, on a network with
+  egress, and what it fetched is recorded -- a run where nuclei silently failed to
+  update and fell back to a stale template set would be a meaningless data point
+  published as a real one.
+
 Budget arithmetic: a run may cover several applications, which means several
 invocations. The remaining wall clock is divided evenly among the invocations still
 to come, and time unused by one is inherited by the next. That is recorded per
@@ -30,7 +39,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from .budget import Budget, BudgetWatch, StopReason
-from .config import AppSpec, Credentials, ToolSpec
+from .config import CONTAINER_WORKDIR, AppSpec, Credentials, ToolSpec
 from .findings import NormaliseResult
 from .login import Session
 
@@ -85,6 +94,34 @@ class InvocationResult:
         data = dict(self.__dict__)
         data["requests"] = self.requests_at_end - self.requests_at_start
         return data
+
+
+@dataclass
+class PreparationResult:
+    """One preparation step: what it fetched, and whether it worked.
+
+    Recorded in the run record. A failed update is not fatal -- the tool still runs
+    with whatever it shipped with -- but it changes what the number means, so it has
+    to be visible rather than inferred from a log nobody reads.
+    """
+
+    name: str
+    argv: list[str]
+    image: str
+    image_digest: str | None
+    network: str
+    returncode: int
+    output_tail: str
+    version: str | None = None
+    started_at: str = ""
+    ended_at: str = ""
+
+    @property
+    def ok(self) -> bool:
+        return self.returncode == 0
+
+    def to_dict(self) -> dict[str, Any]:
+        return dict(self.__dict__)
 
 
 @dataclass
@@ -149,7 +186,19 @@ class RunContext:
         return self.sessions.get(app)
 
     def creds_for(self, app: str) -> Credentials | None:
-        return self.credentials.get(app)
+        """Credentials with their URLs resolved against the TOOL's base URL.
+
+        The harness logs in over the target's internal name so that its own traffic
+        is classified as the platform's own. A driver must not be handed that URL:
+        the internal alias does not exist on the sealed tool network, so the tool
+        would fail to log in and scan anonymously -- while still being reported as
+        authenticated, which is the one outcome this harness refuses to produce.
+        """
+        creds = self.credentials.get(app)
+        if creds is None:
+            return None
+        spec = next((a for a in self.apps if a.key == app), None)
+        return creds.for_base(spec.base_url) if spec and spec.base_url else creds
 
 
 class Driver(Protocol):
@@ -164,8 +213,10 @@ class BaseDriver:
     """Shared container lifecycle. Subclasses implement ``plan`` and ``normalise``."""
 
     key: str = "base"
-    # Where the run directory is mounted inside the tool container.
-    container_workdir: str = "/bench"
+    # Where the run directory is mounted inside the tool container. Deliberately
+    # anonymous: an agentic tool under test reads its own filesystem, and a mount
+    # called /bench would tell it what it is inside of.
+    container_workdir: str = CONTAINER_WORKDIR
     default_user: str | None = None
     default_entrypoint: str | None = None
 
@@ -173,6 +224,19 @@ class BaseDriver:
 
     def plan(self, ctx: RunContext) -> list[Invocation]:
         raise NotImplementedError
+
+    def prepare(self, ctx: RunContext) -> list[Invocation]:
+        """Steps to run before the run opens, on a network with egress.
+
+        Default: nothing. Only tools that fetch content at scan time need this, and
+        every one that does is a tool whose behaviour is not pinned by its image
+        digest alone.
+        """
+        return []
+
+    def preparation_version(self, ctx: RunContext, results: list[PreparationResult]) -> str | None:
+        """What the preparation fetched, in one line, for the run record."""
+        return None
 
     def normalise(self, raw_dir: Path, **kwargs: Any) -> NormaliseResult:
         raise NotImplementedError
@@ -222,6 +286,67 @@ class BaseDriver:
 
     # -- the uniform part -------------------------------------------------------
 
+    def run_preparation(self, ctx: RunContext) -> list[PreparationResult]:
+        """Execute the preparation steps and record what they did.
+
+        Foreground and unbudgeted on purpose: fetching templates is not part of what
+        is being measured, and counting it against the scan budget would penalise
+        the tools that keep their content up to date.
+        """
+        ctx.ensure_dirs()
+        results: list[PreparationResult] = []
+        for inv in self.prepare(ctx):
+            image = inv.image or ctx.tool.image_ref
+            started = _now()
+            try:
+                res = ctx.docker.run_capture(
+                    image,
+                    inv.args,
+                    entrypoint=inv.entrypoint,
+                    network=ctx.tool.prep_network,
+                    volumes=inv.volumes,
+                    env=inv.env,
+                    timeout=1800,
+                    allow_pull=ctx.allow_pull,
+                    build_spec=ctx.tool.build,
+                    context_root=ctx.repo_root,
+                )
+                digest = ctx.docker.image_digest(image)
+            except Exception as exc:  # noqa: BLE001
+                log.error("%s: preparation %r failed to start: %s", self.key, inv.name, exc)
+                results.append(
+                    PreparationResult(
+                        name=inv.name, argv=[], image=image, image_digest=None,
+                        network=ctx.tool.prep_network, returncode=-1,
+                        output_tail=str(exc)[:500], started_at=started, ended_at=_now(),
+                    )
+                )
+                continue
+            output = ((res.stdout or "") + (res.stderr or "")).strip()
+            (ctx.log_dir / f"prepare-{inv.name}.log").write_text(output, encoding="utf-8")
+            results.append(
+                PreparationResult(
+                    name=inv.name,
+                    argv=res.argv,
+                    image=image,
+                    image_digest=digest,
+                    network=ctx.tool.prep_network,
+                    returncode=res.returncode,
+                    output_tail=output[-2000:],
+                    started_at=started,
+                    ended_at=_now(),
+                )
+            )
+            if res.returncode != 0:
+                log.error(
+                    "%s: preparation %r exited %s -- the tool will run with whatever "
+                    "content it shipped with, which is recorded but is not the same run",
+                    self.key, inv.name, res.returncode,
+                )
+        for result in results:
+            result.version = self.preparation_version(ctx, [result])
+        return results
+
     def run(self, ctx: RunContext) -> list[InvocationResult]:
         ctx.ensure_dirs()
         invocations = self.plan(ctx)
@@ -269,9 +394,20 @@ class BaseDriver:
         share_s: float | None,
     ) -> InvocationResult:
         image = inv.image or ctx.tool.image_ref
-        container_name = f"bench-{self.key}-{inv.name}-{ctx.run_id[:8]}"
+        # The name reaches the published run record through the recorded argv, so it
+        # carries no benchmark vocabulary either.
+        container_name = f"scan-{self.key}-{inv.name}-{ctx.run_id[:8]}"
         log_path = ctx.log_dir / f"{inv.name}.log"
-        volumes = [(str(ctx.run_dir), self.container_workdir), *inv.volumes]
+        # Only the two directories the tool actually needs, and conf/ read-only. The
+        # run record, the normalised findings and the other tools' material stay
+        # outside the container: a tool cannot overwrite the evidence it is judged on,
+        # and an agentic tool reading its own filesystem finds a working directory
+        # rather than a grading harness.
+        volumes = [
+            (str(ctx.raw_dir), f"{self.container_workdir}/raw"),
+            (str(ctx.conf_dir), f"{self.container_workdir}/conf:ro"),
+            *inv.volumes,
+        ]
         requests_at_start = _safe_meter(ctx)
 
         result = InvocationResult(

@@ -119,7 +119,7 @@ def test_tool_is_stopped_when_the_clock_runs_out(tmp_path):
     ctx = make_ctx(tmp_path, docker, clock, Budget(wall_clock_s=60, poll_interval_s=5, grace_s=30))
     results = StubDriver().run(ctx)
     assert [r.stop_reason for r in results] == [StopReason.BUDGET_WALL_CLOCK.value]
-    assert docker.stopped == ["bench-stub-shopfront-run-0123"]
+    assert docker.stopped == ["scan-stub-shopfront-run-0123"]
     assert results[0].elapsed_s >= 60
 
 
@@ -145,12 +145,12 @@ def test_tool_is_stopped_when_the_request_cap_is_hit(tmp_path):
 def test_a_tool_that_finishes_early_is_not_stopped(tmp_path):
     """`completed` and `cut off` are different results and must not be conflated."""
     clock = FakeClock()
-    docker = FakeDocker(runs_for_polls={"bench-stub-shopfront-run-0123": 2})
+    docker = FakeDocker(runs_for_polls={"scan-stub-shopfront-run-0123": 2})
     ctx = make_ctx(tmp_path, docker, clock, Budget(wall_clock_s=3600, poll_interval_s=5))
     results = StubDriver().run(ctx)
     assert results[0].stop_reason == StopReason.COMPLETED.value
     assert docker.stopped == []
-    assert docker.removed == ["bench-stub-shopfront-run-0123"]
+    assert docker.removed == ["scan-stub-shopfront-run-0123"]
 
 
 def test_the_stop_uses_the_grace_period_from_the_budget(tmp_path, monkeypatch):
@@ -174,8 +174,8 @@ def test_budget_is_split_across_targets_and_the_split_is_recorded(tmp_path):
     clock = FakeClock()
     docker = FakeDocker(
         runs_for_polls={
-            "bench-stub-shopfront-run-0123": 1,
-            "bench-stub-blog-run-0123": 1,
+            "scan-stub-shopfront-run-0123": 1,
+            "scan-stub-blog-run-0123": 1,
         }
     )
     ctx = make_ctx(
@@ -232,27 +232,46 @@ def test_targets_not_scanned_because_the_budget_ran_out_are_recorded_as_such(tmp
 def test_a_missing_report_is_visible_in_the_result(tmp_path):
     """"no report" and "no findings" must not look the same in the record."""
     clock = FakeClock()
-    docker = FakeDocker(runs_for_polls={"bench-stub-shopfront-run-0123": 1})
+    docker = FakeDocker(runs_for_polls={"scan-stub-shopfront-run-0123": 1})
     ctx = make_ctx(tmp_path, docker, clock, Budget(wall_clock_s=600, poll_interval_s=5))
     results = StubDriver(artifacts=["stub-shopfront.json"]).run(ctx)
     assert results[0].artifacts_present == {"stub-shopfront.json": False}
 
 
-def test_run_directory_is_mounted_and_world_writable(tmp_path):
-    """Scanner images run as assorted uids; an unwritable mount means no report."""
+def test_only_raw_and_conf_are_mounted_and_conf_is_read_only(tmp_path):
+    """The tool gets the two directories it needs and nothing else.
+
+    The run record and the normalised findings stay outside the container, so a tool
+    cannot overwrite the evidence it is judged on -- and an agentic tool reading its
+    own filesystem finds a working directory rather than a grading harness.
+    """
     clock = FakeClock()
-    docker = FakeDocker(runs_for_polls={"bench-stub-shopfront-run-0123": 1})
+    docker = FakeDocker(runs_for_polls={"scan-stub-shopfront-run-0123": 1})
     ctx = make_ctx(tmp_path, docker, clock, Budget(wall_clock_s=600, poll_interval_s=5))
     StubDriver().run(ctx)
-    started = docker.started[0]
-    assert (str(tmp_path), "/bench") in started["volumes"]
+    volumes = docker.started[0]["volumes"]
+    assert (str(ctx.raw_dir), "/work/raw") in volumes
+    assert (str(ctx.conf_dir), "/work/conf:ro") in volumes
+    assert not any(host == str(tmp_path) for host, _ in volumes)
+    # Scanner images run as assorted uids; an unwritable mount means no report at all.
     assert (ctx.raw_dir.stat().st_mode & 0o777) == 0o777
+
+
+def test_the_mount_path_names_nothing(tmp_path):
+    """A directory called /bench would tell an agentic tool what it is inside of."""
+    clock = FakeClock()
+    docker = FakeDocker(runs_for_polls={"scan-stub-shopfront-run-0123": 1})
+    ctx = make_ctx(tmp_path, docker, clock, Budget(wall_clock_s=600, poll_interval_s=5))
+    StubDriver().run(ctx)
+    for _, container_path in docker.started[0]["volumes"]:
+        assert container_path.startswith("/work")
+    assert "bench" not in docker.started[0]["name"]
 
 
 def test_the_tool_is_attached_to_bench_public_only(tmp_path):
     """One network. Anything else and the scanner can reach the answer key."""
     clock = FakeClock()
-    docker = FakeDocker(runs_for_polls={"bench-stub-shopfront-run-0123": 1})
+    docker = FakeDocker(runs_for_polls={"scan-stub-shopfront-run-0123": 1})
     ctx = make_ctx(tmp_path, docker, clock, Budget(wall_clock_s=600, poll_interval_s=5))
     StubDriver().run(ctx)
     assert docker.started[0]["network"] == "bench-public"

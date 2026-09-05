@@ -1,24 +1,44 @@
 """Harness configuration: what the targets are, what the tools are, who logs in.
 
-Three files, loaded from ``runners/`` unless overridden:
+Three sources, loaded from ``runners/`` unless overridden:
 
-* ``apps.yaml``        -- the target registry (compose services, URLs, control plane).
-* ``tools.yaml``       -- the tool registry (image, pinned digest, profiles).
-* ``credentials.yaml`` -- per-application credentials, tool-neutral (git-ignored).
+* ``apps.yaml``   -- the target registry (compose services, the two URLs, reset).
+* ``tools.yaml``  -- the tool registry (image, pinned digest, profiles, preparation).
+* credentials     -- ``targets/<app>/bench-credentials.yaml`` in the shape fixed by
+  targets/target-contract.yaml, with ``runners/credentials.yaml`` as a local
+  override for targets that have not landed yet.
 
-The credentials file is deliberately *not* written in any tool's dialect. Half the
-corpus is behind a login, so every driver has to authenticate; if the file were in
-ZAP's dialect, each new driver would need its own copy and they would drift, which
-is the classic way a benchmark ends up comparing an authenticated scan against an
-anonymous one and calling the difference "detection capability". One neutral
-description, translated per tool at run time.
+THE TARGET OWNS ITS OWN ADDRESS
+A target's customer-facing hostname and its seeded content are derived per deployment
+from DEPLOY_SEED, so a URL written into apps.yaml is correct for exactly one
+deployment and silently wrong for the next -- and "wrong" here looks like the tool
+simply finding nothing. The authority is therefore ``targets/<app>/bench-credentials.yaml``,
+which the target generates at seed time from the same seed and which cannot drift
+from what the application actually answers on. apps.yaml keeps what genuinely belongs
+to the harness: compose services, how to reset, what to restart, which internal name
+our own traffic uses.
+
+TWO URLS PER TARGET, AND THE DIFFERENCE MATTERS
+The tool under test reaches a target by its customer-facing name on the sealed
+``bench-public`` network. The harness reaches the same target by its internal name,
+from inside the platform's own address range, because the collector and the target
+SDK classify traffic as synthetic *by source address* -- a header would be visible to
+a tool through any reflection or verbose error and would hand it the shape of the
+grader. Log in over the wrong one and the harness's own requests are scored as the
+tool's crawl coverage.
+
+DECEPTION IS A CONFIGURATION PROPERTY
+Nothing this file produces may tell a tool it is being graded: no benchmark
+vocabulary in a URL, a header, a user-agent or a mount path. See
+targets/target-contract.yaml; the forbidden-string list is asserted by
+runners/tests/test_deception.py rather than left to good intentions.
 """
 
 from __future__ import annotations
 
 import os
-from collections.abc import Iterable
-from dataclasses import dataclass, field
+import re
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
@@ -27,11 +47,25 @@ import yaml
 
 RUNNERS_DIR = Path(__file__).resolve().parent.parent
 REPO_ROOT = RUNNERS_DIR.parent
+TARGETS_DIR = REPO_ROOT / "targets"
 
-# The tool under test is attached to this network and to nothing else
-# (see docker-compose.yml). Hard-coded rather than configurable: making it easy to
-# change is making it easy to accidentally give a scanner a route to the collector.
+# The tool under test is attached here and to nothing else, and this network is
+# `internal: true`: no route out, with the sinkhole as its resolver. Hard-coded
+# rather than configurable, because making it easy to change is making it easy to
+# accidentally give a scanner a route to the collector or to the internet.
 PUBLIC_NETWORK = "bench-public"
+
+# Preparation steps (template and signature updates) run here instead: they need the
+# internet, which the tool network does not have, and they run before the run opens.
+PREP_NETWORK_DEFAULT = "bridge"
+
+# Where a run directory is mounted inside a tool container. Deliberately anonymous:
+# an agentic tool reads its own filesystem, and /proc/self/mountinfo shows it.
+CONTAINER_WORKDIR = "/work"
+
+# `${VAR}` and `${VAR:-default}`, the same spelling docker compose uses, so a target's
+# compose fragment and this file can share an environment variable verbatim.
+_VAR_RE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}")
 
 
 class ConfigError(RuntimeError):
@@ -39,13 +73,9 @@ class ConfigError(RuntimeError):
 
 
 def _expand(value: Any) -> Any:
-    """Expand ``${VAR}`` from the environment inside strings.
-
-    Credentials belong in the environment or a secret store on shared machines; the
-    YAML is then safe to keep next to the rest of the configuration.
-    """
+    """Expand ``${VAR}`` / ``${VAR:-default}`` from the environment inside strings."""
     if isinstance(value, str):
-        return os.path.expandvars(value)
+        return _VAR_RE.sub(lambda m: os.environ.get(m.group(1)) or (m.group(2) or ""), value)
     if isinstance(value, dict):
         return {k: _expand(v) for k, v in value.items()}
     if isinstance(value, list):
@@ -53,16 +83,47 @@ def _expand(value: Any) -> Any:
     return value
 
 
+def _strip_default_port(url: str) -> str:
+    """`http://host:80/x` -> `http://host/x` (and :443 for https).
+
+    ZAP documents explicitly that a context URL spelling out the default port matches
+    nothing, and every tool's scope check compares the string form, so one canonical
+    spelling is safer everywhere.
+    """
+    parts = urlsplit(url)
+    defaults = {"http": ":80", "https": ":443"}
+    suffix = defaults.get(parts.scheme)
+    if suffix and parts.netloc.endswith(suffix):
+        netloc = parts.netloc[: -len(suffix)]
+        return urlunsplit((parts.scheme, netloc, parts.path, parts.query, parts.fragment))
+    return url
+
+
 @dataclass
 class Credentials:
-    """Tool-neutral description of how to log into one application."""
+    """Tool-neutral description of how to log into one application.
+
+    Deliberately not written in any tool's dialect: half the corpus sits behind a
+    login, so every driver has to authenticate, and one description translated per
+    tool is the only way to be sure they were all given the same thing. A per-tool
+    credentials file drifts, and the drift shows up as a capability difference.
+    """
 
     app: str
-    # form: HTML form POST. json: JSON body POST. basic: HTTP basic. bearer: a
-    # token obtained from a json login and sent as a header.
+    role: str = "user"
+    # form: HTML form POST. json: JSON body POST. basic: HTTP basic. bearer: a token
+    # obtained from a json login and replayed as a header.
     kind: str = "form"
     login_url: str | None = None
     login_page_url: str | None = None
+    # The same locations as paths. The harness resolves them against the target's
+    # internal name (so its traffic is classified as the platform's own) while the
+    # tool must resolve them against the customer-facing name -- the internal alias
+    # does not exist on the tool's network, and a driver handed our URL would fail to
+    # log in and scan anonymously while still being reported as authenticated.
+    login_path: str | None = None
+    login_page_path: str | None = None
+    verify_path: str | None = None
     username: str = ""
     password: str = ""
     username_field: str = "username"
@@ -76,21 +137,106 @@ class Credentials:
     # Where the token lives in the login response, dotted, for `kind: bearer`.
     token_json_path: str | None = None
     session: str = "cookie"  # cookie | bearer | header
+    session_cookie: str | None = None
     header_name: str = "Authorization"
     header_template: str = "Bearer {token}"
-    # Paths a scanner must never touch or it logs itself out mid-scan. Every driver
-    # is expected to honour these; it is the single most common cause of an
-    # authenticated scan silently degrading into an anonymous one.
+    # Paths a scanner must never touch or it logs itself out mid-scan. The single
+    # most common cause of an authenticated scan silently degrading to an anonymous
+    # one, which then reads as the tool being blind to half the corpus.
     logout_paths: list[str] = field(default_factory=list)
+    subject_id: str | None = None
 
     @classmethod
     def from_dict(cls, app: str, data: dict[str, Any]) -> Credentials:
         data = _expand(dict(data))
-        known = {f for f in cls.__dataclass_fields__}  # type: ignore[attr-defined]
+        known = set(cls.__dataclass_fields__)  # type: ignore[attr-defined]
         unknown = set(data) - known - {"app"}
         if unknown:
             raise ConfigError(f"credentials for {app!r}: unknown keys {sorted(unknown)}")
         return cls(app=app, **data)
+
+    @classmethod
+    def from_target_file(
+        cls, path: Path, *, role: str = "user", base_url_override: str | None = None
+    ) -> Credentials:  # noqa: D401 - thin wrapper kept for call sites
+        """Load ``targets/<app>/bench-credentials.yaml`` (target-contract.yaml shape).
+
+        The target owns this file, so the harness reads it rather than asking an
+        operator to copy the values into a second place where they can go stale.
+        ``base_url_override`` is how harness traffic is pointed at the target's
+        internal name: the file states the customer-facing URL, which is the tool's
+        route, not ours.
+        """
+        doc = _expand(yaml.safe_load(path.read_text(encoding="utf-8")) or {})
+        app = str(doc.get("app") or path.parent.name)
+        login = doc.get("login") or {}
+        session = doc.get("session") or {}
+        users = doc.get("users") or []
+
+        chosen = next((u for u in users if str(u.get("role")) == role), None)
+        if chosen is None:
+            roles = sorted({str(u.get("role")) for u in users})
+            raise ConfigError(f"{path}: no user with role {role!r} (have {roles})")
+
+        base = (base_url_override or doc.get("base_url") or "").rstrip("/")
+        login_path = str(login.get("url") or "")
+        login_url = login_path if login_path.startswith("http") else f"{base}{login_path}"
+
+        kind_map = {"json": "json", "form": "form", "basic": "basic", "urlencoded": "form"}
+        kind = kind_map.get(str(login.get("type", "form")).lower(), "form")
+        session_kind = str(session.get("kind", "cookie")).lower()
+
+        # The contract's indicators are substrings, not regexes: a literal that
+        # happens to contain a regex metacharacter must not silently change meaning.
+        logged_in = login.get("logged_in_indicator")
+        logged_out = login.get("logged_out_indicator")
+
+        page_path = login.get("page_url") or (login_path if kind == "form" else None)
+        return cls(
+            app=app,
+            role=role,
+            kind=kind,
+            login_url=login_url,
+            login_path=login_path or None,
+            login_page_path=str(page_path) if page_path else None,
+            verify_path=str(login.get("verify_url")) if login.get("verify_url") else None,
+            # The contract does not carry a separate page URL. For a form login the
+            # same path served over GET is the login page, which is what a browser
+            # fetches first and where a CSRF cookie is minted.
+            login_page_url=_resolve(base, login.get("page_url")) or (
+                login_url if kind == "form" else None
+            ),
+            username=str(chosen.get("username", "")),
+            password=str(chosen.get("password", "")),
+            username_field=str(login.get("username_field", "username")),
+            password_field=str(login.get("password_field", "password")),
+            logged_in_regex=re.escape(str(logged_in)) if logged_in else None,
+            logged_out_regex=re.escape(str(logged_out)) if logged_out else None,
+            verify_url=_resolve(base, login.get("verify_url")),
+            token_json_path=login.get("token_json_path"),
+            session="bearer" if session_kind in ("bearer", "header") else "cookie",
+            session_cookie=session.get("name"),
+            header_name=str(session.get("header", "Authorization")),
+            logout_paths=[str(p) for p in (login.get("exclude") or [])],
+            subject_id=str(chosen.get("subject_id")) if chosen.get("subject_id") else None,
+        )
+
+    def for_base(self, base_url: str) -> Credentials:
+        """The same credentials with their URLs resolved against another base.
+
+        Used to hand a driver the tool-facing login while the harness keeps the
+        internal one. Credentials that carry no paths (a hand-written override with
+        absolute URLs) are returned unchanged rather than rewritten blindly.
+        """
+        if not self.login_path:
+            return self
+        base = base_url.rstrip("/")
+        return replace(
+            self,
+            login_url=_resolve(base, self.login_path),
+            login_page_url=_resolve(base, self.login_page_path),
+            verify_url=_resolve(base, self.verify_path),
+        )
 
     def login_body(self) -> dict[str, str]:
         body = {self.username_field: self.username, self.password_field: self.password}
@@ -98,77 +244,138 @@ class Credentials:
         return body
 
 
+def _resolve(base: str, path: Any) -> str | None:
+    if not path:
+        return None
+    text = str(path)
+    return text if text.startswith("http") else f"{base}{text}"
+
+
+@dataclass
+class TargetCredentialsFile:
+    """``targets/<app>/bench-credentials.yaml``, as written by the target.
+
+    Three things come from here and nowhere else: the base URL the application
+    actually answers on (seed-derived, so it cannot be hardcoded), the shape of its
+    login, and the seeded identities. The file is also how a target says it has *no*
+    login: the contract asks for an empty ``users:`` list with a comment, precisely so
+    that "this application has no authentication" can be told apart from "someone
+    forgot to write the file". Only the second is a reason to stop a run.
+    """
+
+    path: Path
+    app: str
+    base_url: str | None
+    roles: list[str]
+    raw: dict[str, Any]
+
+    @property
+    def declares_no_login(self) -> bool:
+        return not self.roles
+
+    @classmethod
+    def load(cls, path: Path) -> TargetCredentialsFile:
+        doc = _expand(yaml.safe_load(path.read_text(encoding="utf-8")) or {})
+        if not isinstance(doc, dict):
+            raise ConfigError(f"{path}: expected a mapping at the top level")
+        users = doc.get("users") or []
+        return cls(
+            path=path,
+            app=str(doc.get("app") or path.parent.name),
+            base_url=_strip_default_port(str(doc["base_url"]).rstrip("/")) if doc.get("base_url") else None,
+            roles=[str(u.get("role")) for u in users if u.get("role")],
+            raw=doc,
+        )
+
+    def for_role(self, role: str, *, base_url_override: str | None = None) -> Credentials | None:
+        if self.declares_no_login:
+            return None
+        return Credentials.from_target_file(
+            self.path, role=role, base_url_override=base_url_override
+        )
+
+
 @dataclass
 class AppSpec:
     """One target application, as the harness needs to see it."""
 
     key: str
-    services: list[str]
-    base_url: str
-    health_path: str = "/healthz"
-    seed_path: str = "/__bench__/seed"
-    state_path: str = "/__bench__/state"
-    # Control-plane URLs default to base_url, but a target that serves its control
-    # plane on a separate internal-only port (which it should) overrides this.
-    control_url: str | None = None
-    control_token: str | None = None
+    services: list[str] = field(default_factory=list)
+    # What the TOOL uses: the customer-facing name on bench-public. Normally left
+    # unset here and resolved from targets/<app>/bench-credentials.yaml, which the
+    # target generates from DEPLOY_SEED. A value written here is a fallback for a
+    # target that has not landed yet, and is overridden the moment its file exists.
+    base_url: str = ""
+    # What the HARNESS uses: the same application by its internal name, so that the
+    # platform's own traffic arrives from the platform's address range and is
+    # classified synthetic. Falls back to base_url, loudly.
+    internal_url: str | None = None
+    # Reset, per targets/target-contract.yaml: a command inside a container, never a
+    # route. `reset_service` is the compose service that owns the state.
+    reset_service: str | None = None
+    reset_command: str = "/usr/local/bin/state-reset"
+    reset_timeout_s: float = 600.0
+    # Restarted before the reset command runs. Only for state that lives outside the
+    # application process -- a poisoned proxy cache is in the proxy's memory, and no
+    # script inside the origin can flush it.
+    restart_services: list[str] = field(default_factory=list)
+    health_services: list[str] = field(default_factory=list)
+    # Pin the expected seeded digest here to check every run against a fixed value
+    # instead of against whatever the previous run recorded.
+    expected_digest: str | None = None
     openapi_url: str | None = None
     graphql_url: str | None = None
     include_paths: list[str] = field(default_factory=list)
     exclude_paths: list[str] = field(default_factory=list)
-    profile: str | None = None
+    credentials_file: str | None = None
+    routes_file: str | None = None
     notes: str | None = None
 
     def __post_init__(self) -> None:
-        # Strip a redundant default port. ZAP documents explicitly that a context URL
-        # of `http://host:80` fails to match anything, and every tool's scope check
-        # compares the string form, so one canonical spelling is safer everywhere.
         self.base_url = _strip_default_port(self.base_url)
-        if self.control_url:
-            self.control_url = _strip_default_port(self.control_url)
+        if self.internal_url:
+            self.internal_url = _strip_default_port(self.internal_url)
+        if not self.services:
+            self.services = [self.key]
+        if self.reset_service is None:
+            self.reset_service = self.services[0]
+        if not self.health_services:
+            self.health_services = list(self.restart_services)
 
     @classmethod
     def from_dict(cls, key: str, data: dict[str, Any]) -> AppSpec:
         data = _expand(dict(data))
-        known = {f for f in cls.__dataclass_fields__}  # type: ignore[attr-defined]
+        known = set(cls.__dataclass_fields__)  # type: ignore[attr-defined]
         unknown = set(data) - known - {"key"}
         if unknown:
             raise ConfigError(f"app {key!r}: unknown keys {sorted(unknown)}")
-        if "base_url" not in data:
-            raise ConfigError(f"app {key!r}: base_url is required")
-        data.setdefault("services", [key])
         return cls(key=key, **data)
 
-    # -- derived URLs -----------------------------------------------------------
+    @property
+    def harness_url(self) -> str:
+        """Base URL the harness itself uses. See the class docstring."""
+        return self.internal_url or self.base_url
 
     @property
-    def _control_base(self) -> str:
-        return (self.control_url or self.base_url).rstrip("/")
-
-    @property
-    def health_url(self) -> str:
-        return f"{self._control_base}{self.health_path}"
-
-    @property
-    def seed_url(self) -> str:
-        return f"{self._control_base}{self.seed_path}"
-
-    @property
-    def state_url(self) -> str:
-        return f"{self._control_base}{self.state_path}"
-
-    @property
-    def control_headers(self) -> dict[str, str]:
-        # X-Bench-Selftest makes the target SDK flag these requests as synthetic, so
-        # the platform's own traffic is never scored as the tool's crawl coverage.
-        headers = {"X-Bench-Selftest": "1"}
-        if self.control_token:
-            headers["X-Bench-Token"] = self.control_token
-        return headers
+    def harness_url_is_the_tools(self) -> bool:
+        """True when no internal name was configured, i.e. our traffic looks like the tool's."""
+        return not self.internal_url
 
     @property
     def host(self) -> str:
         return urlsplit(self.base_url).netloc
+
+    def default_credentials_file(self) -> Path:
+        if self.credentials_file:
+            path = Path(self.credentials_file)
+            return path if path.is_absolute() else REPO_ROOT / path
+        return TARGETS_DIR / self.key / "bench-credentials.yaml"
+
+    def default_routes_file(self) -> Path:
+        if self.routes_file:
+            path = Path(self.routes_file)
+            return path if path.is_absolute() else REPO_ROOT / path
+        return TARGETS_DIR / self.key / "routes.yaml"
 
 
 @dataclass
@@ -178,10 +385,13 @@ class ToolSpec:
     key: str
     image: str
     digest: str | None = None
-    # {context, dockerfile, args} for the two tools with no usable published image.
+    # {context, dockerfile, args} for the tools with no usable published image.
     build: dict[str, Any] | None = None
     default_profile: str = "default"
     profiles: list[str] = field(default_factory=lambda: ["default"])
+    # Network for the preparation step (template/signature updates). It needs the
+    # internet; the tool network deliberately has none.
+    prep_network: str = PREP_NETWORK_DEFAULT
     notes: str | None = None
 
     @property
@@ -195,8 +405,7 @@ class ToolSpec:
             return self.image
         base = self.image.split("@", 1)[0]
         name, sep, tag = base.rpartition(":")
-        # `registry:5000/image` has a colon that is a port, not a tag: only strip
-        # the last component when it cannot contain a slash.
+        # `registry:5000/image` has a colon that is a port, not a tag.
         if sep and "/" not in tag:
             base = name
         return f"{base}@{self.digest}"
@@ -204,7 +413,7 @@ class ToolSpec:
     @classmethod
     def from_dict(cls, key: str, data: dict[str, Any]) -> ToolSpec:
         data = _expand(dict(data))
-        known = {f for f in cls.__dataclass_fields__}  # type: ignore[attr-defined]
+        known = set(cls.__dataclass_fields__)  # type: ignore[attr-defined]
         unknown = set(data) - known - {"key"}
         if unknown:
             raise ConfigError(f"tool {key!r}: unknown keys {sorted(unknown)}")
@@ -215,11 +424,19 @@ class ToolSpec:
 class BenchConfig:
     apps: dict[str, AppSpec]
     tools: dict[str, ToolSpec]
-    credentials: dict[str, Credentials]
+    credentials_override: dict[str, Credentials]
     compose_file: Path | None = None
-    compose_project: str = "ptaas-bench"
-    collector_service: str = "collector"
-    collector_url: str = "http://collector:8900"
+    compose_project: str = "platform-edge"
+    # The service whose loopback the control plane is reachable on. Run management
+    # and event export answer 404 to every source but the collector's own loopback
+    # and the sinkhole, so the orchestrator exec's into the collector and talks to
+    # 127.0.0.1. Nothing is published to the host.
+    collector_service: str = "otel-collector"
+    collector_url: str = "http://127.0.0.1:8900"
+    # The dual-homed sinkhole. Harness traffic aimed at a target goes through it,
+    # because it sits in the address range both the collector and the target SDKs
+    # treat as synthetic.
+    platform_client_service: str = "resolver"
     network: str = PUBLIC_NETWORK
     results_dir: Path = REPO_ROOT / "results" / "runs"
 
@@ -238,26 +455,25 @@ class BenchConfig:
         creds_doc: dict[str, Any] = {}
         if creds_path.exists():
             creds_doc = _read_yaml(creds_path)
-        # Absent credentials is legal (the anonymous half of the corpus still scans)
-        # but it is never silent: the orchestrator warns per app in scope.
 
         platform = apps_doc.get("platform") or {}
         compose_file = platform.get("compose_file")
         return cls(
             apps={k: AppSpec.from_dict(k, v or {}) for k, v in (apps_doc.get("apps") or {}).items()},
             tools={k: ToolSpec.from_dict(k, v or {}) for k, v in (tools_doc.get("tools") or {}).items()},
-            credentials={
+            credentials_override={
                 k: Credentials.from_dict(k, v or {}) for k, v in (creds_doc.get("apps") or {}).items()
             },
             compose_file=Path(compose_file) if compose_file else (REPO_ROOT / "docker-compose.yml"),
-            compose_project=platform.get("compose_project", "ptaas-bench"),
-            collector_service=platform.get("collector_service", "collector"),
-            collector_url=platform.get("collector_url", "http://collector:8900"),
+            compose_project=platform.get("compose_project", "platform-edge"),
+            collector_service=platform.get("collector_service", "otel-collector"),
+            collector_url=platform.get("collector_url", "http://127.0.0.1:8900"),
+            platform_client_service=platform.get("platform_client_service", "resolver"),
             network=platform.get("network", PUBLIC_NETWORK),
             results_dir=Path(platform.get("results_dir", REPO_ROOT / "results" / "runs")),
         )
 
-    def select_apps(self, keys: Iterable[str] | None) -> list[AppSpec]:
+    def select_apps(self, keys: list[str] | None) -> list[AppSpec]:
         if not keys:
             return list(self.apps.values())
         missing = [k for k in keys if k not in self.apps]
@@ -265,19 +481,41 @@ class BenchConfig:
             raise ConfigError(f"unknown app(s) {missing}; known: {sorted(self.apps)}")
         return [self.apps[k] for k in keys]
 
-    def creds_for(self, app: str) -> Credentials | None:
-        return self.credentials.get(app)
+    def target_file(self, app: AppSpec) -> TargetCredentialsFile | None:
+        path = app.default_credentials_file()
+        if not path.exists():
+            return None
+        return TargetCredentialsFile.load(path)
 
+    def resolve_urls(self) -> dict[str, str]:
+        """Take each target's base URL from the file the target itself writes.
 
-def _strip_default_port(url: str) -> str:
-    """`http://host:80/x` -> `http://host/x` (and :443 for https)."""
-    parts = urlsplit(url)
-    defaults = {"http": ":80", "https": ":443"}
-    suffix = defaults.get(parts.scheme)
-    if suffix and parts.netloc.endswith(suffix):
-        netloc = parts.netloc[: -len(suffix)]
-        return urlunsplit((parts.scheme, netloc, parts.path, parts.query, parts.fragment))
-    return url
+        Returns the apps whose URL came from a fallback in apps.yaml rather than from
+        the target, so the orchestrator can say so: that URL is correct for exactly
+        one deployment, and when it is wrong the run looks like a tool with poor
+        coverage rather than like a misconfiguration.
+        """
+        fallbacks: dict[str, str] = {}
+        for app in self.apps.values():
+            target = self.target_file(app)
+            if target is not None and target.base_url:
+                app.base_url = target.base_url
+            elif app.base_url:
+                fallbacks[app.key] = app.base_url
+        return fallbacks
+
+    def creds_for(self, app: AppSpec, *, role: str = "user") -> Credentials | None:
+        """The target's own credentials file, or a local override.
+
+        The override exists for applications that have not landed yet; when the
+        target ships its file, that file wins, because it is maintained next to the
+        login it describes. A file that declares an empty ``users:`` list is a target
+        saying it has no login, which is a legitimate answer and not an error.
+        """
+        target = self.target_file(app)
+        if target is not None:
+            return target.for_role(role, base_url_override=app.harness_url)
+        return self.credentials_override.get(app.key)
 
 
 def _read_yaml(path: Path) -> dict[str, Any]:

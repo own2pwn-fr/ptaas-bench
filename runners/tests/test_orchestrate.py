@@ -84,7 +84,7 @@ def test_unset_driver_options_do_not_override_driver_defaults(tmp_path, capsys):
     out = capsys.readouterr().out
     assert "None" not in out
     assert "-l 30" in out
-    assert "cp /usr/share/skipfish/dictionaries/complete.wl /tmp/bench.wl" in out
+    assert "cp /usr/share/skipfish/dictionaries/complete.wl /tmp/wordlist.wl" in out
 
 
 def test_driver_options_are_passed_through_when_set(tmp_path, capsys):
@@ -93,3 +93,66 @@ def test_driver_options_are_passed_through_when_set(tmp_path, capsys):
         "--dry-run", "--results-dir", str(tmp_path),
     ])
     assert "-rate-limit 5" in capsys.readouterr().out
+
+
+def test_dry_run_against_the_landed_target_shows_preparation_and_the_real_mounts(tmp_path, capsys):
+    """The dry run is the reviewable artefact: it must match what will actually run."""
+    code = main([
+        "--tool", "nuclei", "--app", "edge", "--budget", "30m",
+        "--dry-run", "--results-dir", str(tmp_path),
+    ])
+    assert code == 0
+    out = capsys.readouterr().out
+    # Preparation happens before the run, on a network that has egress.
+    assert "--network bridge" in out and "-update-templates" in out
+    # The scan itself is sealed onto the tool network with the two real mounts.
+    assert "--network bench-public" in out
+    assert "/work/raw" in out and "/work/conf:ro" in out
+    # And it targets the URL the target itself declared, not one from apps.yaml.
+    assert "http://www.halyardsupply.net" in out
+
+
+def test_the_run_record_says_where_each_url_came_from(tmp_path):
+    """A URL from an apps.yaml fallback is correct for one deployment only."""
+    from runners.orchestrate import Orchestrator
+
+    args = build_parser().parse_args(
+        ["--tool", "zap", "--app", "edge", "--results-dir", str(tmp_path)]
+    )
+    orchestrator = Orchestrator(args)
+    assert "edge" not in orchestrator.url_fallbacks
+
+
+def test_reference_digests_come_from_the_previous_run(tmp_path):
+    """The digest the last run recorded is what this run's reset must reproduce."""
+    import json
+
+    from runners.orchestrate import Orchestrator
+
+    run_dir = tmp_path / "run-1"
+    run_dir.mkdir()
+    (run_dir / "run.json").write_text(
+        json.dumps({"reset": [{"app": "edge", "state_digest": "state 9f1c0b7d4e2a"}]})
+    )
+    args = build_parser().parse_args(
+        ["--tool", "zap", "--app", "edge", "--results-dir", str(tmp_path)]
+    )
+    assert Orchestrator(args)._reference_digests() == {"edge": "state 9f1c0b7d4e2a"}
+
+
+def test_a_pinned_digest_in_apps_yaml_wins_over_the_previous_run(tmp_path):
+    import json
+
+    from runners.orchestrate import Orchestrator
+
+    run_dir = tmp_path / "run-1"
+    run_dir.mkdir()
+    (run_dir / "run.json").write_text(
+        json.dumps({"reset": [{"app": "edge", "state_digest": "state drifted00000"}]})
+    )
+    args = build_parser().parse_args(
+        ["--tool", "zap", "--app", "edge", "--results-dir", str(tmp_path)]
+    )
+    orchestrator = Orchestrator(args)
+    orchestrator.apps[0].expected_digest = "state pinned000000"
+    assert orchestrator._reference_digests()["edge"] == "state pinned000000"

@@ -1,32 +1,37 @@
 """Target reset, and the proof that it happened.
 
 Why this module is paranoid: the corpus contains stored XSS, stored SQL injection,
-mass assignment and other state-changing flaws. If ZAP plants a stored payload and
-the target is not wiped before nuclei runs, nuclei is credited with ZAP's finding.
-That single mistake would invalidate every stored-vulnerability column in the
-published table, and it is invisible in the results -- the numbers just come out
-flattering.
+mass assignment and other state-changing flaws. If one tool stores a payload and the
+app is not restored, the next tool is credited with the first one's finding, and
+nothing in the results says so -- the numbers just come out flattering.
 
-So a reset is not "we asked docker to restart it". A reset is four assertions:
+**Reset is a command inside the container, never an HTTP endpoint.** This is fixed by
+targets/target-contract.yaml and there are two reasons for it, both of which bite:
 
-1. every service container really restarted (``State.StartedAt`` moved forward),
-2. the app answers its health probe again,
-3. the seed endpoint ran and returned a *new* seed id,
-4. the app's own state digest matches the freshly-seeded digest and reports no
-   residual mutations.
+* Targets are dual-homed and serve one listener, so a route "only on the internal
+  network" is in practice reachable from the tool's network too. A reset endpoint
+  would let the scanner under test wipe state mid-run -- and would itself be an
+  unplanted vulnerability sitting in the middle of the corpus.
+* A request path like ``/__bench__/seed`` on the wire tells any tool that looks at it
+  that it is being graded. The whole platform is deception-graded; an agent that
+  works out it is inside an evaluation stops behaving like an attacker.
 
-If any of those cannot be established, the run does not open. Refusing to benchmark
-is always cheaper than publishing a number nobody can defend.
+So: ``docker compose exec <service> /usr/local/bin/state-reset``. It is idempotent,
+exits non-zero on failure, and prints a one-line state digest that changes if and
+only if the seeded state changed. The orchestrator records that digest before and
+after every run and refuses to open the next run until it is back to its seeded
+value.
 
-The control endpoints (``/__bench__/seed``, ``/__bench__/state``) are part of the
-target SDK contract and must be served on bench-internal only: exposed on
-bench-public, the tool under test could reset the target mid-scan, or read the
-digest and infer ground truth.
+Restarting containers is kept as a per-application option rather than the mechanism.
+It is still the only way to clear state that lives outside the application process --
+a poisoned Varnish cache on the `edge` target is in Varnish's memory, and no script
+inside the origin can flush it.
 """
 
 from __future__ import annotations
 
 import logging
+import re
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -34,7 +39,6 @@ from datetime import datetime
 from typing import Any
 
 from .config import AppSpec
-from .internal_http import Http
 
 log = logging.getLogger("bench.runners.reset")
 
@@ -57,8 +61,8 @@ class Check:
 class ResetOutcome:
     app: str
     ok: bool
-    seed_id: str | None = None
     state_digest: str | None = None
+    reference_digest: str | None = None
     checks: list[Check] = field(default_factory=list)
     duration_s: float = 0.0
 
@@ -66,8 +70,8 @@ class ResetOutcome:
         return {
             "app": self.app,
             "ok": self.ok,
-            "seed_id": self.seed_id,
             "state_digest": self.state_digest,
+            "reference_digest": self.reference_digest,
             "duration_s": round(self.duration_s, 2),
             "checks": [c.to_dict() for c in self.checks],
         }
@@ -113,13 +117,35 @@ def _restart_advanced(before: str | None, after: str | None) -> bool:
     return dt_after > dt_before
 
 
+# The line may be labelled -- the `edge` target prints `state <32 hex chars>` -- so
+# the whole line is the digest and the test is whether it *contains* a token that
+# could be one. A token short enough to be an English word cannot be: a digest has to
+# change whenever the seeded state changes, and accepting "done!" or "restored" would
+# reintroduce exactly the silent pass this module exists to prevent.
+_DIGEST_TOKEN_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9:_+/=.-]{11,}")
+
+
+def extract_digest(stdout: str) -> str | None:
+    """The one-line state digest the reset command prints.
+
+    The last line carrying a digest-shaped token, whitespace-normalised, so that a
+    script which logs progress first still works and a labelled digest survives
+    intact. Comparing whole lines across runs is deliberate: the label is as stable
+    as the digest, and a label that changed would itself be a change of behaviour.
+    """
+    for line in reversed((stdout or "").splitlines()):
+        candidate = " ".join(line.split())
+        if candidate and _DIGEST_TOKEN_RE.search(candidate):
+            return candidate
+    return None
+
+
 class TargetResetter:
-    """Restarts a target application and proves it came back pristine."""
+    """Runs the target's reset command and proves the state came back seeded."""
 
     def __init__(
         self,
         docker: Any,
-        http: Http,
         *,
         health_timeout_s: float = 120,
         poll_interval_s: float = 2.0,
@@ -127,115 +153,139 @@ class TargetResetter:
         clock: Callable[[], float] = time.monotonic,
     ):
         self.docker = docker
-        self.http = http
         self.health_timeout_s = health_timeout_s
         self.poll_interval_s = poll_interval_s
         self._sleep = sleep
         self._clock = clock
 
-    def reset(self, app: AppSpec, *, previous_seed_id: str | None = None) -> ResetOutcome:
+    # -- the reset ---------------------------------------------------------------
+
+    def reset(self, app: AppSpec, *, reference_digest: str | None = None) -> ResetOutcome:
         started = self._clock()
-        outcome = ResetOutcome(app=app.key, ok=False)
+        outcome = ResetOutcome(app=app.key, ok=False, reference_digest=reference_digest)
 
-        before = {svc: self.docker.container_started_at(self._cid(svc)) for svc in app.services}
-        self.docker.compose_restart(app.services)
-        after = {svc: self.docker.container_started_at(self._cid(svc)) for svc in app.services}
+        if app.restart_services:
+            # Only for state that lives outside the application process (a proxy
+            # cache, an in-memory store). Everything else is the reset command's job.
+            before = {svc: self.docker.container_started_at(self._cid(svc)) for svc in app.restart_services}
+            self.docker.compose_restart(app.restart_services)
+            after = {svc: self.docker.container_started_at(self._cid(svc)) for svc in app.restart_services}
+            for svc in app.restart_services:
+                outcome.checks.append(
+                    Check(
+                        f"restarted:{svc}",
+                        _restart_advanced(before.get(svc), after.get(svc)),
+                        f"StartedAt {before.get(svc)!r} -> {after.get(svc)!r}",
+                    )
+                )
+            healthy, detail = self.wait_healthy(app)
+            outcome.checks.append(Check("health", healthy, detail))
+            if not healthy:
+                outcome.duration_s = self._clock() - started
+                return outcome
 
-        for svc in app.services:
-            advanced = _restart_advanced(before.get(svc), after.get(svc))
+        res = self.run_reset_command(app)
+        ran = res.returncode == 0
+        outcome.checks.append(
+            Check("reset_command", ran, f"exit {res.returncode} {res.stderr.strip()[:200]}".strip())
+        )
+        if not ran:
+            outcome.duration_s = self._clock() - started
+            return outcome
+
+        outcome.state_digest = extract_digest(res.stdout)
+        outcome.checks.append(
+            Check(
+                "digest_printed",
+                outcome.state_digest is not None,
+                f"stdout {res.stdout.strip()[:200]!r}",
+            )
+        )
+
+        if reference_digest is None:
+            # Nothing to compare against yet. Recorded as a *failed* check in strict
+            # terms would block every first run; recorded as passing silently would
+            # hide that no comparison happened. So it passes, and says why.
             outcome.checks.append(
                 Check(
-                    f"restarted:{svc}",
-                    advanced,
-                    f"StartedAt {before.get(svc)!r} -> {after.get(svc)!r}",
+                    "digest_matches_reference",
+                    True,
+                    f"no reference digest yet; recording {outcome.state_digest!r} as the "
+                    "seeded value for the next run to check against",
                 )
-            )
-
-        healthy, health_detail = self._wait_healthy(app)
-        outcome.checks.append(Check("health", healthy, health_detail))
-        if not healthy:
-            outcome.duration_s = self._clock() - started
-            return outcome
-
-        seed = self.http.request(
-            "POST", app.seed_url, json_body={"reason": "pre-run reset"}, headers=app.control_headers, timeout=180
-        )
-        seeded = seed.ok
-        outcome.checks.append(Check("seeded", seeded, f"HTTP {seed.status} {seed.error or ''}".strip()))
-        if not seeded:
-            outcome.duration_s = self._clock() - started
-            return outcome
-
-        seed_body = _safe_json(seed.body)
-        outcome.seed_id = _str_or_none(seed_body.get("seed_id"))
-        seed_digest = _str_or_none(seed_body.get("state_digest"))
-
-        # A seed endpoint that returns the same id twice is either cached or a no-op;
-        # either way we have no evidence the data was actually rebuilt.
-        changed = outcome.seed_id is not None and outcome.seed_id != previous_seed_id
-        outcome.checks.append(
-            Check(
-                "seed_id_changed",
-                changed,
-                f"{previous_seed_id!r} -> {outcome.seed_id!r}",
-            )
-        )
-
-        state = self.http.request("GET", app.state_url, headers=app.control_headers, timeout=60)
-        state_body = _safe_json(state.body) if state.ok else {}
-        outcome.state_digest = _str_or_none(state_body.get("state_digest"))
-        digest_ok = bool(outcome.state_digest) and (
-            seed_digest is None or outcome.state_digest == seed_digest
-        )
-        outcome.checks.append(
-            Check(
-                "state_matches_seed",
-                digest_ok,
-                f"seed={seed_digest!r} state={outcome.state_digest!r}",
-            )
-        )
-
-        # `dirty` is the target's own answer to "has anything been written since the
-        # seed?". Absent (older SDK), the check is skipped rather than assumed clean:
-        # an unproven claim is recorded as unproven.
-        if "dirty" in state_body:
-            outcome.checks.append(
-                Check("state_clean", not state_body.get("dirty"), f"dirty={state_body.get('dirty')!r}")
             )
         else:
             outcome.checks.append(
-                Check("state_clean", False, "target reported no 'dirty' field; cannot prove cleanliness")
+                Check(
+                    "digest_matches_reference",
+                    outcome.state_digest == reference_digest,
+                    f"expected {reference_digest!r}, got {outcome.state_digest!r}",
+                )
             )
 
         outcome.ok = all(c.ok for c in outcome.checks)
         outcome.duration_s = self._clock() - started
         return outcome
 
-    def _cid(self, service: str) -> str:
-        return self.docker.compose_ps_id(service) or service
+    def run_reset_command(self, app: AppSpec) -> Any:
+        return self.docker.compose_exec(
+            app.reset_service, [app.reset_command], timeout=app.reset_timeout_s
+        )
 
-    def _wait_healthy(self, app: AppSpec) -> tuple[bool, str]:
+    def digest_after_run(self, app: AppSpec) -> tuple[str | None, str]:
+        """Re-run the reset once the tool has stopped, and report the digest.
+
+        Two jobs at once: it leaves the target clean for whoever runs next, and it
+        proves the command is deterministic. A digest that differs from the one taken
+        before the run means the reset does not restore the same state twice, and
+        every comparison against this target is then suspect.
+        """
+        res = self.run_reset_command(app)
+        if res.returncode != 0:
+            return None, f"exit {res.returncode} {res.stderr.strip()[:200]}".strip()
+        return extract_digest(res.stdout), "ok"
+
+    # -- health ------------------------------------------------------------------
+
+    def wait_healthy(self, app: AppSpec) -> tuple[bool, str]:
+        """Wait for the container healthcheck, not for an HTTP probe of our own.
+
+        The harness deliberately sends no traffic of its own to a target's
+        application port outside the login flow: docker already knows whether the
+        container is healthy, and asking it costs the target nothing and reveals
+        nothing.
+        """
+        services = app.health_services or app.restart_services
+        if not services:
+            return True, "no health services configured"
         deadline = self._clock() + self.health_timeout_s
-        last = "never answered"
+        last = "never reported"
         while self._clock() < deadline:
-            res = self.http.request("GET", app.health_url, headers=app.control_headers, timeout=10)
-            if res.ok:
-                return True, f"HTTP {res.status} after restart"
-            last = f"HTTP {res.status} {res.error or ''}".strip()
+            states = {svc: self.docker.container_health(self._cid(svc)) for svc in services}
+            # "none" means the image declares no healthcheck; running is then the
+            # only signal available, and pretending otherwise would hang every run.
+            if all(state in ("healthy", "none") for state in states.values()):
+                return True, ", ".join(f"{k}={v}" for k, v in states.items())
+            last = ", ".join(f"{k}={v}" for k, v in states.items())
             self._sleep(self.poll_interval_s)
         return False, f"unhealthy after {self.health_timeout_s}s ({last})"
+
+    def _cid(self, service: str) -> str:
+        return self.docker.compose_ps_id(service) or service
 
 
 def reset_targets(
     resetter: TargetResetter,
     apps: list[AppSpec],
     *,
-    previous_seed_ids: dict[str, str] | None = None,
+    reference_digests: dict[str, str] | None = None,
     strict: bool = True,
 ) -> list[ResetOutcome]:
     """Reset every app in scope. Raises unless every reset is provably clean."""
-    previous_seed_ids = previous_seed_ids or {}
-    outcomes = [resetter.reset(app, previous_seed_id=previous_seed_ids.get(app.key)) for app in apps]
+    reference_digests = reference_digests or {}
+    outcomes = [
+        resetter.reset(app, reference_digest=reference_digests.get(app.key)) for app in apps
+    ]
     bad = [o for o in outcomes if not o.ok]
     if bad and strict:
         detail = "; ".join(
@@ -246,17 +296,3 @@ def reset_targets(
             f"state from the previous tool would be credited to this one. {detail}"
         )
     return outcomes
-
-
-def _safe_json(body: str) -> dict[str, Any]:
-    import json
-
-    try:
-        data = json.loads(body or "{}")
-    except json.JSONDecodeError:
-        return {}
-    return data if isinstance(data, dict) else {}
-
-
-def _str_or_none(value: Any) -> str | None:
-    return None if value is None else str(value)

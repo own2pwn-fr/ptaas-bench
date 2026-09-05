@@ -101,7 +101,7 @@ def zap_plan(tmp_path, profile="full", creds=None):
 
 def test_zap_runs_the_automation_framework_plan(tmp_path):
     inv, plan = zap_plan(tmp_path)
-    assert inv.args == ["zap.sh", "-cmd", "-silent", "-autorun", "/bench/conf/zap-shopfront.yaml"]
+    assert inv.args == ["zap.sh", "-cmd", "-silent", "-autorun", "/work/conf/zap-shopfront.yaml"]
     assert set(plan) == {"env", "jobs"}
 
 
@@ -138,7 +138,7 @@ def test_zap_reports_traditional_json_into_the_mounted_raw_directory(tmp_path):
     inv, plan = zap_plan(tmp_path)
     report = next(j for j in plan["jobs"] if j["type"] == "report")
     assert report["parameters"]["template"] == "traditional-json"
-    assert report["parameters"]["reportDir"] == "/bench/raw"
+    assert report["parameters"]["reportDir"] == "/work/raw"
     assert report["parameters"]["reportFile"] == "zap-shopfront.json"
     assert inv.artifacts == ["zap-shopfront.json"]
     # Nothing is filtered out: the scoring engine decides what counts, and a driver
@@ -187,12 +187,17 @@ def test_zap_form_login_keeps_the_placeholders_unencoded(tmp_path):
     assert params["loginRequestBody"] == "username={%username%}&password={%password%}"
 
 
-def test_zap_excludes_the_control_plane_and_the_logout(tmp_path):
-    """A scanner that reaches /__bench__ can reset the target it is being scored on."""
+def test_zap_excludes_the_logout_and_names_no_control_plane(tmp_path):
+    """The logout is the one path a scanner must avoid, and the only one named.
+
+    There is no control-plane path to exclude any more -- reset is a command inside
+    the container -- and naming one in a plan file that ships inside the tool's own
+    mount would have been a tell in itself.
+    """
     _, plan = zap_plan(tmp_path, creds={"shopfront": JSON_CREDS})
     excludes = plan["env"]["contexts"][0]["excludePaths"]
-    assert any("__bench__" in e for e in excludes)
     assert any("logout" in e for e in excludes)
+    assert not any("bench" in e for e in excludes)
     spider = next(j for j in plan["jobs"] if j["type"] == "spider")
     assert spider["parameters"]["logoutAvoidance"] is True
 
@@ -213,7 +218,7 @@ def test_nuclei_writes_jsonl_and_never_self_updates(tmp_path):
     ctx = make_ctx(tmp_path, "nuclei", "default", [SHOP])
     args = NucleiDriver().plan(ctx)[0].args
     assert "-jsonl" in args
-    assert args[args.index("-output") + 1] == "/bench/raw/nuclei-shopfront.jsonl"
+    assert args[args.index("-output") + 1] == "/work/raw/nuclei-shopfront.jsonl"
     assert "-disable-update-check" in args
 
 
@@ -272,12 +277,12 @@ def test_wapiti_falls_back_to_the_harness_session_for_json_logins(tmp_path):
     assert "Authorization: Bearer eyJ0" in args
 
 
-def test_wapiti_excludes_the_control_plane_and_logout(tmp_path):
+def test_wapiti_excludes_the_logout(tmp_path):
     ctx = make_ctx(tmp_path, "wapiti", "default", [SHOP], creds={"shopfront": JSON_CREDS})
     args = WapitiDriver().plan(ctx)[0].args
     excluded = [args[i + 1] for i, a in enumerate(args) if a == "--exclude"]
-    assert "http://shopfront-web:3000/__bench__" in excluded
-    assert "http://shopfront-web:3000/api/auth/logout" in excluded
+    assert f"{SHOP.base_url}/api/auth/logout" in excluded
+    assert not any("bench" in e for e in excluded)
 
 
 # -- nikto -----------------------------------------------------------------------
@@ -329,15 +334,15 @@ def test_skipfish_output_directory_must_not_exist_yet(tmp_path):
     ctx = make_ctx(tmp_path, "skipfish", "default", [LEGACY])
     inv = SkipfishDriver().plan(ctx)[0]
     script = skipfish_script(inv)
-    assert "-o /bench/raw/skipfish-legacy" in script
+    assert "-o /work/raw/skipfish-legacy" in script
     assert not (ctx.raw_dir / "skipfish-legacy").exists()
 
 
 def test_skipfish_copies_the_wordlist_because_it_rewrites_it(tmp_path):
     """-W mutates the dictionary in place; runs would stop being comparable."""
     script = skipfish_script(SkipfishDriver().plan(make_ctx(tmp_path, "skipfish", "default", [LEGACY]))[0])
-    assert "cp /usr/share/skipfish/dictionaries/complete.wl /tmp/bench.wl" in script
-    assert "-W /tmp/bench.wl" in script
+    assert "cp /usr/share/skipfish/dictionaries/complete.wl /tmp/wordlist.wl" in script
+    assert "-W /tmp/wordlist.wl" in script
 
 
 def test_skipfish_time_limit_always_has_three_fields(tmp_path):
@@ -348,18 +353,18 @@ def test_skipfish_time_limit_always_has_three_fields(tmp_path):
     assert tokens[tokens.index("-k") + 1] == "0:51:0"
 
 
-def test_skipfish_blacklists_the_control_plane_and_logout(tmp_path):
+def test_skipfish_blacklists_the_logout(tmp_path):
     ctx = make_ctx(tmp_path, "skipfish", "default", [LEGACY], creds={"legacy": FORM_CREDS})
     script = skipfish_script(SkipfishDriver().plan(ctx)[0])
     tokens = shlex.split(script.split("exec ", 1)[1])
     excluded = [tokens[i + 1] for i, t in enumerate(tokens) if t == "-X"]
-    assert "/__bench__" in excluded and "/logout.php" in excluded
+    assert excluded == ["/logout.php"]
 
 
 def test_skipfish_uses_a_fixed_seed(tmp_path):
     """Two runs of the same version against the same target must crawl alike."""
     script = skipfish_script(SkipfishDriver().plan(make_ctx(tmp_path, "skipfish", "default", [LEGACY]))[0])
-    assert "-q 0x7074616173" in script
+    assert "-q 0x5c8f2a11" in script
 
 
 def test_skipfish_interpolations_are_shell_quoted(tmp_path):
@@ -449,3 +454,75 @@ def test_the_default_port_is_never_spelled_out_in_a_target_url():
     assert app.base_url == "http://legacy-web"
     for spec in BenchConfig.load().apps.values():
         assert not spec.base_url.endswith(":80")
+
+
+# -- preparation (the tool network is sealed) ------------------------------------
+
+
+def test_only_nuclei_needs_a_preparation_step(tmp_path):
+    """A tool that fetches content at scan time is a tool whose behaviour is not
+    pinned by its image digest alone. Everything else here ships what it uses."""
+    prepared = {
+        d.key: bool(d.prepare(make_ctx(tmp_path, d.key, "default", [SHOP])))
+        for d in (ZapDriver(), NucleiDriver(), WapitiDriver(), NiktoDriver(), SkipfishDriver())
+    }
+    assert prepared == {
+        "zap": False, "nuclei": True, "wapiti": False, "nikto": False, "skipfish": False
+    }
+
+
+def test_nuclei_updates_templates_into_a_shared_volume(tmp_path):
+    ctx = make_ctx(tmp_path, "nuclei", "default", [SHOP])
+    step = NucleiDriver().prepare(ctx)[0]
+    assert step.args == ["-update-templates", "-update-template-dir", "/templates"]
+    assert step.volumes == [("nuclei-templates", "/templates")]
+
+
+def test_the_preparation_network_is_not_the_tool_network(tmp_path):
+    """bench-public has no route out; the update has to happen somewhere else, and
+    before the run opens."""
+    ctx = make_ctx(tmp_path, "nuclei", "default", [SHOP])
+    assert ctx.tool.prep_network != ctx.network
+    assert ctx.tool.prep_network == "bridge"
+
+
+def test_nuclei_scans_from_the_prepared_volume_read_only(tmp_path):
+    ctx = make_ctx(tmp_path, "nuclei", "default", [SHOP])
+    ctx.options = {"preparation_ok": True}
+    inv = NucleiDriver().plan(ctx)[0]
+    assert inv.args[inv.args.index("-templates") + 1] == "/templates"
+    # Read-only: a scan must not be able to modify the corpus of checks that the run
+    # record claims it used.
+    assert ("nuclei-templates", "/templates:ro") in inv.volumes
+
+
+def test_a_failed_update_falls_back_to_the_bundled_templates(tmp_path):
+    """Pointing nuclei at an empty directory makes it find nothing, which is
+    indistinguishable in the results from a tool that found nothing."""
+    ctx = make_ctx(tmp_path, "nuclei", "default", [SHOP])
+    ctx.options = {"preparation_ok": False}
+    inv = NucleiDriver().plan(ctx)[0]
+    assert "-templates" not in inv.args
+    assert inv.volumes == []
+
+
+def test_preparation_records_what_it_fetched(tmp_path):
+    ctx = make_ctx(tmp_path, "nuclei", "default", [SHOP])
+    results = NucleiDriver().run_preparation(ctx)
+    assert len(results) == 1
+    record = results[0].to_dict()
+    assert record["network"] == "bridge"
+    assert record["returncode"] == 0
+    assert record["image_digest"]
+    # The log of the update is kept next to the run's other logs.
+    assert (ctx.log_dir / "prepare-templates.log").exists()
+
+
+def test_a_failed_preparation_is_recorded_rather_than_raised(tmp_path):
+    from runners._lib.dockerctl import ExecResult
+
+    ctx = make_ctx(tmp_path, "nuclei", "default", [SHOP])
+    ctx.docker.run_capture = lambda *a, **k: ExecResult(["docker"], 1, "", "no route to host")
+    results = NucleiDriver().run_preparation(ctx)
+    assert not results[0].ok
+    assert "no route to host" in results[0].output_tail

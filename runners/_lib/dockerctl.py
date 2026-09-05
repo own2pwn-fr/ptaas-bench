@@ -76,7 +76,10 @@ class DockerClient:
         self,
         *,
         compose_file: Path | None = None,
-        project: str = "ptaas-bench",
+        # Matches docker-compose.yml's default. The project name becomes part of
+        # every container name and is visible in /etc/hostname inside the targets,
+        # so it is unremarkable on purpose and overridable per deployment.
+        project: str = "platform-edge",
         docker_bin: str = "docker",
         dry_run: bool = False,
     ):
@@ -134,6 +137,29 @@ class DockerClient:
             return None
         first = res.stdout.strip().splitlines()
         return first[0].strip() if first else None
+
+    def compose_config_json(self) -> str | None:
+        """`docker compose config --format json`, or None when it cannot be read."""
+        res = self._exec(self._compose_argv("config", "--format", "json"), timeout=120)
+        return res.stdout if res.ok else None
+
+    def compose_services_by_profile(self) -> dict[str, list[str]] | None:
+        """service name -> the compose profiles that gate it.
+
+        Used to refuse a run while a `dev`-profile service is up: those publish a
+        target on the host, which is the route the sealed network exists to remove.
+        """
+        raw = self.compose_config_json()
+        if raw is None:
+            return None
+        try:
+            doc = json.loads(raw)
+        except json.JSONDecodeError:
+            return None
+        return {
+            name: list((spec or {}).get("profiles") or [])
+            for name, spec in (doc.get("services") or {}).items()
+        }
 
     def compose_exec(self, service: str, argv: Sequence[str], *, stdin: str | None = None, timeout: float | None = 120) -> ExecResult:
         """Run a command inside a running compose service.
@@ -280,6 +306,8 @@ class DockerClient:
         *,
         entrypoint: str | None = None,
         network: str = "none",
+        volumes: Sequence[tuple[str, str]] = (),
+        env: dict[str, str] | None = None,
         timeout: float = 180,
         allow_pull: bool = True,
         build_spec: dict[str, Any] | None = None,
@@ -287,12 +315,14 @@ class DockerClient:
     ) -> ExecResult:
         """Run a short-lived container and capture its output.
 
-        Used for `--version`: the version string goes into the run record next to the
-        image digest, because "nuclei 3.4.10" is what a reader recognises while
-        `sha256:...` is what makes the run reproducible. Network `none` by default --
-        a version probe has no business talking to the targets, and a probe that
-        appeared in the collector's event stream would pollute the tool's own crawl
-        coverage.
+        Used for `--version` and for preparation steps. The version string goes into
+        the run record next to the image digest, because "nuclei 3.4.10" is what a
+        reader recognises while `sha256:...` is what makes the run reproducible.
+
+        Network `none` by default: a version probe has no business talking to the
+        targets, and a probe that appeared in the collector's event stream would
+        pollute the tool's own crawl coverage. Preparation steps override it with a
+        network that has egress -- never the tool's, which is sealed.
         """
         self.ensure_image(
             image, allow_pull=allow_pull, build_spec=build_spec, context_root=context_root
@@ -300,6 +330,10 @@ class DockerClient:
         argv = [self.docker_bin, "run", "--rm", "--network", network]
         if entrypoint is not None:
             argv += ["--entrypoint", entrypoint]
+        for host_path, container_path in volumes:
+            argv += ["-v", f"{host_path}:{container_path}"]
+        for key, value in (env or {}).items():
+            argv += ["-e", f"{key}={value}"]
         argv += [image, *args]
         return self._exec(argv, timeout=timeout)
 
@@ -317,6 +351,23 @@ class DockerClient:
             stdout=handle,
             stderr=subprocess.STDOUT,
         )
+
+    def container_health(self, ref: str) -> str:
+        """``State.Health.Status``, or "none" when the image declares no healthcheck.
+
+        Used instead of an HTTP probe of our own: docker already knows, asking it
+        costs the target nothing, and it puts no request from us on the target's
+        application port -- which is one less thing that could be mistaken for the
+        tool's traffic, and one less thing for a tool to notice.
+        """
+        state = self.container_state(ref)
+        if not state:
+            return "unknown"
+        health = state.get("Health") or {}
+        status = health.get("Status")
+        if status:
+            return str(status)
+        return "none" if state.get("Running") else "stopped"
 
     def container_state(self, container_id: str) -> dict[str, Any]:
         info = self.inspect(container_id)

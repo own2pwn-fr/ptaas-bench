@@ -114,6 +114,7 @@ def _dig(obj: Any, dotted: str) -> Any:
 def establish(http: Http, creds: Credentials, *, strict: bool = True) -> Session:
     """Log in and verify. Raises ``LoginError`` in strict mode when unverifiable."""
     session = Session(app=creds.app)
+    login_response = None
 
     if creds.kind == "basic":
         raw = f"{creds.username}:{creds.password}".encode()
@@ -140,6 +141,7 @@ def establish(http: Http, creds: Credentials, *, strict: bool = True) -> Session
         if not res.ok:
             raise LoginError(f"{creds.app}: login returned HTTP {res.status} {res.error or res.body[:200]}")
 
+        login_response = res
         session.cookies = {**pre_cookies, **_parse_set_cookie(res.cookies)}
         if creds.token_json_path:
             try:
@@ -157,17 +159,31 @@ def establish(http: Http, creds: Credentials, *, strict: bool = True) -> Session
             session.headers[creds.header_name] = creds.header_template.format(token=session.token)
         session.detail = f"{creds.kind} login at {creds.login_url}"
 
-    if not creds.verify_url:
+    # The target contract carries indicators but no verification URL, because for a
+    # normal login the proof is in the login response itself. So: verify against a
+    # dedicated URL when one is configured, otherwise against the body the login
+    # returned. Only when neither is available is the session unverifiable.
+    if creds.verify_url:
+        check = http.request("GET", creds.verify_url, headers=session.as_headers(), timeout=30)
+        where = creds.verify_url
+    elif creds.logged_in_regex or creds.logged_out_regex:
+        check = login_response
+        where = "the login response"
+    else:
         session.verified = False
-        session.detail += "; NOT VERIFIED (no verify_url configured)"
+        session.detail += "; NOT VERIFIED (no verify_url and no logged-in indicator)"
         if strict:
             raise LoginError(
-                f"{creds.app}: verify_url is required -- an unverified session would let a "
-                "silently anonymous scan be published as authenticated"
+                f"{creds.app}: nothing to verify the session against. An unverified "
+                "session lets a silently anonymous scan be published as authenticated; "
+                "give the credentials file a logged_in_indicator or a verify_url."
             )
         return session
 
-    check = http.request("GET", creds.verify_url, headers=session.as_headers(), timeout=30)
+    if check is None:  # basic auth with no verify_url and no indicators
+        session.verified = False
+        return session
+
     marker_ok = check.ok
     if marker_ok and creds.logged_in_regex:
         marker_ok = re.search(creds.logged_in_regex, check.body) is not None
@@ -175,10 +191,10 @@ def establish(http: Http, creds: Credentials, *, strict: bool = True) -> Session
         marker_ok = re.search(creds.logged_out_regex, check.body) is None
 
     session.verified = marker_ok
-    session.detail += f"; verify {creds.verify_url} -> HTTP {check.status}"
+    session.detail += f"; verified against {where} -> HTTP {check.status}"
     if not marker_ok and strict:
         raise LoginError(
-            f"{creds.app}: session did not verify against {creds.verify_url} "
-            f"(HTTP {check.status}); refusing to run an 'authenticated' scan that is not"
+            f"{creds.app}: session did not verify against {where} (HTTP {check.status}); "
+            "refusing to run an 'authenticated' scan that is not one"
         )
     return session

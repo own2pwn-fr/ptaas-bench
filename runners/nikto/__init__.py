@@ -62,8 +62,11 @@ class NiktoDriver(BaseDriver):
                 "10",
                 "-Display",
                 "V",
-                "-useragent",
-                "ptaas-bench (+https://github.com/own2pwn-fr/ptaas-bench)",
+                # No custom user-agent. The obvious thing to put there is the name of
+                # this project and a link to this repository -- which is the answer
+                # key, announced in the request headers of every probe. nikto's own
+                # default already identifies nikto, which is honest and tells a target
+                # nothing about being graded.
             ]
             if share_s is not None:
                 # Seconds. Soft (checked between requests) and per host, so it is set

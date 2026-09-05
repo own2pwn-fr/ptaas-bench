@@ -17,7 +17,10 @@ from .internal_http import Http, HttpError, Response
 
 log = logging.getLogger("bench.runners.collector")
 
-DEFAULT_BASE_URL = "http://collector:8900"
+# Loopback, not a service name: the control endpoints answer only to the collector's
+# own loopback and to the sinkhole, and the orchestrator reaches them by executing
+# inside the collector's container. Nothing is published to the host.
+DEFAULT_BASE_URL = "http://127.0.0.1:8900"
 
 
 @dataclass
@@ -57,9 +60,27 @@ class CollectorClient:
         # during a run stay O(new events) rather than re-downloading the whole run.
         self._seq_cursor: dict[str, int] = {}
         self._request_counts: dict[str, int] = {}
+        # None until a run is opened with an address map; then True/False.
+        self.addresses_accepted: bool | None = None
 
     def _call(self, method: str, path: str, **kwargs: Any) -> Response:
         return self.http.request(method, f"{self.base_url}{path}", **kwargs)
+
+    @staticmethod
+    def _explain_404(what: str) -> str:
+        """A 404 on a control endpoint is almost never a missing route.
+
+        The collector answers 404 to any caller outside TELEMETRY_CONTROL_CIDRS, so
+        the usual cause is talking to it from the wrong place -- a service name
+        instead of its loopback, or a transport that is not `docker compose exec`
+        into the collector itself.
+        """
+        return (
+            f"{what}: HTTP 404. The control endpoints answer 404 (not 403) to any "
+            "caller outside TELEMETRY_CONTROL_CIDRS, so this most likely means the "
+            "request did not come from the collector's own loopback. Check "
+            "--collector-transport and --collector-url."
+        )
 
     def healthz(self) -> bool:
         return self._call("GET", "/healthz").ok
@@ -73,14 +94,23 @@ class CollectorClient:
         targets: list[str],
         notes: str | None = None,
         force: bool = False,
+        addresses: dict[str, Any] | None = None,
     ) -> Run:
         """POST /v1/runs.
 
         ``force`` is not exposed as a convenience: a 409 means a previous run was
         never closed, i.e. some events in the database belong to a scan nobody
         accounted for. The operator should be told, not have it silently overwritten.
+
+        ``addresses`` is the target address map (see _lib/topology.py). The collector
+        is gaining an explicit field for it; until it does, ``RunCreate`` forbids
+        unknown properties, so a rejection is retried once without the map rather
+        than failing the run. Whether it was accepted is recorded either way: the
+        collector cannot attribute an out-of-band callback without it, and a run
+        where it was dropped has weaker blind-vulnerability attribution than one
+        where it was not.
         """
-        body = {
+        body: dict[str, Any] = {
             "tool": tool,
             "tool_version": tool_version,
             "profile": profile,
@@ -89,7 +119,26 @@ class CollectorClient:
             "force": force,
         }
         body = {k: v for k, v in body.items() if v is not None}
+        if addresses:
+            body["addresses"] = addresses
+
         res = self._call("POST", "/v1/runs", json_body=body)
+        if addresses and res.status in (400, 422):
+            log.warning(
+                "the collector rejected the target address map (HTTP %s). Retrying "
+                "without it: out-of-band callbacks will have to be attributed by "
+                "whatever the collector can infer, which is unreliable for dual-homed "
+                "targets. The map is still written to the run record.",
+                res.status,
+            )
+            self.addresses_accepted = False
+            body.pop("addresses")
+            res = self._call("POST", "/v1/runs", json_body=body)
+        elif addresses:
+            self.addresses_accepted = res.ok
+
+        if res.status == 404:
+            raise HttpError(self._explain_404("open run"))
         if res.status == 409:
             raise HttpError(
                 "the collector already has an active run. Close it (or re-run with "
@@ -105,7 +154,26 @@ class CollectorClient:
 
     def close_run(self, run_id: str) -> Run:
         res = self._call("POST", f"/v1/runs/{run_id}/close")
+        if res.status == 404:
+            raise HttpError(self._explain_404(f"close run {run_id}"))
         return Run.from_json(res.check("close run").json())
+
+    def stats(self) -> dict[str, Any]:
+        """Ingest diagnostics, recorded with every run.
+
+        `discarded_idle` is the counter that explains an implausibly low event count:
+        well-formed events arriving while no run was active. The other way to get a
+        low count is traffic being classified as the platform's own by source
+        address, which is why the run record also states where our own requests came
+        from.
+        """
+        res = self._call("GET", "/v1/stats")
+        if not res.ok:
+            return {"error": f"HTTP {res.status}", "note": self._explain_404("stats")}
+        try:
+            return res.json()
+        except HttpError:
+            return {"error": "unparsable stats response"}
 
     def event_count(self) -> int:
         """Cheap metering signal: the active run's total event count.

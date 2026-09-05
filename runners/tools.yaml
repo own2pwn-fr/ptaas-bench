@@ -29,13 +29,19 @@ tools:
     digest: null
     default_profile: default
     profiles: [default, dast, offline]
+    # The tool network is sealed, so the template update cannot happen during the
+    # run. It runs here instead, before the run opens, and the fetched template
+    # version goes into the run record.
+    prep_network: bridge
     notes: >
       dast enables the fuzzing templates (the only nuclei mode that attacks
-      parameters). offline disables interactsh for hermetic runs, at the cost of
-      nuclei's blind/OOB detection.
+      parameters). offline disables interactsh, which is strictly worse: on the
+      sealed network the sinkhole captures the callbacks anyway, so nuclei's blind
+      payloads still fire the platform's OOB oracle even though nuclei itself cannot
+      poll its collaborator to confirm them.
 
   wapiti:
-    image: ptaas-bench/wapiti:3.3.2
+    image: local/wapiti:3.3.2
     digest: null
     build:
       context: runners/wapiti
@@ -56,7 +62,7 @@ tools:
       measure the exporter, not the scanner. Docker Hub's sullo/nikto does not exist.
 
   skipfish:
-    image: ptaas-bench/skipfish:2.10b
+    image: local/skipfish:2.10b
     digest: null
     build:
       context: runners/skipfish
