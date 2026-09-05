@@ -54,6 +54,16 @@ def vuln_entry(**overrides: Any) -> dict[str, Any]:
             entry[key] = {**entry[key], **value}
         else:
             entry[key] = value
+    # Every non-oob oracle must declare an opaque signal (targets never emit ids),
+    # and signals must be unique across the corpus, so derive one from the id.
+    # `oracle: {"signal": None}` opts out, for the tests that need that case.
+    signal = entry["oracle"].get("signal", "__derive__")
+    if signal == "__derive__":
+        entry["oracle"]["signal"] = "shop.synthetic.{}.anomaly".format(
+            entry["id"].split("-")[-1]
+        )
+    elif signal is None:
+        entry["oracle"].pop("signal")
     return entry
 
 
@@ -107,27 +117,45 @@ def param(name: str, value: str | None, location: str = "query") -> dict[str, An
     }
 
 
-def trigger_event(vuln_id: str, **overrides: Any) -> dict[str, Any]:
+def signal_of(vuln_id: str) -> str:
+    """The signal `vuln_entry` derives for an id, mirroring the target side."""
+    return "shop.synthetic.{}.anomaly".format(vuln_id.split("-")[-1])
+
+
+def trigger_event(for_vuln: str | None = None, **overrides: Any) -> dict[str, Any]:
+    """A sink firing. Targets emit the opaque signal, never the catalog id."""
     event: dict[str, Any] = {
         "type": "trigger",
         "app": "shopfront",
         "ts": 1001.0,
-        "vuln_id": vuln_id,
         "oracle_kind": "sink",
         "evidence": {"payload": "' UNION SELECT 1--", "detail": "second table in result set"},
     }
+    if for_vuln is not None:
+        event["signal"] = signal_of(for_vuln)
     event.update(overrides)
     return event
 
 
-def oob_event(token: str, **overrides: Any) -> dict[str, Any]:
+def oob_event(token: str | None = None, **overrides: Any) -> dict[str, Any]:
     event: dict[str, Any] = {
         "type": "oob",
         "app": "canary",
         "ts": 1002.0,
-        "token": token,
         "channel": "dns",
         "source_ip": "10.0.0.9",
     }
+    if token is not None:
+        event["token"] = token
     event.update(overrides)
     return event
+
+
+def routes_inventory(root, app: str, routes: Sequence[Mapping[str, Any]]) -> None:
+    """Write targets/<app>/routes.yaml under a synthetic repo root."""
+    directory = root / "targets" / app
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / "routes.yaml").write_text(
+        yaml.safe_dump({"app": app, "routes": [dict(r) for r in routes]}, sort_keys=False),
+        encoding="utf-8",
+    )

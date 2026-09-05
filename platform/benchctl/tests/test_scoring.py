@@ -176,9 +176,9 @@ def test_oob_token_maps_to_the_right_vulnerability(make_catalog):
     doc = score_run(catalog, stream)
     by_id = {v["id"]: v for v in doc["vulns"]}
     assert by_id["BENCH-SHOP-0031"]["trigger"] is True
-    assert by_id["BENCH-SHOP-0031"]["trigger_source"] == "oob"
+    assert by_id["BENCH-SHOP-0031"]["trigger_source"] == "oob:token"
     assert by_id["BENCH-SHOP-0001"]["trigger"] is False
-    assert any(w["code"] == "unknown-oob-token" for w in doc["warnings"])
+    assert any(w["code"] == "unattributed-oob" for w in doc["warnings"])
 
 
 def test_trigger_implies_reach_and_warns(make_catalog):
@@ -202,9 +202,18 @@ def test_trigger_never_promotes_exercise(make_catalog):
     assert row["exercise"] is False  # an oracle firing is not evidence of fuzzing
 
 
-def test_unknown_trigger_id_is_reported(make_catalog):
+def test_unknown_signal_is_reported(make_catalog):
+    # A target emitting a signal the catalog does not claim means a planted flaw
+    # nobody can ever be credited for.
     catalog = load_catalog(make_catalog([vuln_entry()]))
     doc = score_run(catalog, events_from_iterable([trigger_event("BENCH-GHOST-9999")]))
+    assert any(w["code"] == "unknown-signal" for w in doc["warnings"])
+
+
+def test_unknown_trigger_id_is_reported(make_catalog):
+    catalog = load_catalog(make_catalog([vuln_entry()]))
+    doc = score_run(catalog, events_from_iterable([
+        trigger_event(vuln_id="BENCH-GHOST-9999")]))
     assert any(w["code"] == "unknown-trigger-id" for w in doc["warnings"])
 
 
@@ -363,3 +372,242 @@ def test_fetch_events_follows_the_cursor(monkeypatch):
     assert stream.counts()["total"] == 3
     assert meta["tool"] == "zap"
     assert sum(1 for u in seen if "/events" in u) == 3
+
+
+# --------------------------------------------------------------------------- #
+# signal indirection and out-of-band attribution
+# --------------------------------------------------------------------------- #
+
+def _ssrf_entry(vuln_id="BENCH-SHOP-0031", **oracle):
+    base = {"kind": "oob", "signal": "shop.imports.fetch.external",
+            "condition": "The importer fetched a caller-supplied URL and the sinkhole saw it."}
+    base.update(oracle)
+    return vuln_entry(
+        id=vuln_id, **{"class": "ssrf_blind"}, severity="high",
+        entrypoint={"method": "POST", "path": "/api/admin/imports", "auth": "admin",
+                    "param": "source_url", "param_in": "json",
+                    "default_value": "https://suppliers/catalog.json"},
+        oracle=base,
+    )
+
+
+def test_trigger_is_credited_from_the_opaque_signal(make_catalog):
+    # The normal path: the target emits a metric-shaped signal, never a catalog id.
+    entry = vuln_entry()
+    root = make_catalog([entry])
+    ev = {"type": "trigger", "app": "shopfront", "ts": 2.0,
+          "signal": "shop.synthetic.0001.anomaly"}
+    assert outcome(entry, [http_event(), ev], root).trigger is True
+    assert outcome(entry, [http_event(), ev], root).trigger_source == "signal"
+
+
+def test_another_entrys_signal_does_not_credit_this_one(make_catalog):
+    entry = vuln_entry()
+    root = make_catalog([entry])
+    ev = {"type": "trigger", "app": "shopfront", "signal": "shop.synthetic.9999.anomaly"}
+    assert outcome(entry, [http_event(), ev], root).trigger is False
+
+
+def test_oob_attribution_by_signal_correlation(make_catalog):
+    # The sink registered {signal, destination_host, route, param, request_id} with
+    # the collector before its outbound fetch; the sinkhole matched the lookup.
+    catalog = load_catalog(make_catalog([_ssrf_entry()]))
+    ev = oob_event(signal="shop.imports.fetch.external", channel="dns",
+                   destination_host="7x3.oast.fun", request_id="req-42",
+                   attribution="signal-correlation")
+    doc = score_run(catalog, events_from_iterable([ev]))
+    row = doc["vulns"][0]
+    assert row["trigger"] is True
+    assert row["trigger_source"] == "oob:signal-correlation"
+    assert row["attributions"][0]["confidence"] == "high"
+    # The callback went to the tool's OWN collaborator domain, which is the whole
+    # point of running the sinkhole as the network's resolver.
+    assert row["attributions"][0]["destination_host"] == "7x3.oast.fun"
+    assert doc["low_confidence_triggers"]["count"] == 0
+
+
+def test_oob_weak_attribution_is_counted_but_never_headline(make_catalog):
+    catalog = load_catalog(make_catalog([_ssrf_entry()]))
+    ev = oob_event(signal="shop.imports.fetch.external", channel="dns",
+                   attribution="container-window", confidence="low",
+                   container="shopfront", destination_host="attacker.example")
+    doc = score_run(catalog, events_from_iterable([ev]))
+    row = doc["vulns"][0]
+    assert row["trigger"] is False           # headline: proof only
+    assert row["trigger_low_confidence"] is True
+    assert row["trigger_any"] is True
+    overall = doc["metrics"]["overall"]
+    assert overall["trigger"]["hit"] == 0
+    assert overall["trigger_any"]["hit"] == 1
+    low = doc["low_confidence_triggers"]
+    assert low["count"] == 1 and low["credited_only_here"] == ["BENCH-SHOP-0031"]
+    assert low["headline_trigger"]["hit"] == 0 and low["inclusive_trigger"]["hit"] == 1
+    assert any(w["code"] == "low-confidence-trigger" for w in doc["warnings"])
+
+
+def test_a_weak_attribution_does_not_promote_reach(make_catalog):
+    # A container/time-window guess is not evidence the endpoint was ever touched.
+    catalog = load_catalog(make_catalog([_ssrf_entry()]))
+    ev = oob_event(signal="shop.imports.fetch.external", low_confidence=True)
+    doc = score_run(catalog, events_from_iterable([ev]))
+    row = doc["vulns"][0]
+    assert row["reach"] is False and row["reach_inferred"] is False
+    assert not any(w["code"] == "trigger-without-reach" for w in doc["warnings"])
+
+
+def test_the_sinkhole_flag_is_never_overruled_upwards(make_catalog):
+    # Even a token we own stays low confidence when the sinkhole says it is unsure.
+    catalog = load_catalog(make_catalog([_ssrf_entry(canary_token="shop0031")]))
+    ev = oob_event("shop0031", confidence="low")
+    doc = score_run(catalog, events_from_iterable([ev]))
+    assert doc["vulns"][0]["trigger"] is False
+    assert doc["vulns"][0]["trigger_any"] is True
+
+
+def test_container_window_fallback_needs_an_unambiguous_candidate(make_catalog):
+    unique = load_catalog(make_catalog([_ssrf_entry()]))
+    ev = oob_event(app="shopfront", route="/api/admin/imports", method="POST",
+                   attribution="container-window")
+    doc = score_run(unique, events_from_iterable([ev]))
+    assert doc["vulns"][0]["trigger_any"] is True
+    assert doc["vulns"][0]["attributions"][0]["kind"] == "container-window"
+
+    # Two out-of-band oracles on one route: guessing would pick one at random, so
+    # the callback stays unattributed and is reported instead.
+    ambiguous = load_catalog(make_catalog([
+        _ssrf_entry("BENCH-SHOP-0031", signal="shop.imports.fetch.external"),
+        _ssrf_entry("BENCH-SHOP-0032", signal="shop.imports.fetch.retry"),
+    ]))
+    doc = score_run(ambiguous, events_from_iterable([ev]))
+    assert all(v["trigger_any"] is False for v in doc["vulns"])
+    assert any(w["code"] == "unattributed-oob" for w in doc["warnings"])
+    assert len(doc["low_confidence_triggers"]["unattributed_callbacks"]) == 1
+
+
+def test_trigger_any_equals_trigger_without_weak_attributions(make_catalog):
+    catalog = _three_vuln_catalog(make_catalog)
+    doc = score_run(catalog, events_from_iterable([
+        http_event(params=[param("q", "x'")]), trigger_event("BENCH-SHOP-0001")]))
+    for bucket in doc["metrics"]["by_family"].values():
+        assert bucket["trigger"] == bucket["trigger_any"]
+    assert doc["low_confidence_triggers"]["count"] == 0
+
+
+# --------------------------------------------------------------------------- #
+# wire vocabulary, ordering and trust
+# --------------------------------------------------------------------------- #
+
+def test_current_and_legacy_sink_event_names_are_both_accepted(make_catalog):
+    entry = vuln_entry()
+    root = make_catalog([entry])
+    current = {"type": "signal", "app": "shopfront", "ts": 2.0,
+               "signal": "shop.synthetic.0001.anomaly",
+               "attributes": {"payload": "x' UNION SELECT", "detail": "extra table"}}
+    legacy = {"type": "trigger", "app": "shopfront", "ts": 2.0,
+              "signal": "shop.synthetic.0001.anomaly",
+              "evidence": {"payload": "x' UNION SELECT", "detail": "extra table"}}
+    for ev in (current, legacy):
+        out = outcome(entry, [http_event(), ev], root)
+        assert out.trigger is True
+        # `attributes` is the wire name; the platform keeps calling it evidence.
+        assert out.evidence["payload"] == "x' UNION SELECT"
+
+
+def test_legacy_event_type_is_normalised_in_the_counts(make_catalog):
+    stream = events_from_iterable([
+        {"type": "trigger", "app": "shopfront", "signal": "s.a.b.c"},
+        {"type": "signal", "app": "shopfront", "signal": "s.a.b.d"},
+    ])
+    assert stream.counts()["signal"] == 2
+    assert "trigger" not in stream.counts()
+
+
+def test_oracle_kind_comes_from_the_catalog_not_from_the_event(make_catalog):
+    # The SDK no longer sends it; if an archived event claims one, it is ignored --
+    # the catalog is authoritative and an event must not be able to re-label a flaw.
+    catalog = load_catalog(make_catalog([vuln_entry()]))  # class sqli_union -> kind sink
+    doc = score_run(catalog, events_from_iterable([
+        http_event(),
+        {"type": "signal", "app": "shopfront", "signal": "shop.synthetic.0001.anomaly",
+         "oracle_kind": "timing"},
+    ]))
+    assert doc["vulns"][0]["oracle_kind"] == "sink"
+    assert doc["vulns"][0]["trigger"] is True
+
+
+def test_scoring_is_independent_of_event_order(make_catalog):
+    catalog = _three_vuln_catalog(make_catalog)
+    events = [
+        http_event(params=[param("q", "x'")]),
+        trigger_event("BENCH-SHOP-0001"),
+        http_event(route="/api/orders/{id}", params=[param("id", "1002", "path")]),
+        oob_event(signal="shop.synthetic.0003.anomaly", destination_host="a.oast.fun"),
+    ]
+
+    def score(order):
+        doc = score_run(catalog, events_from_iterable(order))
+        doc.pop("generated_at")
+        return doc
+
+    assert score(events) == score(list(reversed(events)))
+    assert score(events) == score([events[i] for i in (2, 0, 3, 1)])
+
+
+def test_a_registration_alone_never_credits_a_trigger(make_catalog):
+    # A registration says "the sink is about to fetch this URL", which is a payload,
+    # not an effect. Only the callback proves the flaw, so an unknown-typed
+    # correlation record must stay inert until a sinkhole observation joins it.
+    catalog = load_catalog(make_catalog([_ssrf_entry()]))
+    doc = score_run(catalog, events_from_iterable([
+        {"type": "oob_registration", "app": "shopfront",
+         "signal": "shop.imports.fetch.external", "destination_host": "9zk.oast.fun"}]))
+    assert doc["vulns"][0]["trigger"] is False
+    assert doc["vulns"][0]["trigger_any"] is False
+
+
+def test_correlation_arriving_after_the_observation_still_joins(make_catalog):
+    # The sink dispatches its registration on a separate connection, so it can land
+    # in the export after the callback it explains. Join on content, never on order.
+    catalog = load_catalog(make_catalog([_ssrf_entry()]))
+    observation = oob_event(channel="dns", destination_host="9zk.oast.fun")
+    registration = {"type": "oob_registration", "app": "shopfront", "ts": 0.5,
+                    "signal": "shop.imports.fetch.external",
+                    "destination_host": "9zk.oast.fun", "request_id": "req-7"}
+    doc = score_run(catalog, events_from_iterable([observation, registration]))
+    row = doc["vulns"][0]
+    assert row["trigger"] is True
+    assert row["attributions"][0]["kind"] == "signal-correlation"
+    assert row["attributions"][0]["confidence"] == "high"
+
+
+def test_correlation_joins_on_request_id_and_on_a_host_suffix(make_catalog):
+    catalog = load_catalog(make_catalog([_ssrf_entry()]))
+    registration = {"type": "oob_registration", "app": "shopfront",
+                    "signal": "shop.imports.fetch.external",
+                    "destination_host": "9zk.oast.fun", "request_id": "req-7"}
+
+    by_request = score_run(catalog, events_from_iterable([
+        oob_event(request_id="req-7"), registration]))
+    assert by_request["vulns"][0]["trigger"] is True
+
+    # Tools prepend a label per probe, so the observed lookup is a subdomain of the
+    # hostname the sink registered.
+    by_suffix = score_run(catalog, events_from_iterable([
+        oob_event(destination_host="probe12.9zk.oast.fun."), registration]))
+    assert by_suffix["vulns"][0]["trigger"] is True
+
+    unrelated = score_run(catalog, events_from_iterable([
+        oob_event(destination_host="someone-else.oast.fun"), registration]))
+    assert unrelated["vulns"][0]["trigger"] is False
+
+
+def test_client_ip_is_descriptive_and_never_excludes_traffic(make_catalog):
+    # Synthetic marking is decided by the SDK from the socket peer address. A tool
+    # that forges X-Forwarded-For into the platform range must not be able to erase
+    # its own traffic, so nothing here reads client_ip.
+    entry = vuln_entry()
+    root = make_catalog([entry])
+    forged = http_event(params=[param("q", "x' OR 1=1--")],
+                        client_ip="10.99.0.1", user_agent="bench-selftest/1.0")
+    out = outcome(entry, [forged], root)
+    assert out.reach is True and out.exercise is True

@@ -119,3 +119,107 @@ def test_report_scales_to_n_tools(make_catalog):
     md = markdown_report(many)
     for i in range(6):
         assert f"| tool{i} |" in md
+
+
+def with_new_blocks(make_catalog):
+    """A run carrying a crawl block, a weak attribution and inventory-aware FPs."""
+    docs = two_runs(make_catalog)
+    good, crawler = docs
+    good["metrics"]["crawl"] = {
+        "inventory_available": True, "apps": ["shopfront"],
+        "surface": {"routes": 8, "covered": 7, "coverage": 0.875},
+        "planted_routes": {"routes": 2, "covered": 2, "coverage": 1.0},
+        "safe_routes": {"routes": 6, "covered": 5, "coverage": 5 / 6},
+        "by_app": {"shopfront": {"routes": 8, "covered": 7, "coverage": 0.875}},
+        "by_render": {"static-html": {"routes": 4, "covered": 4, "coverage": 1.0},
+                      "spa-react": {"routes": 4, "covered": 3, "coverage": 0.75}},
+        "by_auth": {}, "planted_vuln_reach": {"hit": 2, "applicable": 2, "recall": 1.0},
+        "requests_off_inventory": 0, "unvisited_routes": [],
+    }
+    crawler["metrics"]["crawl"] = {
+        "inventory_available": True, "apps": ["shopfront"],
+        "surface": {"routes": 8, "covered": 2, "coverage": 0.25},
+        "planted_routes": {"routes": 2, "covered": 1, "coverage": 0.5},
+        "safe_routes": {"routes": 6, "covered": 1, "coverage": 1 / 6},
+        "by_app": {"shopfront": {"routes": 8, "covered": 2, "coverage": 0.25}},
+        "by_render": {"static-html": {"routes": 4, "covered": 2, "coverage": 0.5},
+                      "spa-react": {"routes": 4, "covered": 0, "coverage": 0.0}},
+        "by_auth": {}, "planted_vuln_reach": {"hit": 1, "applicable": 2, "recall": 0.5},
+        "requests_off_inventory": 3, "unvisited_routes": [],
+    }
+    crawler["low_confidence_triggers"] = {
+        "count": 1, "vuln_ids": ["BENCH-SHOP-0002"],
+        "credited_only_here": ["BENCH-SHOP-0002"],
+        "headline_trigger": {"hit": 0, "applicable": 2, "recall": 0.0},
+        "inclusive_trigger": {"hit": 1, "applicable": 2, "recall": 0.5},
+        "attributions": [{"vuln_id": "BENCH-SHOP-0002", "kind": "container-window",
+                          "confidence": "low", "channel": "dns"}],
+        "unattributed_callbacks": [{"vuln_id": None, "kind": "unattributed",
+                                    "confidence": "low", "channel": "dns"}],
+    }
+    crawler["metrics"]["overall"]["trigger_any"] = {"hit": 1, "applicable": 2, "recall": 0.5}
+    crawler["metrics"]["by_family"]["xss"] = {
+        "vulns": 1,
+        "reach": {"hit": 0, "applicable": 1, "recall": 0.0},
+        "exercise": {"hit": 0, "applicable": 1, "recall": 0.0},
+        "trigger": {"hit": 0, "applicable": 1, "recall": 0.0},
+        "trigger_any": {"hit": 1, "applicable": 1, "recall": 1.0},
+    }
+    crawler["findings"].update({"false_positives_confirmed": 1,
+                                "false_positives_unknown_route": 1,
+                                "precision_confirmed": 0.0,
+                                "inventory_available": True})
+    crawler["findings"]["false_positive_list"][0]["fp_basis"] = "inventory-safe-route"
+    return docs
+
+
+def test_crawl_section_shows_both_denominators(make_catalog):
+    md = markdown_report(with_new_blocks(make_catalog))
+    assert "## Crawl coverage — whole published surface" in md
+    block = md.split("## Crawl coverage")[1].split("##")[0]
+    assert "whole surface" in block and "planted-vuln reach" in block
+    assert "25% (2/8)" in block          # crawler walked a quarter of the surface
+    assert "50% (1/2)" in block          # ...while planted-only reach flatters it
+    assert "surface: spa-react" in block
+
+
+def test_weak_attribution_section_is_separate_from_the_headline(make_catalog):
+    docs = with_new_blocks(make_catalog)
+    md = markdown_report(docs)
+    assert "## Out-of-band attribution strength" in md
+    block = md.split("## Out-of-band attribution strength")[1].split("##")[0]
+    assert "headline trigger" in block and "incl. weak attribution" in block
+    assert "BENCH-SHOP-0002" in block
+    # the family table flags it as a suffix, never folded into T
+    family_block = md.split("## By family")[1].split("##")[0]
+    assert "(+1 weak)" in family_block
+
+
+def test_summary_table_carries_the_new_columns(make_catalog):
+    md = markdown_report(with_new_blocks(make_catalog))
+    summary = md.split("## Overall")[1].split("##")[0]
+    assert "trigger +weak oob" in summary
+    assert "surface crawl" in summary
+    assert "FP (confirmed)" in summary
+    assert "2 (1)" in summary
+
+
+def test_precision_table_shows_the_confirmed_reading(make_catalog):
+    md = markdown_report(with_new_blocks(make_catalog))
+    block = md.split("## Precision")[1].split("##")[0]
+    assert "FP confirmed" in block and "confirmed" in block
+
+
+def test_html_renders_the_new_sections_offline(make_catalog):
+    page = html_report(with_new_blocks(make_catalog))
+    assert "Crawl coverage" in page and "Out-of-band attribution strength" in page
+    assert "inventory-safe-route" in page
+    assert "<script" not in page.lower()
+    for marker in ("http://", "https://", "<link", "@import"):
+        assert marker not in page, marker
+
+
+def test_sections_are_skipped_when_the_data_is_absent(make_catalog):
+    md = markdown_report(two_runs(make_catalog))
+    assert "## Crawl coverage" not in md
+    assert "## Out-of-band attribution strength" not in md

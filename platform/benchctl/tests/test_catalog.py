@@ -103,14 +103,52 @@ def test_route_dialect_difference_still_counts_as_a_shared_entrypoint(make_catal
     assert "shared-entrypoint" in codes(catalog, "warning")
 
 
-def test_oob_oracle_without_token_warns(make_catalog):
+def test_oob_oracle_with_neither_signal_nor_token_warns(make_catalog):
+    # Nothing to correlate on: the sinkhole could only guess by container and time
+    # window, which never counts towards headline trigger recall.
     entry = vuln_entry(
         **{"class": "ssrf_blind"},
         severity="high",
-        oracle={"kind": "oob", "condition": "The canary service received a callback token."},
+        oracle={"kind": "oob", "signal": None,
+                "condition": "The sinkhole observed a callback for this import job."},
     )
     catalog = load_catalog(make_catalog([entry]))
-    assert "oob-without-token" in codes(catalog, "warning")
+    assert catalog.errors == ()
+    assert "oob-unattributable" in codes(catalog, "warning")
+
+
+def test_non_oob_oracle_without_a_signal_warns(make_catalog):
+    # A target must never emit a catalog id, so a sink with no signal is currently
+    # unscoreable. A warning rather than an error: entries are written before the
+    # targets that emit their signal, and one gap must not block validation.
+    catalog = load_catalog(make_catalog([vuln_entry(oracle={"signal": None})]))
+    assert "signal-missing" in codes(catalog, "warning")
+    assert catalog.errors == ()
+
+
+def test_duplicate_signal_is_an_error(make_catalog):
+    entries = [
+        vuln_entry(id="BENCH-SHOP-0001", oracle={"signal": "shop.catalog.query.plan_anomaly"}),
+        vuln_entry(id="BENCH-SHOP-0002", oracle={"signal": "shop.catalog.query.plan_anomaly"}),
+    ]
+    catalog = load_catalog(make_catalog(entries))
+    assert "duplicate-signal" in codes(catalog, "error")
+
+
+def test_signal_index_maps_back_to_the_entry(make_catalog):
+    catalog = load_catalog(make_catalog([vuln_entry(
+        oracle={"signal": "shop.catalog.query.plan_anomaly"})]))
+    assert catalog.by_signal["shop.catalog.query.plan_anomaly"].id == "BENCH-SHOP-0001"
+
+
+def test_shipped_signals_do_not_leak_the_benchmark():
+    # Deception mandate: the signal is the one catalog string that also exists
+    # inside a target, so it must never name the benchmark or the entry.
+    catalog = load_catalog(REPO_ROOT)
+    for v in catalog.vulns:
+        signal = (v.oracle.signal or "").lower()
+        assert "bench" not in signal
+        assert v.id.lower() not in signal
 
 
 def test_duplicate_canary_token_is_an_error(make_catalog):

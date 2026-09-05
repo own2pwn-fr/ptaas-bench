@@ -20,9 +20,10 @@ from pathlib import Path
 from typing import Any, Sequence
 
 from . import __version__
-from .catalog import Catalog, coverage_stats, find_repo_root, load_catalog
+from .catalog import Catalog, Issue, coverage_stats, find_repo_root, load_catalog
 from .events import EventStream, fetch_events, load_events
 from .findings import classify_findings, load_findings
+from .inventory import coverage_summary, crosscheck_inventory, load_inventories
 from .report import load_score, write_report
 from .scoring import score_run
 
@@ -36,7 +37,27 @@ def _root(args: argparse.Namespace) -> Path:
 
 
 def _load(args: argparse.Namespace) -> Catalog:
-    return load_catalog(_root(args))
+    """Catalog plus the route inventories, cross-checked against each other.
+
+    The cross-check lives here rather than in load_catalog because it spans two
+    components; its issues are appended to the catalog's so `bench validate` shows
+    one list and exits non-zero on either kind of error.
+    """
+    root = _root(args)
+    catalog = load_catalog(root)
+    inventory_issues: list[Issue] = []
+    inventories = load_inventories(root, issues=inventory_issues)
+    inventory_issues.extend(crosscheck_inventory(catalog, inventories))
+    if inventory_issues:
+        catalog.issues = tuple(catalog.issues) + tuple(inventory_issues)
+    return catalog
+
+
+def _load_with_inventories(
+    args: argparse.Namespace,
+) -> tuple[Catalog, dict[str, Any]]:
+    root = _root(args)
+    return _load(args), load_inventories(root)
 
 
 def _emit(obj: Any) -> None:
@@ -78,7 +99,7 @@ def cmd_validate(args: argparse.Namespace) -> int:
 # --------------------------------------------------------------------------- #
 
 def cmd_score(args: argparse.Namespace) -> int:
-    catalog = _load(args)
+    catalog, inventories = _load_with_inventories(args)
     if catalog.errors and not args.ignore_catalog_errors:
         print(
             f"refusing to score against a catalog with {len(catalog.errors)} error(s); "
@@ -109,16 +130,19 @@ def cmd_score(args: argparse.Namespace) -> int:
     findings_block = None
     if args.findings:
         app_map = json.loads(Path(args.app_map).read_text(encoding="utf-8")) if args.app_map else None
-        preliminary = score_run(catalog, stream, run=meta, apps=apps)
+        preliminary = score_run(catalog, stream, run=meta, apps=apps,
+                                inventories=inventories)
         findings_block = classify_findings(
             catalog,
             load_findings(args.findings),
             outcomes=preliminary["vulns"],
             app_map=app_map,
             apps=apps,
+            inventories=inventories,
         )
 
-    doc = score_run(catalog, stream, run=meta, findings=findings_block, apps=apps)
+    doc = score_run(catalog, stream, run=meta, findings=findings_block, apps=apps,
+                    inventories=inventories)
 
     out = Path(args.out) if args.out else Path(_root(args)) / "results" / "runs" / str(args.run) / "score.json"
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -130,14 +154,25 @@ def cmd_score(args: argparse.Namespace) -> int:
         overall = doc["metrics"]["overall"]
         print(f"run {doc['run']['run_id']} · tool {doc['run']['tool']} · {out}")
         print(f"  events   : {doc['events']}")
-        for axis in ("reach", "exercise", "trigger"):
+        for axis in ("reach", "exercise", "trigger", "trigger_any"):
             block = overall[axis]
-            print(f"  {axis:<9}: {_pct(block['recall'])} ({block['hit']}/{block['applicable']})")
+            label = "trig+weak" if axis == "trigger_any" else axis
+            print(f"  {label:<9}: {_pct(block['recall'])} ({block['hit']}/{block['applicable']})")
+        low = doc["low_confidence_triggers"]
+        if low["credited_only_here"]:
+            print(f"  weak-oob : {', '.join(low['credited_only_here'])} "
+                  "(container/time-window attribution only, excluded from headline)")
+        crawl = doc["metrics"]["crawl"]
+        if crawl["inventory_available"]:
+            surface = crawl["surface"]
+            print(f"  crawl    : {_pct(surface['coverage'])} of the published surface "
+                  f"({surface['covered']}/{surface['routes']} routes)")
         if findings_block:
             print(
                 f"  precision: {_pct(findings_block['precision'])} "
-                f"(TP {findings_block['true_positives']}, FP {findings_block['false_positives']}, "
-                f"ambiguous {findings_block['ambiguous']})"
+                f"(TP {findings_block['true_positives']}, FP {findings_block['false_positives']}"
+                f" of which {findings_block['false_positives_confirmed']} confirmed by the "
+                f"inventory, ambiguous {findings_block['ambiguous']})"
             )
         for warning in doc["warnings"]:
             print(f"  ! {warning['code']} {warning['vuln_id'] or ''}", file=sys.stderr)
@@ -180,8 +215,9 @@ def cmd_report(args: argparse.Namespace) -> int:
 # --------------------------------------------------------------------------- #
 
 def cmd_catalog_stats(args: argparse.Namespace) -> int:
-    catalog = _load(args)
+    catalog, inventories = _load_with_inventories(args)
     stats = coverage_stats(catalog)
+    stats["surface"] = coverage_summary(inventories)
     if args.json:
         _emit(stats)
         return 0
@@ -203,6 +239,20 @@ def cmd_catalog_stats(args: argparse.Namespace) -> int:
         print(f"\n{axis[3:]}")
         for key, count in stats[axis].items():
             print(f"  {key:<20} {count:>4}")
+    surface = stats["surface"]
+    if surface["routes"]:
+        ratio = surface["safe_per_planted"]
+        print(f"\npublished surface: {surface['routes']} routes "
+              f"({surface['planted']} planted, {surface['safe']} safe"
+              + (f", {ratio:.1f} safe per planted" if ratio is not None else "") + ")")
+    oracles = stats["oracles"]
+    if oracles["without_signal"]:
+        print(f"\n{len(oracles['without_signal'])} entr(ies) with no oracle.signal: "
+              + ", ".join(oracles["without_signal"]))
+    if stats["deception"]["without_decoy_note"]:
+        print(f"{len(stats['deception']['without_decoy_note'])} entr(ies) with no decoy_note "
+              "(cover story): " + ", ".join(stats["deception"]["without_decoy_note"]))
+
     empty = stats["empty_classes"]
     print(f"\n{len(empty)} class(es) with zero planted vulnerabilities:")
     for i in range(0, len(empty), 4):

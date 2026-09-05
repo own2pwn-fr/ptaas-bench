@@ -21,6 +21,10 @@ Integrity checks, and the level each one is reported at:
   error   ``requires_prereq`` referencing an unknown id, or a prerequisite cycle
   error   duplicate ``oracle.canary_token`` -- an OOB callback could not be
           attributed to a single vulnerability
+  error   duplicate ``oracle.signal`` -- signal -> vulnerability must be a
+          function, otherwise a fired sink could not be attributed to one entry
+  warning ``oracle.signal`` missing on a non-oob oracle -- the entry is currently
+          unscoreable, since a target must never emit a catalog id
   warning two vulnerabilities sharing one entrypoint (app + method + route). This
           is legitimate -- one endpoint can host both an IDOR and a SQLi -- but it
           means their reach scores are perfectly correlated, which a reader of the
@@ -110,6 +114,7 @@ class Oracle:
     condition: str
     poc: str | None = None
     canary_token: str | None = None
+    signal: str | None = None
 
 
 @dataclass(frozen=True)
@@ -131,6 +136,7 @@ class Vuln:
     tags: tuple[str, ...] = ()
     introduced: str | None = None
     notes: str | None = None
+    decoy_note: str | None = None
     source: str | None = None
 
     @property
@@ -166,12 +172,17 @@ class Catalog:
 
     by_id: dict[str, Vuln] = field(init=False, repr=False)
     by_token: dict[str, Vuln] = field(init=False, repr=False)
+    by_signal: dict[str, Vuln] = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
         self.by_id = {v.id: v for v in self.vulns}
         self.by_token = {
             v.oracle.canary_token: v for v in self.vulns if v.oracle.canary_token
         }
+        # signal -> vulnerability is the only link between what a target emits and
+        # what the catalog grades; targets never carry a catalog id (see the
+        # deception mandate in targets/target-contract.yaml).
+        self.by_signal = {v.oracle.signal: v for v in self.vulns if v.oracle.signal}
 
     def __iter__(self) -> Iterator[Vuln]:
         return iter(self.vulns)
@@ -201,7 +212,8 @@ class Catalog:
             h.update(
                 json.dumps(
                     [v.id, v.app, v.cls, v.severity, v.entrypoint.method, v.route_key,
-                     v.entrypoint.param, v.entrypoint.param_in, v.entrypoint.default_value],
+                     v.entrypoint.param, v.entrypoint.param_in, v.entrypoint.default_value,
+                     v.oracle.signal, v.oracle.canary_token],
                     sort_keys=True,
                 ).encode()
             )
@@ -332,11 +344,13 @@ def _build_vuln(raw: Mapping[str, Any], spec: Mapping[str, Any], source: str) ->
             condition=or_raw.get("condition", ""),
             poc=or_raw.get("poc"),
             canary_token=or_raw.get("canary_token"),
+            signal=or_raw.get("signal"),
         ),
         requires_prereq=tuple(raw.get("requires_prereq") or ()),
         tags=tuple(raw.get("tags") or ()),
         introduced=str(raw["introduced"]) if raw.get("introduced") else None,
         notes=raw.get("notes"),
+        decoy_note=raw.get("decoy_note"),
         source=source,
     )
 
@@ -368,6 +382,7 @@ def load_catalog(
     prefix_to_app: dict[str, str] = {}
     entrypoints: dict[tuple[str, str, str], list[str]] = {}
     tokens: dict[str, str] = {}
+    signals: dict[str, str] = {}
 
     for path in sorted(vdir.glob("*.yaml")) if vdir.is_dir() else []:
         source = str(path)
@@ -446,11 +461,44 @@ def load_catalog(
                 )
             else:
                 tokens[token] = vid
-        elif vuln.oracle.kind == "oob":
+
+        signal = vuln.oracle.signal
+        if signal:
+            if signal in signals:
+                issues.append(
+                    Issue("error", "duplicate-signal",
+                          f"signal {signal!r} is already emitted by {signals[signal]}; "
+                          "signal -> vulnerability must be a function, otherwise a "
+                          "trigger could not be attributed to one entry",
+                          vuln_id=vid, source=source)
+                )
+            else:
+                signals[signal] = vid
+        elif vuln.oracle.kind != "oob":
+            # Targets emit signals, never catalog ids, so an entry without one can
+            # only ever be credited by a platform-side emitter. That is an integrity
+            # gap, but a warning rather than an error: the corpus is written before
+            # the targets are, and a half-written entry must not stop `bench validate`
+            # from checking the other hundred. `bench catalog stats` lists these as
+            # queue items, so they cannot be forgotten quietly.
             issues.append(
-                Issue("warning", "oob-without-token",
-                      "oracle.kind is 'oob' but no canary_token is declared; only an "
-                      "in-app trigger event can ever credit this vulnerability",
+                Issue("warning", "signal-missing",
+                      f"oracle.kind is {vuln.oracle.kind!r} but no signal is declared; "
+                      "nothing the target may legitimately emit maps back to this entry "
+                      "(a target must never emit a catalog id), so no tool can be "
+                      "credited for it",
+                      vuln_id=vid, source=source)
+            )
+        elif not token:
+            # Pure oob with neither signal nor token: the sinkhole can still observe
+            # the callback, but can only attribute it by container and time window,
+            # which this scorer deliberately keeps out of the headline recall.
+            issues.append(
+                Issue("warning", "oob-unattributable",
+                      "out-of-band oracle declares neither a signal nor a canary_token; "
+                      "callbacks can only be attributed by the low-confidence "
+                      "(container, time-window) fallback and will never count towards "
+                      "headline trigger recall",
                       vuln_id=vid, source=source)
             )
 
@@ -568,5 +616,19 @@ def coverage_stats(catalog: Catalog) -> dict[str, Any]:
         "params": {
             "with_param": sum(1 for v in catalog.vulns if v.has_param),
             "without_param": sum(1 for v in catalog.vulns if not v.has_param),
+        },
+        "oracles": {
+            "by_kind": tally(v.oracle.kind for v in catalog.vulns),
+            "with_signal": sum(1 for v in catalog.vulns if v.oracle.signal),
+            "without_signal": sorted(v.id for v in catalog.vulns if not v.oracle.signal),
+            "with_canary_token": sum(1 for v in catalog.vulns if v.oracle.canary_token),
+            "with_poc": sum(1 for v in catalog.vulns if v.oracle.poc),
+            "without_poc": sorted(v.id for v in catalog.vulns if not v.oracle.poc),
+        },
+        "deception": {
+            # The cover story is what stops a reviewer shipping an implausible flaw;
+            # missing ones are a queue item like any empty OWASP cell.
+            "with_decoy_note": sum(1 for v in catalog.vulns if v.decoy_note),
+            "without_decoy_note": sorted(v.id for v in catalog.vulns if not v.decoy_note),
         },
     }

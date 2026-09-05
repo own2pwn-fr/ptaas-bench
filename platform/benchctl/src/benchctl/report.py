@@ -21,11 +21,16 @@ Headline tables, in the order a reader should meet them:
    funnel becomes visible: high reach with low trigger means a crawler,
 4. tool x render mode -- SPA collapse. Reach is shown first here because the
    collapse happens at crawl time, and a ``static-html - SPA`` delta column makes
-   the size of the cliff explicit instead of leaving it to be eyeballed.
+   the size of the cliff explicit instead of leaving it to be eyeballed,
+5. crawl coverage over the whole published surface, next to the planted-only
+   reach. Two denominators, both shown: planted-only flatters a tool that walks
+   the pages we made attractive, surface coverage says whether it crawled the site.
 
 Cells show ``recall% (hit/applicable)``. An empty cell renders as an em dash and
 means "no planted vulnerability in that bucket", which is deliberately different
-from ``0%``.
+from ``0%``. Trigger columns are the headline (proof only); where low-confidence
+out-of-band attributions exist they are shown as a separate ``+N weak`` suffix or
+column, never folded into the headline.
 """
 
 from __future__ import annotations
@@ -44,6 +49,7 @@ __all__ = [
 ]
 
 _AXES = ("reach", "exercise", "trigger")
+_COVERAGE_KEYS = ("surface", "planted_routes", "safe_routes")
 _DASH = "—"
 
 
@@ -85,7 +91,22 @@ def _fmt_triplet(metric: Mapping[str, Any] | None) -> str:
     for axis in _AXES:
         recall, _, applicable = _cell(metric, axis)
         parts.append(_DASH if recall is None or applicable == 0 else f"{recall * 100:.0f}%")
-    return f"R {parts[0]} · E {parts[1]} · T {parts[2]}"
+    text = f"R {parts[0]} · E {parts[1]} · T {parts[2]}"
+    # Weak out-of-band attributions are shown as a suffix, never merged into T.
+    _, trig_hit, _ = _cell(metric, "trigger")
+    _, any_hit, _ = _cell(metric, "trigger_any")
+    if any_hit > trig_hit:
+        text += f" (+{any_hit - trig_hit} weak)"
+    return text
+
+
+def _fmt_coverage(block: Mapping[str, Any] | None) -> str:
+    if not block or not block.get("routes"):
+        return _DASH
+    coverage = block.get("coverage")
+    if coverage is None:
+        return _DASH
+    return f"{coverage * 100:.0f}% ({block['covered']}/{block['routes']})"
 
 
 def _union_keys(docs: Sequence[Mapping[str, Any]], *path: str) -> list[str]:
@@ -134,20 +155,27 @@ def _md_table(header: Sequence[str], rows: Sequence[Sequence[str]]) -> str:
 # --------------------------------------------------------------------------- #
 
 def _summary_rows(docs: Sequence[Mapping[str, Any]]) -> tuple[list[str], list[list[str]]]:
-    header = ["tool", "vulns", "reach", "exercise", "trigger", "precision", "FP"]
+    header = ["tool", "vulns", "reach", "exercise", "trigger", "trigger +weak oob",
+              "surface crawl", "precision", "FP (confirmed)"]
     rows = []
     for doc in docs:
         overall = _node(doc, "metrics", "overall") or {}
+        crawl = _node(doc, "metrics", "crawl") or {}
         f = doc.get("findings") or {}
         precision = f.get("precision")
+        fp = _DASH
+        if f:
+            fp = f"{f.get('false_positives', 0)} ({f.get('false_positives_confirmed', 0)})"
         rows.append([
             tool_name(doc),
             str((doc.get("catalog") or {}).get("vulns_in_scope", overall.get("vulns", 0))),
             _fmt(overall, "reach"),
             _fmt(overall, "exercise"),
             _fmt(overall, "trigger"),
+            _fmt(overall, "trigger_any"),
+            _fmt_coverage(crawl.get("surface")),
             _DASH if precision is None else f"{precision * 100:.0f}%",
-            _DASH if not f else str(f.get("false_positives", 0)),
+            fp,
         ])
     return header, rows
 
@@ -211,6 +239,65 @@ def _spa_delta(cells: Mapping[str, Any]) -> str:
     return f"-{(static - hits / total) * 100:.0f} pts"
 
 
+def _crawl_rows(docs: Sequence[Mapping[str, Any]]) -> tuple[list[str], list[list[str]]]:
+    """Whole-surface coverage next to the planted-only reach, never instead of it."""
+    modes = sorted({
+        mode for doc in docs for mode in (_node(doc, "metrics", "crawl", "by_render") or {})
+    })
+    header = ["tool", "whole surface", "planted routes", "safe routes",
+              *[f"surface: {m}" for m in modes], "planted-vuln reach"]
+    rows = []
+    for doc in docs:
+        crawl = _node(doc, "metrics", "crawl") or {}
+        by_render = crawl.get("by_render") or {}
+        reach = crawl.get("planted_vuln_reach") or {}
+        recall = reach.get("recall")
+        rows.append([
+            tool_name(doc),
+            _fmt_coverage(crawl.get("surface")),
+            _fmt_coverage(crawl.get("planted_routes")),
+            _fmt_coverage(crawl.get("safe_routes")),
+            *[_fmt_coverage(by_render.get(m)) for m in modes],
+            _DASH if recall is None
+            else f"{recall * 100:.0f}% ({reach.get('hit', 0)}/{reach.get('applicable', 0)})",
+        ])
+    return header, rows
+
+
+def _weak_rows(docs: Sequence[Mapping[str, Any]]) -> tuple[list[str], list[list[str]]]:
+    header = ["tool", "headline trigger", "incl. weak attribution",
+              "credited only weakly", "unattributed callbacks"]
+    rows = []
+    for doc in docs:
+        low = doc.get("low_confidence_triggers") or {}
+        head = low.get("headline_trigger") or {}
+        incl = low.get("inclusive_trigger") or {}
+
+        def fmt(block):
+            recall = block.get("recall")
+            return (_DASH if recall is None
+                    else f"{recall * 100:.0f}% ({block.get('hit', 0)}/{block.get('applicable', 0)})")
+
+        rows.append([
+            tool_name(doc), fmt(head), fmt(incl),
+            ", ".join(low.get("credited_only_here") or []) or _DASH,
+            str(len(low.get("unattributed_callbacks") or [])),
+        ])
+    return header, rows
+
+
+def _has_crawl(docs: Sequence[Mapping[str, Any]]) -> bool:
+    return any(_node(doc, "metrics", "crawl", "inventory_available") for doc in docs)
+
+
+def _has_weak(docs: Sequence[Mapping[str, Any]]) -> bool:
+    return any(
+        (doc.get("low_confidence_triggers") or {}).get("count")
+        or (doc.get("low_confidence_triggers") or {}).get("unattributed_callbacks")
+        for doc in docs
+    )
+
+
 def _sections(docs: Sequence[Mapping[str, Any]]) -> list[tuple[str, str, list[str], list[list[str]]]]:
     """(anchor, title, header, rows) for every headline table, in reading order."""
     out = [("summary", "Overall", *_summary_rows(docs))]
@@ -223,6 +310,19 @@ def _sections(docs: Sequence[Mapping[str, Any]]) -> list[tuple[str, str, list[st
                     header, rows))
     out.append(("family", "By family — reach / exercise / trigger", *_family_rows(docs)))
     out.append(("render", "By rendering mode — where SPA crawling collapses", *_render_rows(docs)))
+    if _has_crawl(docs):
+        out.append(("crawl",
+                    "Crawl coverage — whole published surface\n"
+                    "Planted-only reach counts just the pages we made attractive; surface "
+                    "coverage counts every route the target declares, safe ones included. "
+                    "Both are shown; neither replaces the other.",
+                    *_crawl_rows(docs)))
+    if _has_weak(docs):
+        out.append(("weak",
+                    "Out-of-band attribution strength\n"
+                    "Callbacks the sinkhole could only tie to a vulnerability by container and "
+                    "time window are counted here and excluded from the headline trigger recall.",
+                    *_weak_rows(docs)))
     out.append(("severity", "By severity — trigger recall",
                 *_axis_rows(docs, "by_severity", "trigger")))
     out.append(("auth", "By required credentials — trigger recall",
@@ -279,17 +379,24 @@ def markdown_report(docs: Sequence[Mapping[str, Any]]) -> str:
             str(f.get("total", 0)),
             str(f.get("true_positives", 0)),
             str(f.get("false_positives", 0)),
+            str(f.get("false_positives_confirmed", 0)),
             str(f.get("duplicates", 0)),
             str(f.get("ambiguous", 0)),
             _DASH if f.get("precision") is None else f"{f['precision'] * 100:.0f}%",
             _DASH if f.get("precision_conservative") is None
             else f"{f['precision_conservative'] * 100:.0f}%",
+            _DASH if f.get("precision_confirmed") is None
+            else f"{f['precision_confirmed'] * 100:.0f}%",
         ])
     if fp_rows:
         parts.append("## Precision")
+        parts.append("<sub>FP confirmed = on a route the inventory describes. `conservative` "
+                     "counts location-match/class-mismatch findings as false positives; "
+                     "`confirmed` divides by confirmed false positives only.</sub>")
         parts.append("")
         parts.append(_md_table(
-            ["tool", "findings", "TP", "FP", "dup", "ambiguous", "precision", "precision (conservative)"],
+            ["tool", "findings", "TP", "FP", "FP confirmed", "dup", "ambiguous",
+             "precision", "conservative", "confirmed"],
             fp_rows,
         ))
         parts.append("")
@@ -411,11 +518,13 @@ def html_report(docs: Sequence[Mapping[str, Any]]) -> str:
             continue
         fp_rows.append([
             tool_name(doc), str(f.get("total", 0)), str(f.get("true_positives", 0)),
-            str(f.get("false_positives", 0)), str(f.get("duplicates", 0)),
-            str(f.get("ambiguous", 0)),
+            str(f.get("false_positives", 0)), str(f.get("false_positives_confirmed", 0)),
+            str(f.get("duplicates", 0)), str(f.get("ambiguous", 0)),
             _DASH if f.get("precision") is None else f"{f['precision'] * 100:.0f}% (—)",
             _DASH if f.get("precision_conservative") is None
             else f"{f['precision_conservative'] * 100:.0f}% (—)",
+            _DASH if f.get("precision_confirmed") is None
+            else f"{f['precision_confirmed'] * 100:.0f}% (—)",
         ])
     if fp_rows:
         body.append("<h2>Precision</h2>")
@@ -425,7 +534,8 @@ def html_report(docs: Sequence[Mapping[str, Any]]) -> str:
             "as false positives.</p>"
         )
         body.append(_html_table(
-            ["tool", "findings", "TP", "FP", "dup", "ambiguous", "precision", "conservative"],
+            ["tool", "findings", "TP", "FP", "FP confirmed", "dup", "ambiguous",
+             "precision", "conservative", "confirmed"],
             fp_rows,
         ))
         for doc in docs:
@@ -435,10 +545,10 @@ def html_report(docs: Sequence[Mapping[str, Any]]) -> str:
                 continue
             body.append(f"<h2>False positives — {html.escape(tool_name(doc))}</h2>")
             body.append(_html_table(
-                ["method", "url", "param", "cwe", "name", "reason"],
+                ["method", "url", "param", "cwe", "name", "basis", "reason"],
                 [[str(r.get("method") or ""), str(r.get("url") or ""), str(r.get("param") or ""),
                   ",".join(str(c) for c in (r.get("cwe") or [])), str(r.get("name") or ""),
-                  str(r.get("reason") or "")] for r in fps],
+                  str(r.get("fp_basis") or "—"), str(r.get("reason") or "")] for r in fps],
             ))
 
     warnings = [(tool_name(doc), w) for doc in docs for w in (doc.get("warnings") or [])]

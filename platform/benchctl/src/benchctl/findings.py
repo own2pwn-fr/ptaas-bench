@@ -55,15 +55,31 @@ MATCHING RULES, in order:
    verdict (true-positive > param-mismatch > class-mismatch > class-unknown), so a
    shared endpoint hosting two flaws is never penalised for the order of the files.
 
-PRECISION -- two numbers are published, never one:
+6. *Route inventory* (when the target publishes ``targets/<app>/routes.yaml``).
+   A false positive is tagged with the reason it is one, because the two reasons
+   are not equally defensible:
+     * ``inventory-safe-route``   the inventory declares that exact route safe, and
+       the contract requires safe routes to be written in the same style as planted
+       ones. This is a confirmed false positive.
+     * ``inventory-known-route``  the route is in the inventory but nothing planted
+       matches the finding's shape (wrong method, say). Also confirmed: we have
+       ground truth for that location.
+     * ``unknown-route``          no inventory describes this route. Still counted
+       as a false positive, but flagged as weaker evidence.
+     * ``no-inventory``           the target publishes none at all.
+
+PRECISION -- three numbers are published, never one:
 
     precision              = TP_unique / (TP_unique + FP)
     precision_conservative = TP_unique / (TP_unique + FP + ambiguous)
+    precision_confirmed    = TP_unique / (TP_unique + FP_confirmed)
 
-where *ambiguous* is the union of the three ``location-match, ...`` buckets. The
+where *ambiguous* is the union of the three ``location-match, ...`` buckets and
+*FP_confirmed* excludes false positives on routes no inventory describes. The
 first is the friendly reading (a right-place-wrong-label finding still put a human
-on the right endpoint), the second is the hostile one. Publishing both means the
-choice of policy is the reader's, not ours.
+on the right endpoint), the second is the hostile one, the third is the one we can
+defend route by route. Publishing all three means the choice of policy is the
+reader's, not ours.
 """
 
 from __future__ import annotations
@@ -74,6 +90,7 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
 from .catalog import Catalog, Vuln
+from .inventory import STATUS_SAFE, RouteInventory
 from .routes import path_from_url, route_matches_path
 
 __all__ = [
@@ -225,6 +242,28 @@ def _judge(f: Finding, v: Vuln, cwe_fams: Mapping[int, set[str]]) -> tuple[str, 
     )
 
 
+def _fp_basis(
+    f: Finding,
+    app: str | None,
+    inventories: Mapping[str, RouteInventory] | None,
+) -> tuple[str, str | None]:
+    """Why this non-matching finding is a false positive, and how firmly."""
+    if not inventories:
+        return "no-inventory", None
+    candidates = (
+        [inventories[app]] if app and app in inventories
+        else list(inventories.values()) if not app else []
+    )
+    for inv in candidates:
+        entry = inv.match_path(f.method, f.path)
+        if entry is None:
+            continue
+        if entry.status == STATUS_SAFE:
+            return "inventory-safe-route", entry.status
+        return "inventory-known-route", entry.status
+    return "unknown-route", None
+
+
 def classify_findings(
     catalog: Catalog,
     findings: Sequence[Finding],
@@ -232,6 +271,7 @@ def classify_findings(
     outcomes: Mapping[str, Any] | None = None,
     app_map: Mapping[str, str] | None = None,
     apps: Sequence[str] | None = None,
+    inventories: Mapping[str, RouteInventory] | None = None,
 ) -> dict[str, Any]:
     """Classify every finding and compute precision. See the module docstring.
 
@@ -263,6 +303,15 @@ def classify_findings(
                 best = (rank, verdict, reason, v)
 
         _, verdict, reason, matched = best
+        fp_basis: str | None = None
+        inventory_status: str | None = None
+        if verdict == VERDICT_FP:
+            fp_basis, inventory_status = _fp_basis(f, app, inventories)
+            if fp_basis == "inventory-safe-route":
+                reason = "the route inventory declares this exact route safe"
+            elif fp_basis == "inventory-known-route":
+                reason = ("the route is in the inventory but nothing planted matches "
+                          "this method/parameter shape")
         if verdict == VERDICT_TP and matched is not None:
             key = (f.tool, matched.id)
             if key in claimed:
@@ -283,6 +332,8 @@ def classify_findings(
             "verdict": verdict,
             "matched_vuln": matched.id if matched is not None else None,
             "reason": reason,
+            "fp_basis": fp_basis,
+            "inventory_status": inventory_status,
         })
 
     by_verdict: dict[str, int] = {}
@@ -307,16 +358,27 @@ def classify_findings(
             "reported_not_triggered": sorted(set(reported) - triggered),
         }
 
+    confirmed_fp = sum(
+        1 for r in rows
+        if r["verdict"] == VERDICT_FP
+        and r["fp_basis"] in {"inventory-safe-route", "inventory-known-route"}
+    )
+    unknown_fp = fp - confirmed_fp
+
     return {
         "total": len(rows),
         "by_verdict": dict(sorted(by_verdict.items())),
+        "inventory_available": bool(inventories),
         "true_positives": tp,
         "false_positives": fp,
+        "false_positives_confirmed": confirmed_fp,
+        "false_positives_unknown_route": unknown_fp,
         "duplicates": dup,
         "ambiguous": ambiguous,
         "ambiguous_breakdown": {v: by_verdict.get(v, 0) for v in AMBIGUOUS_VERDICTS},
         "precision": ratio(tp, tp + fp),
         "precision_conservative": ratio(tp, tp + fp + ambiguous),
+        "precision_confirmed": ratio(tp, tp + confirmed_fp) if inventories else None,
         "duplicate_ratio": ratio(dup, len(rows)),
         "vulns_reported": reported,
         **cross,

@@ -29,11 +29,43 @@ EXERCISE -- "did the tool put its own value into the injection point?"
         match exactly.
 
 TRIGGER -- "did the tool actually exploit it?"
-    A non-synthetic ``trigger`` event carrying the vulnerability id, or an ``oob``
-    event whose token equals the vulnerability's ``oracle.canary_token``. OOB
-    events are matched on the token alone: the token is unique per vulnerability
-    (enforced by the catalog loader) and the canary service does not know which app
-    made the callback.
+    A non-synthetic ``trigger`` event that maps to the vulnerability, or an
+    out-of-band callback attributed to it.
+
+    Trigger events are matched on ``oracle.signal`` first: targets emit an opaque,
+    metric-shaped signal (``shop.catalog.query.plan_anomaly``) and never a catalog
+    id, so that a tool which compromises a target and reads the source finds an
+    ordinary anomaly counter rather than a graded exercise. The signal -> id index
+    is built from the catalog, which also enforces signal uniqueness. A ``vuln_id``
+    is still honoured for platform-side emitters and archived runs. A signal that
+    no catalog entry claims is reported as a warning: it means a target is emitting
+    something the catalog forgot, i.e. an uncredited planted flaw.
+
+    Out-of-band callbacks are attributed three ways, and they are NOT equivalent:
+
+      token              the callback carried a token from our own zone.
+      signal-correlation the sink registered {signal, destination_host, route,
+                         param, request_id} with the collector before making the
+                         outbound fetch, and the sinkhole matched the observed
+                         lookup against that registration.
+      container-window   only the originating container and a time window matched.
+
+    The first two are proof and credit TRIGGER. The third is a guess, arrives
+    flagged as low confidence, and is counted in ``low_confidence_triggers`` and in
+    the parallel ``trigger_any`` axis -- never in the headline ``trigger`` recall.
+    Both numbers appear in every breakdown, so the difference is always visible.
+    Silently promoting a weak attribution to a proven exploit is precisely the
+    failure mode this benchmark exists to expose in other people's numbers.
+
+    Attribution never depends on the order events arrive in: a correlation record
+    can land in the export after the sinkhole observation it explains, so the join
+    is on content (token, signal, request id, destination host).
+
+    Why a sinkhole at all: it is the DNS resolver and blackhole for the whole
+    target network, so it also captures callbacks aimed at the tool's own
+    collaborator domain (burpcollaborator.net, oast.fun, an agent's own host).
+    Without that, every blind SSRF/XXE/command-injection would score as missed for
+    every tool -- a property of our sealed topology, not of the tools.
 
 Consistency: TRIGGER implies REACH. If a vulnerability triggered without a
 matching request event, the report shows reach = true anyway and emits a
@@ -43,7 +75,14 @@ under-report the tool for a platform bug. The analogous
 ``trigger-without-exercise`` case is reported as a warning too, but does *not*
 promote exercise: exercise is a claim about a specific parameter, and inferring it
 from a trigger would let an out-of-band oracle manufacture a fuzzing claim we never
-observed.
+observed. Only a high-confidence trigger promotes reach: a container-window guess
+is not evidence that the endpoint was ever touched.
+
+CRAWL COVERAGE -- reach is measured over planted vulnerabilities, which is a biased
+denominator: those are the pages we made attractive. When targets publish a route
+inventory (targets/<app>/routes.yaml), ``metrics.crawl`` additionally reports
+coverage over the whole declared surface, planted and safe routes alike. Both
+numbers are published; neither replaces the other.
 """
 
 from __future__ import annotations
@@ -54,19 +93,39 @@ from datetime import datetime, timezone
 from typing import Any, Callable, Iterable, Mapping, Sequence
 
 from .catalog import Catalog, Vuln
-from .events import EventStream, HttpRequestEvent
-from .routes import routes_equal
+from .events import EventStream, HttpRequestEvent, OobEvent
+from .inventory import RouteInventory
+from .routes import normalize_route, routes_equal
 
 __all__ = [
     "SCORE_SCHEMA_VERSION",
+    "AXES",
+    "correlation_index",
+    "Attribution",
     "Outcome",
     "sha256_of",
     "param_in_matches",
+    "attribute_oob",
+    "attribute_oob_events",
     "score_vuln",
     "score_run",
 ]
 
-SCORE_SCHEMA_VERSION = "1.0.0"
+# 1.1.0 added the trigger_any axis, low_confidence_triggers and metrics.crawl.
+SCORE_SCHEMA_VERSION = "1.1.0"
+
+# The four reported axes. `trigger` is the headline (proof only); `trigger_any`
+# additionally counts low-confidence out-of-band attributions.
+AXES = ("reach", "exercise", "trigger", "trigger_any")
+
+# Markers, any of which demote an out-of-band attribution to a guess. Several
+# spellings are accepted because the sinkhole and the collector ship separately and
+# this scorer must not silently mis-grade when one of them is upgraded first.
+_WEAK_ATTRIBUTIONS = frozenset({
+    "container", "container-window", "container_window", "time-window", "time_window",
+    "window", "heuristic", "fallback", "weak", "low", "low-confidence",
+})
+_WEAK_CONFIDENCE = frozenset({"low", "weak", "guess"})
 
 # Body-ish parameter locations, treated as interchangeable. See module docstring.
 _BODY_LOCATIONS = frozenset({"body", "json", "multipart", "raw"})
@@ -85,6 +144,36 @@ def param_in_matches(catalog_in: str, event_in: str) -> bool:
     return a in _BODY_LOCATIONS and b in _BODY_LOCATIONS
 
 
+@dataclass(frozen=True)
+class Attribution:
+    """How one out-of-band callback was tied back to a planted vulnerability."""
+
+    vuln_id: str | None
+    kind: str  # token | signal-correlation | declared-id | container-window | unattributed
+    confidence: str  # "high" | "low"
+    channel: str | None = None
+    destination_host: str | None = None
+    request_id: str | None = None
+    container: str | None = None
+    ts: float | None = None
+
+    @property
+    def is_proof(self) -> bool:
+        return self.vuln_id is not None and self.confidence == "high"
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "vuln_id": self.vuln_id,
+            "kind": self.kind,
+            "confidence": self.confidence,
+            "channel": self.channel,
+            "destination_host": self.destination_host,
+            "request_id": self.request_id,
+            "container": self.container,
+            "ts": self.ts,
+        }
+
+
 @dataclass
 class Outcome:
     """Per-vulnerability verdict plus the evidence that produced it."""
@@ -92,15 +181,22 @@ class Outcome:
     vuln_id: str
     reach: bool = False
     exercise: bool | None = None  # None = not applicable (no param declared)
-    trigger: bool = False
+    trigger: bool = False  # headline: proof only
+    trigger_low_confidence: bool = False  # attributed by container + time window
     reach_events: int = 0
     trigger_events: int = 0
     reach_inferred: bool = False  # reach set from a trigger, no request seen
     first_reach_ts: float | None = None
     first_trigger_ts: float | None = None
     exercise_sample: str | None = None
-    trigger_source: str | None = None  # "trigger-event" | "oob" | None
+    trigger_source: str | None = None  # "signal" | "vuln_id" | "oob:<kind>"
+    attributions: list[dict[str, Any]] = field(default_factory=list)
     evidence: dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def trigger_any(self) -> bool:
+        """Trigger including low-confidence out-of-band attributions."""
+        return self.trigger or self.trigger_low_confidence
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -108,6 +204,8 @@ class Outcome:
             "reach": self.reach,
             "exercise": self.exercise,
             "trigger": self.trigger,
+            "trigger_any": self.trigger_any,
+            "trigger_low_confidence": self.trigger_low_confidence,
             "reach_events": self.reach_events,
             "trigger_events": self.trigger_events,
             "reach_inferred": self.reach_inferred,
@@ -115,8 +213,143 @@ class Outcome:
             "first_trigger_ts": self.first_trigger_ts,
             "exercise_sample": self.exercise_sample,
             "trigger_source": self.trigger_source,
+            "attributions": self.attributions,
             "evidence": self.evidence,
         }
+
+
+def _is_weak(ev: OobEvent) -> bool:
+    marker = (ev.attribution or "").strip().lower()
+    return (
+        ev.low_confidence
+        or (ev.confidence or "").strip().lower() in _WEAK_CONFIDENCE
+        or marker in _WEAK_ATTRIBUTIONS
+    )
+
+
+def _norm_host(host: str | None) -> str:
+    return (host or "").strip().rstrip(".").lower()
+
+
+def correlation_index(stream: EventStream) -> tuple[dict[str, str], dict[str, str]]:
+    """Content join keys for out-of-band correlations: host -> signal, request -> signal.
+
+    A sink registers ``{signal, destination_host, route, param, request_id}`` with
+    the collector immediately before its outbound fetch, over a separate connection,
+    so that record can land in the export *after* the sinkhole observation it
+    explains. A registration is not itself evidence -- it describes a payload, not
+    an effect -- so it must not arrive as a sink-fired ``signal`` event, and this
+    index only ever supplies a join key. Nothing here depends on order: every event in the stream is scanned,
+    whatever its type, and the join is on content. Reading ``raw`` rather than a
+    typed field is deliberate -- a future correlation event type must work without
+    a change here.
+    """
+    by_host: dict[str, str] = {}
+    by_request: dict[str, str] = {}
+    for ev in stream.events:
+        raw = ev.raw or {}
+        signal = raw.get("signal")
+        if not signal:
+            continue
+        host = _norm_host(raw.get("destination_host") or raw.get("host"))
+        if host:
+            by_host.setdefault(host, str(signal))
+        request_id = raw.get("request_id")
+        if request_id:
+            by_request.setdefault(str(request_id), str(signal))
+    return by_host, by_request
+
+
+def _signal_for_host(host: str | None, by_host: Mapping[str, str]) -> str | None:
+    """Exact host match, then the registered host as a DNS suffix of the observed one.
+
+    Tools routinely prepend labels to their collaborator hostname (one per probe),
+    so the lookup a sinkhole sees is often a subdomain of what the sink registered.
+    """
+    key = _norm_host(host)
+    if not key:
+        return None
+    if key in by_host:
+        return by_host[key]
+    for registered, signal in by_host.items():
+        if key.endswith("." + registered) or registered.endswith("." + key):
+            return signal
+    return None
+
+
+def attribute_oob(
+    ev: OobEvent,
+    catalog: Catalog,
+    correlations: tuple[Mapping[str, str], Mapping[str, str]] | None = None,
+) -> Attribution:
+    """Tie one callback to a vulnerability, and say how strong the tie is.
+
+    Order matters: a token from our own zone is definitive whatever else the event
+    says, then a signal registered by the sink before its outbound fetch, then an
+    explicit id (platform-side emitters only), then -- when the sinkhole could only
+    match a container and a time window -- a guess, which is kept out of the
+    headline recall. An event carrying an explicit low-confidence flag stays low
+    confidence even when it also names a signal: the flag is the sinkhole telling
+    us it is not sure, and this scorer never overrules it upwards.
+    """
+    weak = _is_weak(ev)
+    common = {
+        "channel": ev.channel,
+        "destination_host": ev.destination_host,
+        "request_id": ev.request_id,
+        "container": ev.container,
+        "ts": ev.ts,
+    }
+
+    if ev.token and ev.token in catalog.by_token:
+        return Attribution(catalog.by_token[ev.token].id, "token",
+                           "low" if weak else "high", **common)
+    if ev.signal and ev.signal in catalog.by_signal:
+        return Attribution(catalog.by_signal[ev.signal].id, "signal-correlation",
+                           "low" if weak else "high", **common)
+    if ev.vuln_id and ev.vuln_id in catalog.by_id:
+        return Attribution(catalog.by_id[ev.vuln_id].id, "declared-id",
+                           "low" if weak else "high", **common)
+
+    # The sinkhole saw the callback but the matching registration travelled
+    # separately; join the two on content (request id first, then destination host).
+    by_host, by_request = correlations or ({}, {})
+    signal = by_request.get(str(ev.request_id)) if ev.request_id else None
+    signal = signal or _signal_for_host(ev.destination_host, by_host)
+    if signal and signal in catalog.by_signal:
+        return Attribution(catalog.by_signal[signal].id, "signal-correlation",
+                           "low" if weak else "high", **common)
+
+    # Last resort: the sinkhole saw a callback from a container serving a known
+    # route and nothing else. Only usable when exactly one out-of-band oracle sits
+    # on that route -- otherwise the guess would pick a vulnerability at random.
+    if ev.route or ev.app:
+        candidates = [
+            v for v in catalog.vulns
+            if v.oracle.kind == "oob"
+            and (not ev.app or v.app == ev.app or ev.container == v.app)
+            and (not ev.route or routes_equal(v.entrypoint.path, ev.route))
+            and (not ev.method or v.entrypoint.method == ev.method)
+        ]
+        if len(candidates) == 1:
+            return Attribution(candidates[0].id, "container-window", "low", **common)
+    return Attribution(None, "unattributed", "low", **common)
+
+
+def attribute_oob_events(
+    stream: EventStream, catalog: Catalog
+) -> tuple[dict[str, list[Attribution]], list[Attribution]]:
+    """Attribute every callback once; returns (by vuln id, unattributed)."""
+    by_vuln: dict[str, list[Attribution]] = {}
+    orphans: list[Attribution] = []
+    correlations = correlation_index(stream)
+    for ev in stream.oob:
+        att = attribute_oob(ev, catalog, correlations)
+        if att.vuln_id is None:
+            orphans.append(att)
+        else:
+            by_vuln.setdefault(att.vuln_id, []).append(att)
+    return by_vuln, orphans
 
 
 def _request_reaches(vuln: Vuln, ev: HttpRequestEvent) -> bool:
@@ -161,8 +394,15 @@ def _param_is_exercised(vuln: Vuln, ev: HttpRequestEvent) -> tuple[bool, str | N
     return False, None
 
 
-def score_vuln(vuln: Vuln, stream: EventStream) -> Outcome:
-    """Score one vulnerability against an already synthetic-filtered stream."""
+def score_vuln(
+    vuln: Vuln, stream: EventStream, *, oob: Sequence[Attribution] = ()
+) -> Outcome:
+    """Score one vulnerability against an already synthetic-filtered stream.
+
+    ``oob`` is this vulnerability's share of the callback attributions computed by
+    :func:`attribute_oob_events`; attribution needs the whole catalog, so it is done
+    once by :func:`score_run` rather than per vulnerability here.
+    """
     out = Outcome(vuln_id=vuln.id)
     if vuln.has_param:
         out.exercise = False
@@ -181,30 +421,39 @@ def score_vuln(vuln: Vuln, stream: EventStream) -> Outcome:
                 out.exercise_sample = sample
 
     for ev in stream.triggers:
-        if ev.vuln_id != vuln.id:
+        # A target emits its opaque signal; only platform-side emitters know ids.
+        matched_by = None
+        if vuln.oracle.signal and ev.signal == vuln.oracle.signal:
+            matched_by = "signal"
+        elif ev.vuln_id and ev.vuln_id == vuln.id:
+            matched_by = "vuln_id"
+        if matched_by is None:
             continue
         out.trigger = True
         out.trigger_events += 1
-        out.trigger_source = out.trigger_source or "trigger-event"
+        out.trigger_source = out.trigger_source or matched_by
         if ev.ts is not None and (out.first_trigger_ts is None or ev.ts < out.first_trigger_ts):
             out.first_trigger_ts = ev.ts
         if ev.evidence and not out.evidence:
             out.evidence = dict(ev.evidence)
 
-    token = vuln.oracle.canary_token
-    if token:
-        for ev in stream.oob:
-            if ev.token != token:
-                continue
+    for att in oob:
+        out.trigger_events += 1
+        out.attributions.append(att.as_dict())
+        if att.confidence == "high":
             out.trigger = True
-            out.trigger_events += 1
-            out.trigger_source = out.trigger_source or "oob"
-            if ev.ts is not None and (out.first_trigger_ts is None or ev.ts < out.first_trigger_ts):
-                out.first_trigger_ts = ev.ts
-            out.evidence.setdefault("oob_channel", ev.channel)
+            out.trigger_source = out.trigger_source or f"oob:{att.kind}"
+        else:
+            # Counted, visible, but never part of the headline recall.
+            out.trigger_low_confidence = True
+        if att.ts is not None and (out.first_trigger_ts is None or att.ts < out.first_trigger_ts):
+            out.first_trigger_ts = att.ts
+        out.evidence.setdefault("oob_channel", att.channel)
 
     if out.trigger and not out.reach:
         # Exploited without an observed request: the SDK lost the request event.
+        # Only proof promotes reach -- a container-window guess is not evidence
+        # that the endpoint was ever touched.
         out.reach = True
         out.reach_inferred = True
     return out
@@ -217,7 +466,7 @@ def score_vuln(vuln: Vuln, stream: EventStream) -> Outcome:
 def _metric(vulns: Sequence[Vuln], outcomes: Mapping[str, Outcome]) -> dict[str, Any]:
     """reach/exercise/trigger counts and recalls over a subset of the catalog."""
     block: dict[str, Any] = {"vulns": len(vulns)}
-    for axis in ("reach", "exercise", "trigger"):
+    for axis in AXES:
         applicable = 0
         hit = 0
         for v in vulns:
@@ -264,6 +513,73 @@ def _group_multi(
     return {k: _metric(buckets[k], outcomes) for k in sorted(buckets)}
 
 
+def _coverage_block(entries: Sequence[Any], observed: set[tuple[str, str, str]]) -> dict[str, Any]:
+    covered = sum(1 for e in entries if e.key in observed)
+    total = len(entries)
+    return {
+        "routes": total,
+        "covered": covered,
+        # null, not 0.0, when the inventory declares nothing here: an absent
+        # denominator is not a failure to crawl.
+        "coverage": (covered / total) if total else None,
+    }
+
+
+def _crawl_coverage(
+    inventories: Mapping[str, RouteInventory],
+    stream: EventStream,
+    planted_reach: Mapping[str, Any],
+    apps: Sequence[str] | None,
+) -> dict[str, Any]:
+    """Coverage of the whole published surface, next to the planted-only recall.
+
+    Reach counts only the endpoints we made attractive, so on its own it flatters a
+    tool that happens to walk the linked, interesting pages. The inventory lists the
+    ordinary surface too (the contract requires at least three safe routes per
+    planted one), which is the honest denominator for "did it crawl the site".
+    Both are reported; the planted-only recall is copied in here verbatim so a
+    reader never has to reconcile two tables to compare them.
+    """
+    selected = {a: inv for a, inv in inventories.items() if not apps or a in set(apps)}
+    observed: set[tuple[str, str, str]] = set()
+    off_inventory = 0
+    for ev in stream.requests:
+        observed.add((ev.app or "", ev.method.upper(), normalize_route(ev.route)))
+    if selected:
+        known = {e.key for inv in selected.values() for e in inv.routes}
+        off_inventory = sum(1 for k in observed if k not in known)
+
+    routes = [e for inv in selected.values() for e in inv.routes]
+    planted = [e for e in routes if e.status == "planted"]
+    safe = [e for e in routes if e.status != "planted"]
+
+    def group(key: Callable[[Any], Any]) -> dict[str, Any]:
+        buckets: dict[str, list[Any]] = {}
+        for entry in routes:
+            buckets.setdefault(str(key(entry) if key(entry) is not None else "unspecified"), []).append(entry)
+        return {k: _coverage_block(buckets[k], observed) for k in sorted(buckets)}
+
+    return {
+        "inventory_available": bool(selected),
+        "apps": sorted(selected),
+        "surface": _coverage_block(routes, observed),
+        "planted_routes": _coverage_block(planted, observed),
+        "safe_routes": _coverage_block(safe, observed),
+        "by_app": group(lambda e: e.app),
+        "by_render": group(lambda e: e.render),
+        "by_auth": group(lambda e: e.auth),
+        # The biased denominator, kept side by side on purpose.
+        "planted_vuln_reach": dict(planted_reach),
+        "requests_off_inventory": off_inventory,
+        "unvisited_routes": [
+            {"app": e.app, "method": e.method, "path": e.path, "route": e.route_key,
+             "status": e.status, "render": e.render, "auth": e.auth}
+            for e in sorted(routes, key=lambda x: (x.app, x.route_key, x.method))
+            if e.key not in observed
+        ],
+    }
+
+
 def _chain_stats(
     catalog: Catalog, vulns: Sequence[Vuln], outcomes: Mapping[str, Outcome]
 ) -> dict[str, Any]:
@@ -304,16 +620,22 @@ def score_run(
     run: Mapping[str, Any] | None = None,
     findings: Mapping[str, Any] | None = None,
     apps: Sequence[str] | None = None,
+    inventories: Mapping[str, RouteInventory] | None = None,
 ) -> dict[str, Any]:
     """Build the full score document. See ``results/schema/score.schema.json``.
 
     ``apps`` restricts scoring to the targets that were actually in scope for the
     run; vulnerabilities in other apps are excluded from every denominator rather
-    than counted as misses.
+    than counted as misses. ``inventories`` enables the whole-surface crawl
+    coverage block; without it only the planted-only recall is reported.
     """
     scored_stream = stream.scored()
     in_scope = [v for v in catalog.vulns if not apps or v.app in set(apps)]
-    outcomes = {v.id: score_vuln(v, scored_stream) for v in in_scope}
+    oob_by_vuln, orphan_callbacks = attribute_oob_events(scored_stream, catalog)
+    outcomes = {
+        v.id: score_vuln(v, scored_stream, oob=oob_by_vuln.get(v.id, ()))
+        for v in in_scope
+    }
 
     warnings: list[dict[str, Any]] = []
     for v in in_scope:
@@ -340,8 +662,20 @@ def score_run(
                 ),
             })
 
+        if o.trigger_low_confidence and not o.trigger:
+            warnings.append({
+                "code": "low-confidence-trigger",
+                "vuln_id": v.id,
+                "message": (
+                    "the only out-of-band attribution for this vulnerability was the "
+                    "(container, time-window) fallback; counted in trigger_any and in "
+                    "low_confidence_triggers, excluded from headline trigger recall"
+                ),
+            })
+
     unknown_trigger_ids = sorted({
-        e.vuln_id for e in scored_stream.triggers if e.vuln_id not in catalog.by_id
+        e.vuln_id for e in scored_stream.triggers
+        if e.vuln_id and e.vuln_id not in catalog.by_id
     })
     for vid in unknown_trigger_ids:
         warnings.append({
@@ -349,14 +683,29 @@ def score_run(
             "vuln_id": vid,
             "message": "trigger event references an id absent from the catalog",
         })
-    unknown_tokens = sorted({
-        e.token for e in scored_stream.oob if e.token not in catalog.by_token
+    unknown_signals = sorted({
+        e.signal for e in scored_stream.triggers
+        if e.signal and e.signal not in catalog.by_signal
     })
-    for token in unknown_tokens:
+    for signal in unknown_signals:
         warnings.append({
-            "code": "unknown-oob-token",
+            "code": "unknown-signal",
             "vuln_id": None,
-            "message": f"OOB callback with token {token!r} matches no catalog vulnerability",
+            "message": (
+                f"a target emitted signal {signal!r}, which no catalog entry claims: "
+                "either the catalog forgot a planted flaw, or a sink was renamed "
+                "without updating oracle.signal. Nobody can be credited for it."
+            ),
+        })
+    for att in orphan_callbacks:
+        warnings.append({
+            "code": "unattributed-oob",
+            "vuln_id": None,
+            "message": (
+                "out-of-band callback that could not be attributed to any catalog "
+                f"entry (channel {att.channel}, destination {att.destination_host}, "
+                f"container {att.container}); a blind flaw may have fired uncredited"
+            ),
         })
 
     metrics = {
@@ -374,6 +723,30 @@ def score_run(
         "by_auth": _group(in_scope, outcomes, lambda v: v.entrypoint.auth),
         "by_requires": _group_multi(in_scope, outcomes, lambda v: v.discovery.requires),
         "by_component": _group(in_scope, outcomes, lambda v: v.component),
+        "by_oracle_kind": _group(in_scope, outcomes, lambda v: v.oracle.kind),
+    }
+    metrics["crawl"] = _crawl_coverage(
+        inventories or {}, scored_stream, metrics["overall"]["reach"], apps
+    )
+
+    low_conf = [v.id for v in in_scope if outcomes[v.id].trigger_low_confidence]
+    low_confidence_triggers = {
+        "count": len(low_conf),
+        "credited_only_here": sorted(
+            v.id for v in in_scope
+            if outcomes[v.id].trigger_low_confidence and not outcomes[v.id].trigger
+        ),
+        "vuln_ids": sorted(low_conf),
+        # Both numbers, side by side, so nobody has to recompute one from the other.
+        "headline_trigger": dict(metrics["overall"]["trigger"]),
+        "inclusive_trigger": dict(metrics["overall"]["trigger_any"]),
+        "attributions": [
+            att
+            for v in sorted(in_scope, key=lambda x: x.id)
+            for att in outcomes[v.id].attributions
+            if att.get("confidence") != "high"
+        ],
+        "unattributed_callbacks": [att.as_dict() for att in orphan_callbacks],
     }
 
     # The legend travels with the score so a report can be rendered from the JSON
@@ -412,6 +785,7 @@ def score_run(
         "events": stream.counts(),
         "legend": legend,
         "metrics": metrics,
+        "low_confidence_triggers": low_confidence_triggers,
         "chains": _chain_stats(catalog, in_scope, outcomes),
         "vulns": [
             {
@@ -433,6 +807,7 @@ def score_run(
                 "difficulty": v.discovery.difficulty,
                 "requires": list(v.discovery.requires),
                 "oracle_kind": v.oracle.kind,
+                "signal": v.oracle.signal,
                 "requires_prereq": list(v.requires_prereq),
                 **outcomes[v.id].as_dict(),
             }

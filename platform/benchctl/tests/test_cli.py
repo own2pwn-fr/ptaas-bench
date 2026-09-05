@@ -153,3 +153,71 @@ def test_catalog_stats_json(run_root, capsys):
     assert stats["total_vulns"] == 2
     assert "xss_stored" in stats["empty_classes"]
     assert stats["owasp"]["2025"]["counts"]["A01"] == 1
+
+
+def test_validate_reports_inventory_disagreements(make_catalog, capsys):
+    from conftest import routes_inventory
+
+    root = make_catalog([vuln_entry()])
+    # The inventory calls the planted route safe: real detections there would be
+    # published as false positives, so validate must go red.
+    routes_inventory(root, "shopfront", [
+        {"path": "/api/products", "method": "GET", "status": "safe"},
+        {"path": "/api/legacy", "method": "POST", "status": "planted"},
+    ])
+    assert main(["--root", str(root), "validate"]) == 1
+    err = capsys.readouterr().err
+    assert "inventory-status-mismatch" in err
+    assert "inventory-planted-uncatalogued" in err
+
+
+def test_score_reports_crawl_coverage_and_weak_attributions(run_root, tmp_path, capsys):
+    from conftest import oob_event, routes_inventory
+
+    routes_inventory(run_root, "shopfront", [
+        {"path": "/api/products", "method": "GET", "render": "static-html", "status": "planted"},
+        {"path": "/api/orders/{id}", "method": "GET", "render": "spa-react", "status": "planted"},
+        {"path": "/api/catalog/items", "method": "GET", "render": "static-html", "status": "safe"},
+        {"path": "/api/cart", "method": "POST", "render": "spa-react", "status": "safe"},
+    ])
+    events = write_json(tmp_path / "e.json", [
+        http_event(params=[param("q", "x'")]),
+        trigger_event("BENCH-SHOP-0001"),
+        oob_event(signal="shop.synthetic.0002.anomaly", attribution="container-window"),
+    ])
+    out = tmp_path / "score.json"
+    assert main(["--root", str(run_root), "score", "--run", "r1", "--events", events,
+                 "--out", str(out)]) == 0
+    doc = json.loads(out.read_text())
+    assert doc["metrics"]["crawl"]["surface"] == {"routes": 4, "covered": 1, "coverage": 0.25}
+    assert doc["metrics"]["overall"]["trigger"]["hit"] == 1
+    assert doc["metrics"]["overall"]["trigger_any"]["hit"] == 2
+    assert doc["low_confidence_triggers"]["credited_only_here"] == ["BENCH-SHOP-0002"]
+    printed = capsys.readouterr().out
+    assert "trig+weak" in printed
+    assert "of the published surface" in printed
+    assert "weak-oob" in printed
+
+
+def test_catalog_stats_lists_surface_and_missing_signals(run_root, capsys):
+    from conftest import routes_inventory
+
+    routes_inventory(run_root, "shopfront", [
+        {"path": "/api/products", "method": "GET", "status": "planted"},
+        {"path": "/api/orders/{id}", "method": "GET", "status": "planted"},
+        {"path": "/api/catalog/items", "method": "GET", "status": "safe"},
+    ])
+    assert main(["--root", str(run_root), "catalog", "stats"]) == 0
+    out = capsys.readouterr().out
+    assert "published surface: 3 routes" in out
+    # 1 safe route for 2 planted ones: well under the 3:1 the contract asks for,
+    # which is exactly the kind of gap this listing exists to surface.
+    assert "0.5 safe per planted" in out
+
+
+def test_catalog_stats_json_carries_oracle_and_surface_queues(run_root, capsys):
+    assert main(["--root", str(run_root), "catalog", "stats", "--json"]) == 0
+    stats = json.loads(capsys.readouterr().out)
+    assert stats["oracles"]["with_signal"] == 2
+    assert stats["oracles"]["without_signal"] == []
+    assert stats["surface"]["routes"] == 0
