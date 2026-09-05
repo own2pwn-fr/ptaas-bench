@@ -1,0 +1,204 @@
+# Build plan for the vulnerability corpus. Every class in taxonomy.yaml is assigned to exactly
+# one target application here, so the corpus provably covers the taxonomy; `quota` is the total
+# number of planted vulnerabilities for that app, the surplus over `classes` being extra
+# instances of the same classes at different crawl difficulties, auth levels and injection
+# points. `bench catalog stats` diffs this plan against catalog/vulns/ and reports the gap.
+
+apps:
+  shopfront:
+    prefix: SHOP
+    stack: React 19 SPA (Vite) + Express 5 (Node 22) + PostgreSQL + GraphQL (Apollo)
+    default_render: spa-react
+    role: 'Consumer e-commerce. The reference SPA: nothing is in the initial HTML, every route is client-side,
+      the API is JSON-only. This is where crawlers that do not execute JavaScript go to zero.'
+    quota: 32
+    id_range: BENCH-SHOP-0001 .. BENCH-SHOP-0032
+    classes:
+    - sqli_error
+    - sqli_union
+    - sqli_second_order
+    - graphql_batching
+    - xss_stored
+    - xss_dom
+    - bola
+    - bfla
+    - cors_misconfig
+    - ssrf_blind
+    - no_rate_limit
+    - jwt_alg_none
+    - jwt_kid_traversal
+    - otp_bypass
+    - graphql_introspection
+    - websocket_hijack
+    - deser_node
+    - prototype_pollution
+    - price_manipulation
+    - negative_quantity
+    - coupon_reuse
+    - race_condition
+    - integer_overflow
+    variants_to_add: 9
+  admin:
+    prefix: ADMN
+    stack: Angular 19 SPA + Spring Boot 3 (Java 21) + MySQL + LDAP directory
+    default_render: spa-angular
+    role: Enterprise back-office. Java-flavoured flaws (deserialization, EL, XXE/XSLT, JNDI-style dependency)
+      behind an Angular SPA with role-based screens.
+    quota: 26
+    id_range: BENCH-ADMN-0001 .. BENCH-ADMN-0026
+    classes:
+    - sqli_blind_time
+    - csti
+    - ldapi
+    - xpathi
+    - xxe
+    - xslt_injection
+    - el_injection
+    - bopla
+    - privesc_vertical
+    - tenant_isolation
+    - ssrf_filter_bypass
+    - default_creds
+    - jwt_confusion
+    - actuator_exposed
+    - vulnerable_dependency
+    - deser_java
+    - zip_slip
+    - resource_exhaustion
+    - log_secret_leak
+    variants_to_add: 7
+  blog:
+    prefix: BLOG
+    stack: Vue 3 SPA + FastAPI (Python 3.12) + MongoDB + Redis
+    default_render: spa-vue
+    role: Content platform. Document-store flaws (NoSQL operator injection, $where), Python-flavoured
+      flaws (pickle, YAML, Jinja SSTI, ReDoS) and an LLM-assisted comment summariser for prompt injection.
+    quota: 26
+    id_range: BENCH-BLOG-0001 .. BENCH-BLOG-0026
+    classes:
+    - nosqli_operator
+    - nosqli_js
+    - ssti
+    - orm_leak
+    - prompt_injection
+    - xss_mutation
+    - idor_read
+    - ssrf_basic
+    - hardcoded_secret
+    - jwt_weak_secret
+    - reset_token_leak
+    - debug_endpoint
+    - dependency_confusion
+    - deser_pickle
+    - unsafe_yaml
+    - image_parser_rce
+    - redos
+    variants_to_add: 9
+  legacy:
+    prefix: LEGY
+    stack: PHP 8.3 server-rendered (native templates + Twig) + MySQL + Apache
+    default_render: server-template
+    role: 'The 2009 application that never died. Fully server-rendered, forms everywhere, query strings
+      everywhere: the easy end of the crawl spectrum, and the control group that shows what a scanner
+      can do when discovery is free.'
+    quota: 28
+    id_range: BENCH-LEGY-0001 .. BENCH-LEGY-0028
+    classes:
+    - sqli_blind_bool
+    - cmdi
+    - crlf_injection
+    - email_injection
+    - csv_injection
+    - xss_reflected
+    - path_traversal
+    - weak_hash
+    - cleartext_transport
+    - cookie_flags
+    - user_enumeration
+    - session_fixation
+    - missing_sri
+    - deser_php
+    - unrestricted_upload
+    - lfi
+    - rfi
+    variants_to_add: 11
+  corp:
+    prefix: CORP
+    stack: ASP.NET Core 9 Razor Pages (.NET 9) + PostgreSQL
+    default_render: server-template
+    role: Corporate portal. .NET-flavoured flaws (BinaryFormatter-style deserialization, model binding
+      over-posting, padding oracle) plus a mixed static/Razor surface.
+    quota: 20
+    id_range: BENCH-CORP-0001 .. BENCH-CORP-0020
+    classes:
+    - header_injection
+    - xxe_blind
+    - xss_svg_upload
+    - mass_assignment
+    - path_traversal_write
+    - method_override
+    - ssrf_metadata
+    - ecb_mode
+    - padding_oracle
+    - oauth_open_redirect
+    - verbose_error
+    - open_redirect
+    - unsigned_update
+    - deser_dotnet
+    - unhandled_exception
+    variants_to_add: 5
+  intranet:
+    prefix: INTR
+    stack: Flask (Python 3.12) + HTMX partials + SQLite
+    default_render: htmx
+    role: 'Internal tooling. HTMX means HTML fragments arrive over XHR and are swapped into the DOM: neither
+      a classic crawler nor a naive SPA crawler handles this well, which is the point.'
+    quota: 16
+    id_range: BENCH-INTR-0001 .. BENCH-INTR-0016
+    classes:
+    - cmdi_blind
+    - log_injection
+    - xss_attribute
+    - idor_write
+    - forced_browsing
+    - csrf
+    - predictable_token
+    - session_no_invalidate
+    - clickjacking
+    - workflow_bypass
+    - fail_open
+    - no_audit_trail
+    variants_to_add: 4
+  edge:
+    prefix: EDGE
+    stack: nginx + HAProxy + Varnish chained in front of a minimal Go origin
+    default_render: non-http
+    role: The proxy chain. Desynchronisation and cache flaws that only exist because two hops disagree
+      about where a request ends. No application logic at all.
+    quota: 10
+    id_range: BENCH-EDGE-0001 .. BENCH-EDGE-0010
+    classes:
+    - request_smuggling_clte
+    - request_smuggling_tecl
+    - request_smuggling_h2
+    - cache_poisoning
+    - cache_deception
+    - host_header_poisoning
+    variants_to_add: 4
+  infra:
+    prefix: INFR
+    stack: Static Apache vhost, exposed Redis / MongoDB / Elasticsearch, leftover artefacts
+    default_render: static-html
+    role: 'Everything that leaks without any application being involved: .git, .env, backups, directory
+      listings, an unauthenticated datastore. The floor every scanner should clear.'
+    quota: 12
+    id_range: BENCH-INFR-0001 .. BENCH-INFR-0012
+    classes:
+    - dir_listing
+    - exposed_vcs
+    - exposed_env
+    - swagger_exposed
+    - backup_file
+    - trace_enabled
+    - db_exposed
+    variants_to_add: 5

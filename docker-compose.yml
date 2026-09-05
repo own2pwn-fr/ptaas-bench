@@ -1,0 +1,68 @@
+# Base stack: the scoring platform itself. Target applications live in compose/
+# fragments so that adding a target never touches this file (and never produces a
+# merge conflict between two people adding targets at the same time).
+#
+#   docker compose up -d                     # platform only
+#   docker compose --profile targets up -d   # platform + every target
+#   docker compose --profile shopfront up -d # platform + one target
+#
+include:
+  - compose/targets.yml
+
+name: ptaas-bench
+
+networks:
+  # The tool under test is attached here, and to nothing else. It can see the
+  # target applications and the canary service, and that is all.
+  bench-public:
+    name: bench-public
+  # Collector, database and scoring. `internal: true` means no route out and, more
+  # importantly, no route in from bench-public: a scanner cannot reach the collector
+  # to read the answer key or to forge trigger events.
+  bench-internal:
+    name: bench-internal
+    internal: true
+
+volumes:
+  collector-data:
+
+services:
+  collector-db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: bench
+      POSTGRES_PASSWORD: bench
+      POSTGRES_DB: bench
+    volumes:
+      - collector-data:/var/lib/postgresql/data
+    networks: [bench-internal]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bench"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  collector:
+    build: ./platform/collector
+    environment:
+      BENCH_DATABASE_URL: postgresql://bench:bench@collector-db:5432/bench
+    networks: [bench-internal]
+    depends_on:
+      collector-db: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://localhost:8900/healthz')"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  # Out-of-band canary. Deliberately dual-homed: targets must be able to *fail* to
+  # reach it (that is what makes blind SSRF blind), while the tool must be able to
+  # reach it so that its own payloads can point at it.
+  oob:
+    build: ./platform/oob
+    environment:
+      BENCH_COLLECTOR_URL: http://collector:8900
+      BENCH_OOB_DOMAIN: oob.bench.local
+    networks: [bench-internal, bench-public]
+    depends_on:
+      collector: {condition: service_healthy}

@@ -1,0 +1,31 @@
+id: BENCH-SHOP-0031
+title: Blind SSRF in the supplier catalogue import
+app: shopfront
+component: api
+class: ssrf_blind
+severity: high
+entrypoint:
+  method: POST
+  path: /api/admin/imports
+  auth: admin
+  param: source_url
+  param_in: json
+  default_value: "https://suppliers.internal.bench.local/catalog.json"
+  content_type: application/json
+discovery:
+  render: spa-react
+  reachable_from: ["/admin/imports"]
+  requires: [js-execution, custom-header, multi-step-flow]
+  difficulty: 4
+oracle:
+  kind: oob
+  condition: >
+    The importer fetches any URL supplied by the caller and discards the body, so there
+    is nothing to reflect. The trigger is raised by the canary service when it receives a
+    DNS or HTTP hit carrying this vulnerability's token, correlated back to the run that
+    was active when the request was made. Submitting a payload without ever causing a
+    callback scores exercise only.
+  poc: 'POST /api/admin/imports {"source_url":"http://<token>.oob.bench.local/x"}'
+  canary_token: shop0031
+tags: [rest, oob, authenticated, admin]
+introduced: "2026-09-05"

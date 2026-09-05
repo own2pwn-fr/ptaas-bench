@@ -1,0 +1,196 @@
+# Vulnerability taxonomy for ptaas-bench.
+#
+# Two things live here and nowhere else:
+#   1. The three OWASP Top 10 editions, verbatim, so the comparison tables can be
+#      rebuilt for any edition without touching a single vulnerability file.
+#   2. The class registry: every planted vulnerability declares a `class`, and the
+#      class supplies the default CWE / OWASP mapping / severity. A vulnerability
+#      file only overrides these when its instance is genuinely more specific.
+#
+# Adding a class is cheap; renaming one is not (catalog files reference it by key).
+
+editions:
+  "2017":
+    A01: Injection
+    A02: Broken Authentication
+    A03: Sensitive Data Exposure
+    A04: XML External Entities (XXE)
+    A05: Broken Access Control
+    A06: Security Misconfiguration
+    A07: Cross-Site Scripting (XSS)
+    A08: Insecure Deserialization
+    A09: Using Components with Known Vulnerabilities
+    A10: Insufficient Logging & Monitoring
+  "2021":
+    A01: Broken Access Control
+    A02: Cryptographic Failures
+    A03: Injection
+    A04: Insecure Design
+    A05: Security Misconfiguration
+    A06: Vulnerable and Outdated Components
+    A07: Identification and Authentication Failures
+    A08: Software and Data Integrity Failures
+    A09: Security Logging and Monitoring Failures
+    A10: Server-Side Request Forgery (SSRF)
+  "2025":
+    A01: Broken Access Control
+    A02: Security Misconfiguration
+    A03: Software Supply Chain Failures
+    A04: Cryptographic Failures
+    A05: Injection
+    A06: Insecure Design
+    A07: Authentication Failures
+    A08: Software or Data Integrity Failures
+    A09: Security Logging and Alerting Failures
+    A10: Mishandling of Exceptional Conditions
+
+# family groups the classes for the per-family comparison table, which is the view
+# most readers actually want ("who is better at injection?") independent of edition.
+families: [injection, xss, access-control, ssrf, crypto, auth-session, misconfig,
+           supply-chain, deserialization, file, business-logic, protocol, dos, logging]
+
+classes:
+
+  # ---- injection ---------------------------------------------------------------
+  sqli_error:      {family: injection, cwe: [89],   severity: critical, owasp: {"2017": A01, "2021": A03, "2025": A05}, label: "SQL injection (error-based)"}
+  sqli_union:      {family: injection, cwe: [89],   severity: critical, owasp: {"2017": A01, "2021": A03, "2025": A05}, label: "SQL injection (UNION)"}
+  sqli_blind_bool: {family: injection, cwe: [89],   severity: critical, owasp: {"2017": A01, "2021": A03, "2025": A05}, label: "SQL injection (blind boolean)"}
+  sqli_blind_time: {family: injection, cwe: [89],   severity: critical, owasp: {"2017": A01, "2021": A03, "2025": A05}, label: "SQL injection (blind time-based)"}
+  sqli_second_order: {family: injection, cwe: [89], severity: critical, owasp: {"2017": A01, "2021": A03, "2025": A05}, label: "SQL injection (second order)"}
+  nosqli_operator: {family: injection, cwe: [943],  severity: high,     owasp: {"2017": A01, "2021": A03, "2025": A05}, label: "NoSQL injection (operator)"}
+  nosqli_js:       {family: injection, cwe: [943],  severity: critical, owasp: {"2017": A01, "2021": A03, "2025": A05}, label: "NoSQL injection ($where JS)"}
+  cmdi:            {family: injection, cwe: [78],   severity: critical, owasp: {"2017": A01, "2021": A03, "2025": A05}, label: "OS command injection"}
+  cmdi_blind:      {family: injection, cwe: [78],   severity: critical, owasp: {"2017": A01, "2021": A03, "2025": A05}, label: "OS command injection (blind)"}
+  ssti:            {family: injection, cwe: [1336], severity: critical, owasp: {"2017": A01, "2021": A03, "2025": A05}, label: "Server-side template injection"}
+  csti:            {family: injection, cwe: [1336], severity: high,     owasp: {"2017": A07, "2021": A03, "2025": A05}, label: "Client-side template injection"}
+  ldapi:           {family: injection, cwe: [90],   severity: high,     owasp: {"2017": A01, "2021": A03, "2025": A05}, label: "LDAP injection"}
+  xpathi:          {family: injection, cwe: [643],  severity: high,     owasp: {"2017": A01, "2021": A03, "2025": A05}, label: "XPath injection"}
+  crlf_injection:  {family: injection, cwe: [113],  severity: medium,   owasp: {"2017": A01, "2021": A03, "2025": A05}, label: "CRLF / response splitting"}
+  header_injection: {family: injection, cwe: [113],  severity: medium,   owasp: {"2017": A01, "2021": A03, "2025": A05}, label: "HTTP header injection"}
+  log_injection:   {family: injection, cwe: [117],  severity: medium,   owasp: {"2017": A10, "2021": A09, "2025": A09}, label: "Log injection / forging"}
+  xxe:             {family: injection, cwe: [611],  severity: critical, owasp: {"2017": A04, "2021": A05, "2025": A05}, label: "XML external entity"}
+  xxe_blind:       {family: injection, cwe: [611],  severity: critical, owasp: {"2017": A04, "2021": A05, "2025": A05}, label: "XML external entity (blind/OOB)"}
+  xslt_injection:  {family: injection, cwe: [91],   severity: high,     owasp: {"2017": A01, "2021": A03, "2025": A05}, label: "XSLT injection"}
+  el_injection:    {family: injection, cwe: [917],  severity: critical, owasp: {"2017": A01, "2021": A03, "2025": A05}, label: "Expression language injection"}
+  graphql_batching: {family: injection, cwe: [770],  severity: medium,   owasp: {"2017": A06, "2021": A04, "2025": A06}, label: "GraphQL batching abuse"}
+  orm_leak:        {family: injection, cwe: [943],  severity: high,     owasp: {"2017": A01, "2021": A03, "2025": A05}, label: "ORM filter injection / leak"}
+  email_injection: {family: injection, cwe: [93],   severity: medium,   owasp: {"2017": A01, "2021": A03, "2025": A05}, label: "SMTP header injection"}
+  csv_injection:   {family: injection, cwe: [1236], severity: medium,   owasp: {"2017": A01, "2021": A03, "2025": A05}, label: "CSV formula injection"}
+  prompt_injection: {family: injection, cwe: [1427], severity: high,     owasp: {"2017": A01, "2021": A03, "2025": A05}, label: "LLM prompt injection"}
+
+  # ---- xss ---------------------------------------------------------------------
+  xss_reflected:   {family: xss, cwe: [79],  severity: medium,   owasp: {"2017": A07, "2021": A03, "2025": A05}, label: "Reflected XSS"}
+  xss_stored:      {family: xss, cwe: [79],  severity: high,     owasp: {"2017": A07, "2021": A03, "2025": A05}, label: "Stored XSS"}
+  xss_dom:         {family: xss, cwe: [79],  severity: medium,   owasp: {"2017": A07, "2021": A03, "2025": A05}, label: "DOM XSS"}
+  xss_mutation:    {family: xss, cwe: [79],  severity: medium,   owasp: {"2017": A07, "2021": A03, "2025": A05}, label: "mXSS / sanitizer bypass"}
+  xss_attribute:   {family: xss, cwe: [79],  severity: medium,   owasp: {"2017": A07, "2021": A03, "2025": A05}, label: "XSS in attribute context"}
+  xss_svg_upload:  {family: xss, cwe: [79],  severity: high,     owasp: {"2017": A07, "2021": A03, "2025": A05}, label: "Stored XSS via SVG upload"}
+
+  # ---- access control ----------------------------------------------------------
+  idor_read:       {family: access-control, cwe: [639], severity: high,     owasp: {"2017": A05, "2021": A01, "2025": A01}, label: "IDOR (read)"}
+  idor_write:      {family: access-control, cwe: [639], severity: critical, owasp: {"2017": A05, "2021": A01, "2025": A01}, label: "IDOR (write)"}
+  bola:            {family: access-control, cwe: [639], severity: critical, owasp: {"2017": A05, "2021": A01, "2025": A01}, label: "Broken object-level authorization"}
+  bfla:            {family: access-control, cwe: [285], severity: critical, owasp: {"2017": A05, "2021": A01, "2025": A01}, label: "Broken function-level authorization"}
+  bopla:           {family: access-control, cwe: [213], severity: high,     owasp: {"2017": A03, "2021": A01, "2025": A01}, label: "Broken object property-level authorization"}
+  mass_assignment: {family: access-control, cwe: [915], severity: high,     owasp: {"2017": A05, "2021": A01, "2025": A01}, label: "Mass assignment"}
+  privesc_vertical: {family: access-control, cwe: [269], severity: critical, owasp: {"2017": A05, "2021": A01, "2025": A01}, label: "Vertical privilege escalation"}
+  forced_browsing: {family: access-control, cwe: [425], severity: high,     owasp: {"2017": A05, "2021": A01, "2025": A01}, label: "Forced browsing / unprotected admin"}
+  path_traversal:  {family: access-control, cwe: [22],  severity: critical, owasp: {"2017": A05, "2021": A01, "2025": A01}, label: "Path traversal (read)"}
+  path_traversal_write: {family: access-control, cwe: [22], severity: critical, owasp: {"2017": A05, "2021": A01, "2025": A01}, label: "Path traversal (write)"}
+  csrf:            {family: access-control, cwe: [352], severity: medium,   owasp: {"2017": A05, "2021": A01, "2025": A01}, label: "Cross-site request forgery"}
+  cors_misconfig:  {family: access-control, cwe: [942], severity: high,     owasp: {"2017": A06, "2021": A01, "2025": A01}, label: "Permissive CORS with credentials"}
+  tenant_isolation: {family: access-control, cwe: [1230], severity: critical, owasp: {"2017": A05, "2021": A01, "2025": A01}, label: "Cross-tenant data exposure"}
+  method_override: {family: access-control, cwe: [650], severity: high,     owasp: {"2017": A05, "2021": A01, "2025": A01}, label: "HTTP method / verb tampering"}
+
+  # ---- ssrf --------------------------------------------------------------------
+  ssrf_basic:      {family: ssrf, cwe: [918], severity: critical, owasp: {"2017": A05, "2021": A10, "2025": A01}, label: "SSRF (response reflected)"}
+  ssrf_blind:      {family: ssrf, cwe: [918], severity: high,     owasp: {"2017": A05, "2021": A10, "2025": A01}, label: "SSRF (blind, OOB)"}
+  ssrf_filter_bypass: {family: ssrf, cwe: [918], severity: critical, owasp: {"2017": A05, "2021": A10, "2025": A01}, label: "SSRF via allowlist bypass"}
+  ssrf_metadata:   {family: ssrf, cwe: [918], severity: critical, owasp: {"2017": A05, "2021": A10, "2025": A01}, label: "SSRF to cloud metadata"}
+
+  # ---- crypto / data exposure --------------------------------------------------
+  weak_hash:       {family: crypto, cwe: [327], severity: medium,   owasp: {"2017": A03, "2021": A02, "2025": A04}, label: "Weak password hash (MD5/SHA1)"}
+  ecb_mode:        {family: crypto, cwe: [327], severity: high,     owasp: {"2017": A03, "2021": A02, "2025": A04}, label: "ECB mode / cut-and-paste"}
+  predictable_token: {family: crypto, cwe: [340], severity: high,   owasp: {"2017": A02, "2021": A02, "2025": A04}, label: "Predictable token"}
+  hardcoded_secret: {family: crypto, cwe: [798], severity: high,     owasp: {"2017": A03, "2021": A02, "2025": A04}, label: "Hardcoded / exposed secret"}
+  cleartext_transport: {family: crypto, cwe: [319], severity: medium, owasp: {"2017": A03, "2021": A02, "2025": A04}, label: "Sensitive data in cleartext"}
+  padding_oracle:  {family: crypto, cwe: [209], severity: high,     owasp: {"2017": A03, "2021": A02, "2025": A04}, label: "Padding oracle"}
+  cookie_flags:    {family: crypto, cwe: [614], severity: low,      owasp: {"2017": A03, "2021": A05, "2025": A02}, label: "Missing cookie security flags"}
+
+  # ---- auth / session ----------------------------------------------------------
+  default_creds:   {family: auth-session, cwe: [1392], severity: critical, owasp: {"2017": A02, "2021": A07, "2025": A07}, label: "Default credentials"}
+  no_rate_limit:   {family: auth-session, cwe: [307],  severity: high,     owasp: {"2017": A02, "2021": A07, "2025": A07}, label: "No brute-force protection"}
+  user_enumeration: {family: auth-session, cwe: [204],  severity: medium,   owasp: {"2017": A02, "2021": A07, "2025": A07}, label: "Username enumeration"}
+  session_fixation: {family: auth-session, cwe: [384],  severity: high,     owasp: {"2017": A02, "2021": A07, "2025": A07}, label: "Session fixation"}
+  jwt_alg_none:    {family: auth-session, cwe: [347],  severity: critical, owasp: {"2017": A02, "2021": A07, "2025": A07}, label: "JWT alg=none accepted"}
+  jwt_weak_secret: {family: auth-session, cwe: [347],  severity: critical, owasp: {"2017": A02, "2021": A07, "2025": A07}, label: "JWT weak HMAC secret"}
+  jwt_confusion:   {family: auth-session, cwe: [347],  severity: critical, owasp: {"2017": A02, "2021": A07, "2025": A07}, label: "JWT RS256/HS256 confusion"}
+  jwt_kid_traversal: {family: auth-session, cwe: [347], severity: critical, owasp: {"2017": A02, "2021": A07, "2025": A07}, label: "JWT kid path traversal"}
+  otp_bypass:      {family: auth-session, cwe: [287],  severity: critical, owasp: {"2017": A02, "2021": A07, "2025": A07}, label: "MFA/OTP bypass"}
+  reset_token_leak: {family: auth-session, cwe: [640],  severity: critical, owasp: {"2017": A02, "2021": A07, "2025": A07}, label: "Password reset token leak"}
+  oauth_open_redirect: {family: auth-session, cwe: [601], severity: high,  owasp: {"2017": A02, "2021": A07, "2025": A07}, label: "OAuth redirect_uri abuse"}
+  session_no_invalidate: {family: auth-session, cwe: [613], severity: medium, owasp: {"2017": A02, "2021": A07, "2025": A07}, label: "Session not invalidated on logout"}
+
+  # ---- misconfiguration --------------------------------------------------------
+  debug_endpoint:  {family: misconfig, cwe: [489], severity: high,     owasp: {"2017": A06, "2021": A05, "2025": A02}, label: "Debug endpoint exposed"}
+  verbose_error:   {family: misconfig, cwe: [209], severity: medium,   owasp: {"2017": A06, "2021": A05, "2025": A02}, label: "Verbose error / stack trace"}
+  dir_listing:     {family: misconfig, cwe: [548], severity: medium,   owasp: {"2017": A06, "2021": A05, "2025": A02}, label: "Directory listing"}
+  exposed_vcs:     {family: misconfig, cwe: [527], severity: high,     owasp: {"2017": A06, "2021": A05, "2025": A02}, label: "Exposed .git / .svn"}
+  exposed_env:     {family: misconfig, cwe: [538], severity: critical, owasp: {"2017": A06, "2021": A05, "2025": A02}, label: "Exposed .env / config backup"}
+  actuator_exposed: {family: misconfig, cwe: [497], severity: high,     owasp: {"2017": A06, "2021": A05, "2025": A02}, label: "Management endpoint exposed"}
+  graphql_introspection: {family: misconfig, cwe: [200], severity: low, owasp: {"2017": A06, "2021": A05, "2025": A02}, label: "GraphQL introspection enabled"}
+  swagger_exposed: {family: misconfig, cwe: [200], severity: low,      owasp: {"2017": A06, "2021": A05, "2025": A02}, label: "API spec exposed"}
+  clickjacking:    {family: misconfig, cwe: [1021], severity: low,      owasp: {"2017": A06, "2021": A05, "2025": A02}, label: "Missing framing protection"}
+  open_redirect:   {family: misconfig, cwe: [601], severity: medium,   owasp: {"2017": A06, "2021": A01, "2025": A02}, label: "Open redirect"}
+  backup_file:     {family: misconfig, cwe: [530], severity: high,     owasp: {"2017": A06, "2021": A05, "2025": A02}, label: "Source/backup file left on server"}
+  trace_enabled:   {family: misconfig, cwe: [16],  severity: low,      owasp: {"2017": A06, "2021": A05, "2025": A02}, label: "Dangerous HTTP method enabled"}
+  db_exposed:      {family: misconfig, cwe: [1188], severity: critical, owasp: {"2017": A06, "2021": A05, "2025": A02}, label: "Datastore exposed without auth"}
+
+  # ---- protocol / edge ---------------------------------------------------------
+  request_smuggling_clte: {family: protocol, cwe: [444], severity: critical, owasp: {"2017": A06, "2021": A05, "2025": A02}, label: "HTTP request smuggling (CL.TE)"}
+  request_smuggling_tecl: {family: protocol, cwe: [444], severity: critical, owasp: {"2017": A06, "2021": A05, "2025": A02}, label: "HTTP request smuggling (TE.CL)"}
+  request_smuggling_h2:   {family: protocol, cwe: [444], severity: critical, owasp: {"2017": A06, "2021": A05, "2025": A02}, label: "H2.CL downgrade smuggling"}
+  cache_poisoning: {family: protocol, cwe: [444], severity: high,     owasp: {"2017": A06, "2021": A05, "2025": A02}, label: "Web cache poisoning"}
+  cache_deception: {family: protocol, cwe: [525], severity: high,     owasp: {"2017": A06, "2021": A05, "2025": A02}, label: "Web cache deception"}
+  host_header_poisoning: {family: protocol, cwe: [644], severity: high, owasp: {"2017": A06, "2021": A05, "2025": A02}, label: "Host header poisoning"}
+  websocket_hijack: {family: protocol, cwe: [1385], severity: high,     owasp: {"2017": A05, "2021": A01, "2025": A01}, label: "Cross-site WebSocket hijacking"}
+
+  # ---- supply chain ------------------------------------------------------------
+  vulnerable_dependency: {family: supply-chain, cwe: [1395], severity: high, owasp: {"2017": A09, "2021": A06, "2025": A03}, label: "Known-vulnerable dependency reachable"}
+  missing_sri:     {family: supply-chain, cwe: [353], severity: medium,  owasp: {"2017": A09, "2021": A08, "2025": A03}, label: "Third-party script without SRI"}
+  unsigned_update: {family: supply-chain, cwe: [494], severity: high,    owasp: {"2017": A08, "2021": A08, "2025": A03}, label: "Unsigned update channel"}
+  dependency_confusion: {family: supply-chain, cwe: [427], severity: high, owasp: {"2017": A09, "2021": A06, "2025": A03}, label: "Dependency confusion surface"}
+
+  # ---- deserialization / integrity ---------------------------------------------
+  deser_node:      {family: deserialization, cwe: [502], severity: critical, owasp: {"2017": A08, "2021": A08, "2025": A08}, label: "Insecure deserialization (Node)"}
+  deser_java:      {family: deserialization, cwe: [502], severity: critical, owasp: {"2017": A08, "2021": A08, "2025": A08}, label: "Insecure deserialization (Java)"}
+  deser_php:       {family: deserialization, cwe: [502], severity: critical, owasp: {"2017": A08, "2021": A08, "2025": A08}, label: "Insecure deserialization (PHP)"}
+  deser_dotnet:    {family: deserialization, cwe: [502], severity: critical, owasp: {"2017": A08, "2021": A08, "2025": A08}, label: "Insecure deserialization (.NET)"}
+  deser_pickle:    {family: deserialization, cwe: [502], severity: critical, owasp: {"2017": A08, "2021": A08, "2025": A08}, label: "Insecure deserialization (pickle)"}
+  unsafe_yaml:     {family: deserialization, cwe: [502], severity: critical, owasp: {"2017": A08, "2021": A08, "2025": A08}, label: "Unsafe YAML load"}
+  prototype_pollution: {family: deserialization, cwe: [1321], severity: high, owasp: {"2017": A08, "2021": A08, "2025": A08}, label: "Prototype pollution"}
+
+  # ---- file handling -----------------------------------------------------------
+  unrestricted_upload: {family: file, cwe: [434], severity: critical, owasp: {"2017": A06, "2021": A04, "2025": A06}, label: "Unrestricted file upload to RCE"}
+  zip_slip:        {family: file, cwe: [22],  severity: critical, owasp: {"2017": A05, "2021": A01, "2025": A01}, label: "Archive extraction traversal"}
+  lfi:             {family: file, cwe: [98],  severity: critical, owasp: {"2017": A01, "2021": A03, "2025": A05}, label: "Local file inclusion"}
+  rfi:             {family: file, cwe: [98],  severity: critical, owasp: {"2017": A01, "2021": A03, "2025": A05}, label: "Remote file inclusion"}
+  image_parser_rce: {family: file, cwe: [1395], severity: critical, owasp: {"2017": A09, "2021": A06, "2025": A03}, label: "Image parser RCE"}
+
+  # ---- business logic / insecure design ----------------------------------------
+  price_manipulation: {family: business-logic, cwe: [841], severity: critical, owasp: {"2017": A05, "2021": A04, "2025": A06}, label: "Client-controlled price"}
+  negative_quantity:  {family: business-logic, cwe: [840], severity: high,     owasp: {"2017": A05, "2021": A04, "2025": A06}, label: "Negative quantity refund"}
+  coupon_reuse:       {family: business-logic, cwe: [837], severity: medium,   owasp: {"2017": A05, "2021": A04, "2025": A06}, label: "Unlimited coupon reuse"}
+  workflow_bypass:    {family: business-logic, cwe: [841], severity: high,     owasp: {"2017": A05, "2021": A04, "2025": A06}, label: "Checkout step skipping"}
+  race_condition:     {family: business-logic, cwe: [362], severity: high,     owasp: {"2017": A05, "2021": A04, "2025": A10}, label: "TOCTOU race condition"}
+
+  # ---- exceptional conditions / dos --------------------------------------------
+  redos:           {family: dos, cwe: [1333], severity: medium, owasp: {"2017": A06, "2021": A05, "2025": A10}, label: "Regular expression DoS"}
+  unhandled_exception: {family: dos, cwe: [755], severity: medium, owasp: {"2017": A06, "2021": A05, "2025": A10}, label: "Unhandled exception leaks state"}
+  integer_overflow: {family: dos, cwe: [190],  severity: high,   owasp: {"2017": A06, "2021": A04, "2025": A10}, label: "Integer overflow in quantity"}
+  resource_exhaustion: {family: dos, cwe: [770], severity: medium, owasp: {"2017": A06, "2021": A04, "2025": A10}, label: "Unbounded resource allocation"}
+  fail_open:       {family: dos, cwe: [636],  severity: high,   owasp: {"2017": A05, "2021": A04, "2025": A10}, label: "Authorization fails open on error"}
+
+  # ---- logging -----------------------------------------------------------------
+  no_audit_trail:  {family: logging, cwe: [778], severity: medium, owasp: {"2017": A10, "2021": A09, "2025": A09}, label: "Security event not logged"}
+  log_secret_leak: {family: logging, cwe: [532], severity: medium, owasp: {"2017": A10, "2021": A09, "2025": A09}, label: "Secrets written to readable log"}

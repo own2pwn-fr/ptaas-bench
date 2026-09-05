@@ -1,0 +1,234 @@
+openapi: 3.1.0
+info:
+  title: ptaas-bench collector
+  version: "1.0.0"
+  description: |
+    Ingests ground-truth observations from the instrumented target applications and
+    from the out-of-band canary service, and stores them against the active run.
+
+    Trust model: this API is reachable only from the `bench-internal` Docker network.
+    The tool under test sits on `bench-public` and can neither read nor forge events.
+    That separation is the whole reason the scores mean anything, so it is asserted
+    by platform/collector/tests/test_network_isolation.py, not just by convention.
+
+    The SDKs are deliberately dumb: they report what happened on the wire and which
+    planted sink fired. All interpretation (did this count as reach? as exercise?)
+    happens in the scoring engine, which is the only component that reads the catalog.
+servers:
+  - url: http://collector:8900
+paths:
+  /healthz:
+    get:
+      summary: Liveness probe
+      responses: {"200": {description: OK}}
+
+  /v1/runs:
+    post:
+      summary: Open a run and make it the active one
+      description: |
+        Exactly one run is active at a time. SDKs never send a run id; the collector
+        stamps events with the active run. This keeps instrumentation stateless and
+        means a target restart cannot desynchronise attribution.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/RunCreate'}
+      responses:
+        "201":
+          content: {application/json: {schema: {$ref: '#/components/schemas/Run'}}}
+          description: Created
+        "409": {description: A run is already active and force was not set}
+    get:
+      summary: List runs
+      responses:
+        "200":
+          content: {application/json: {schema: {type: array, items: {$ref: '#/components/schemas/Run'}}}}
+          description: OK
+
+  /v1/runs/active:
+    get:
+      summary: Active run, or 404 when idle
+      responses:
+        "200": {content: {application/json: {schema: {$ref: '#/components/schemas/Run'}}}, description: OK}
+        "404": {description: No active run}
+
+  /v1/runs/{run_id}/close:
+    post:
+      summary: Close a run
+      parameters: [{name: run_id, in: path, required: true, schema: {type: string}}]
+      responses:
+        "200": {content: {application/json: {schema: {$ref: '#/components/schemas/Run'}}}, description: OK}
+
+  /v1/runs/{run_id}/events:
+    get:
+      summary: Export raw events for scoring
+      parameters:
+        - {name: run_id, in: path, required: true, schema: {type: string}}
+        - {name: type, in: query, schema: {type: string, enum: [http_request, trigger, oob, note]}}
+        - {name: after_seq, in: query, schema: {type: integer}, description: Cursor for incremental export}
+        - {name: limit, in: query, schema: {type: integer, default: 5000, maximum: 50000}}
+      responses:
+        "200":
+          content: {application/json: {schema: {$ref: '#/components/schemas/EventPage'}}}
+          description: OK
+
+  /v1/events:
+    post:
+      summary: Ingest a batch of events
+      description: |
+        Called by target SDKs and by the canary service. Fire-and-forget from the
+        caller's point of view: instrumentation must never add latency or fail a
+        request in the target, because timing artefacts would bias timing-based
+        oracles. Returns 202 even when no run is active (events are dropped), so
+        targets behave identically whether or not a benchmark is in progress.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [events]
+              properties:
+                events:
+                  type: array
+                  maxItems: 500
+                  items:
+                    oneOf:
+                      - {$ref: '#/components/schemas/HttpRequestEvent'}
+                      - {$ref: '#/components/schemas/TriggerEvent'}
+                      - {$ref: '#/components/schemas/OobEvent'}
+                      - {$ref: '#/components/schemas/NoteEvent'}
+      responses:
+        "202": {description: Accepted (or discarded when idle)}
+
+components:
+  schemas:
+    RunCreate:
+      type: object
+      required: [tool]
+      properties:
+        tool: {type: string, example: zap, description: Tool key, matching a directory under runners/}
+        tool_version: {type: string}
+        profile: {type: string, example: full, description: Scan profile, free-form, recorded in results}
+        targets: {type: array, items: {type: string}, description: App keys in scope for this run}
+        notes: {type: string}
+        force: {type: boolean, default: false, description: Close any currently active run first}
+
+    Run:
+      type: object
+      properties:
+        run_id: {type: string}
+        tool: {type: string}
+        tool_version: {type: string}
+        profile: {type: string}
+        targets: {type: array, items: {type: string}}
+        started_at: {type: string, format: date-time}
+        closed_at: {type: string, format: date-time, nullable: true}
+        active: {type: boolean}
+        event_count: {type: integer}
+
+    EventBase:
+      type: object
+      required: [type, app]
+      properties:
+        type: {type: string}
+        app: {type: string, description: Target app key}
+        ts: {type: number, description: Unix epoch seconds with fractions, from the target}
+        synthetic:
+          type: boolean
+          default: false
+          description: |
+            True when the request came from the platform itself (seeding, self-test,
+            health checks). Set by the SDK when it sees the X-Bench-Selftest header.
+            Synthetic events are stored but never scored, otherwise the platform would
+            credit tools with its own traffic.
+
+    HttpRequestEvent:
+      allOf:
+        - $ref: '#/components/schemas/EventBase'
+        - type: object
+          required: [method, route]
+          properties:
+            type: {const: http_request}
+            method: {type: string}
+            route:
+              type: string
+              description: |
+                Framework route template as registered (e.g. /api/orders/:id), NOT the
+                concrete URL. Catalog entrypoints are written against these templates,
+                so a tool that reaches /api/orders/42 credits reach on /api/orders/:id.
+                Unmatched requests report route "<unmatched>" with the raw path.
+            path: {type: string, description: Concrete request path}
+            status: {type: integer}
+            auth_subject: {type: string, nullable: true, description: Authenticated principal, when any}
+            client_ip: {type: string}
+            user_agent: {type: string}
+            params:
+              type: array
+              description: Every input the handler could observe, one entry per name.
+              items:
+                type: object
+                required: [name, in]
+                properties:
+                  name: {type: string}
+                  in: {type: string, enum: [query, body, json, path, header, cookie, multipart, raw, graphql, websocket]}
+                  value_sha256:
+                    type: string
+                    description: sha256 of the raw value. The scorer compares it to the catalog default_value to decide whether the parameter was merely visited or actually fuzzed.
+                  value_len: {type: integer}
+                  sample:
+                    type: string
+                    maxLength: 256
+                    description: Truncated raw value, kept so a human can audit why a payload scored (or did not).
+
+    TriggerEvent:
+      allOf:
+        - $ref: '#/components/schemas/EventBase'
+        - type: object
+          required: [vuln_id]
+          properties:
+            type: {const: trigger}
+            vuln_id: {type: string, pattern: '^BENCH-[A-Z0-9]+-[0-9]{4}$'}
+            oracle_kind: {type: string, enum: [sink, oob, state, differential, timing, artifact]}
+            evidence:
+              type: object
+              description: |
+                Free-form, but must be enough for a third party to agree the flaw was
+                really exploited: the payload, the effect observed, and the request that
+                carried it. Written into the run report verbatim.
+              properties:
+                payload: {type: string, maxLength: 1024}
+                detail: {type: string, maxLength: 1024}
+                request_id: {type: string}
+
+    OobEvent:
+      allOf:
+        - $ref: '#/components/schemas/EventBase'
+        - type: object
+          required: [token, channel]
+          properties:
+            type: {const: oob}
+            token: {type: string, description: Canary token extracted from the hostname or path}
+            channel: {type: string, enum: [dns, http, https, smtp, ldap]}
+            source_ip: {type: string}
+            raw: {type: string, maxLength: 2048}
+
+    NoteEvent:
+      allOf:
+        - $ref: '#/components/schemas/EventBase'
+        - type: object
+          properties:
+            type: {const: note}
+            message: {type: string}
+
+    EventPage:
+      type: object
+      properties:
+        run_id: {type: string}
+        next_seq: {type: integer, nullable: true}
+        events:
+          type: array
+          items:
+            type: object
+            description: Stored event, i.e. the submitted payload plus seq/received_at.
