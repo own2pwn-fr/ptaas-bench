@@ -1,0 +1,30 @@
+<?xml version="1.0" ?>
+<!DOCTYPE niktoscans>
+<niktoscans>
+  <niktoscan hoststest="1" options="-h http://legacy-web -Format xml" version="2.6.1"
+             scanstart="Sat Sep  5 18:30:00 2026" scanend="Sat Sep  5 18:44:10 2026"
+             scanelapsed="850 seconds" nxmlversion="1.2">
+    <scandetails targetip="172.19.0.9" targethostname="legacy-web" targetport="80"
+                 targetbanner="Apache/2.4.62 (Debian)" starttime="2026-09-05 18:30:00"
+                 sitename="http://legacy-web:80/" siteip="http://172.19.0.9:80/"
+                 hostheader="legacy-web" errors="0" checks="7240">
+      <item id="999957" method="GET">
+        <description>/uploads/: Directory indexing found.</description>
+        <uri>/uploads/</uri>
+        <namelink>http://legacy-web:80/uploads/</namelink>
+        <iplink>http://172.19.0.9:80/uploads/</iplink>
+      </item>
+      <item id="999990" method="GET">
+        <description>/: The anti-clickjacking X-Frame-Options header is not present.</description>
+        <uri>/</uri>
+        <namelink>http://legacy-web:80/</namelink>
+        <iplink>http://172.19.0.9:80/</iplink>
+        <references>https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/X-Frame-Options</references>
+      </item>
+      <item id="999100">
+        <description>Multiple index files found.</description>
+      </item>
+      <statistics elapsed="850" itemsfound="3" itemstested="7240" endtime="2026-09-05 18:44:10"/>
+    </scandetails>
+  </niktoscan>
+</niktoscans>

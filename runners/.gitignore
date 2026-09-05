@@ -1,0 +1,3 @@
+# Real credentials for the authenticated half of the corpus. runners/credentials.
+# example.yaml is the template; the filled-in copy never gets committed.
+credentials.yaml

@@ -1,0 +1,40 @@
+[
+  {
+    "host": "legacy-web",
+    "ip": "172.19.0.9",
+    "port": "80",
+    "server_banner": "Apache/2.4.62 (Debian)",
+    "start_time": "2026-09-05 18:30:00 +0000",
+    "end_time": "2026-09-05 18:44:10 +0000",
+    "vulnerabilities": [
+      {
+        "id": "999957",
+        "references": "",
+        "method": "GET",
+        "url": "/uploads/",
+        "msg": "/uploads/: Directory indexing found."
+      },
+      {
+        "id": "000270",
+        "references": "CWE-552",
+        "method": "GET",
+        "url": "/.git/config",
+        "msg": "/.git/config: A Git repository was found; the source code may be downloadable."
+      },
+      {
+        "id": "999986",
+        "references": "",
+        "method": "GET",
+        "url": "/",
+        "msg": "/: Retrieved x-powered-by header: PHP/8.3.10."
+      },
+      {
+        "id": "999103",
+        "references": "https://example.invalid/advisory",
+        "method": "GET",
+        "url": "/cgi-bin/status.cgi",
+        "msg": "/cgi-bin/status.cgi: An unclassified script was found on the server."
+      }
+    ]
+  }
+]

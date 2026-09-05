@@ -1,0 +1,84 @@
+# Target registry for the harness.
+#
+# This file is the contract between runners/ and targets/: the orchestrator needs to
+# know, for every application, which compose services to restart, which URL to point
+# a scanner at, and where the control plane (seed/state) lives. Nothing here is
+# discovered at run time on purpose -- a harness that guesses the target list is a
+# harness that silently scans seven of the eight applications.
+#
+# The URLs are written from inside the Docker networks: `http://shopfront:3000` is
+# what the tool container resolves on bench-public, and what the collector container
+# resolves on bench-internal. They are deliberately not localhost URLs; nothing is
+# published to the host (see docker-compose.yml).
+#
+# `services` must match the service names in compose/<app>.yml. When a target lands,
+# the only thing to change here is that list and the port.
+
+version: 1
+
+platform:
+  compose_project: ptaas-bench
+  # Relative paths are resolved from this file; absolute is safer in CI.
+  compose_file: docker-compose.yml
+  collector_service: collector
+  collector_url: http://collector:8900
+  network: bench-public
+
+apps:
+  shopfront:
+    services: [shopfront-web, shopfront-api, shopfront-db]
+    base_url: http://shopfront-web:3000
+    # The React SPA is served by shopfront-web; the API it calls is the same origin
+    # through a path prefix, so one base_url covers both.
+    openapi_url: http://shopfront-web:3000/api/openapi.json
+    graphql_url: http://shopfront-web:3000/graphql
+    control_token: ${BENCH_CONTROL_TOKEN}
+    notes: Reference SPA. Nothing in the initial HTML; JS-blind crawlers score ~0 here.
+
+  admin:
+    services: [admin-web, admin-api, admin-db, admin-ldap]
+    base_url: http://admin-web:8080
+    openapi_url: http://admin-web:8080/v3/api-docs
+    control_token: ${BENCH_CONTROL_TOKEN}
+    notes: Angular SPA over Spring Boot. Everything is behind a login.
+
+  blog:
+    services: [blog-web, blog-api, blog-mongo, blog-redis]
+    base_url: http://blog-web:8000
+    openapi_url: http://blog-web:8000/openapi.json
+    control_token: ${BENCH_CONTROL_TOKEN}
+
+  legacy:
+    # No ":80" anywhere: ZAP's context matching fails on a URL that spells out the
+    # default port. AppSpec strips it too, so a slip in this file is not fatal.
+    services: [legacy-web, legacy-db]
+    base_url: http://legacy-web
+    control_token: ${BENCH_CONTROL_TOKEN}
+    notes: Server-rendered PHP. The one target every scanner should do well on.
+
+  corp:
+    services: [corp-web, corp-db]
+    base_url: http://corp-web:8080
+    control_token: ${BENCH_CONTROL_TOKEN}
+
+  intranet:
+    services: [intranet-web]
+    base_url: http://intranet-web:5000
+    control_token: ${BENCH_CONTROL_TOKEN}
+    notes: HTMX fragments over XHR. Neither classic nor SPA crawling handles it well.
+
+  edge:
+    services: [edge-nginx, edge-haproxy, edge-varnish, edge-origin]
+    base_url: http://edge-nginx
+    # The proxy chain has no application and therefore no seed/state endpoints of its
+    # own: the origin serves them. Reset is still a real restart of all four hops,
+    # because cache poisoning findings persist in Varnish, not in a database.
+    control_url: http://edge-origin:8080
+    control_token: ${BENCH_CONTROL_TOKEN}
+
+  infra:
+    services: [infra-web, infra-redis, infra-mongo, infra-elastic]
+    base_url: http://infra-web
+    control_url: http://infra-web
+    control_token: ${BENCH_CONTROL_TOKEN}
+    notes: Leftover artefacts and unauthenticated datastores. The floor every scanner should clear.

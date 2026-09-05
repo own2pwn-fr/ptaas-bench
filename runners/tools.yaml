@@ -1,0 +1,74 @@
+# Tool registry: the image each driver runs, and the profiles it accepts.
+#
+# `digest` is the reproducibility lever. A tag moves -- `zaproxy:stable` in March
+# and in September are two different scanners -- so a published comparison table
+# should be regenerated only from digests. Leave it null while iterating, then pin
+# it (docker inspect --format '{{index .RepoDigests 0}}' <image>) before publishing,
+# and record the pin in the same commit as the results.
+#
+# `build` exists for the two tools with no usable published image. The orchestrator
+# builds them on demand; the Dockerfile lives next to the driver so the version is
+# pinned in the repository rather than in a floating tag.
+
+version: 1
+
+tools:
+  zap:
+    image: ghcr.io/zaproxy/zaproxy:stable
+    digest: null
+    default_profile: full
+    profiles: [baseline, full]
+    notes: >
+      Automation Framework plans, not the packaged zap-baseline.py: the packaged
+      scans cap passive alerts at 10 instances per rule, which truncates exactly
+      what the scorer counts. baseline = crawl + passive only; full adds the
+      active scanner.
+
+  nuclei:
+    image: projectdiscovery/nuclei:v3.11.1
+    digest: null
+    default_profile: default
+    profiles: [default, dast, offline]
+    notes: >
+      dast enables the fuzzing templates (the only nuclei mode that attacks
+      parameters). offline disables interactsh for hermetic runs, at the cost of
+      nuclei's blind/OOB detection.
+
+  wapiti:
+    image: ptaas-bench/wapiti:3.3.2
+    digest: null
+    build:
+      context: runners/wapiti
+      dockerfile: Dockerfile
+      args:
+        WAPITI_VERSION: "3.3.2"
+    notes: >
+      No official image exists: upstream builds one in CI but never pushes it, and
+      cyberwatch/wapiti is amd64-only and predates 3.3.x.
+
+  nikto:
+    image: ghcr.io/sullo/nikto:2.6.1
+    digest: null
+    notes: >
+      Pinned to 2.6.1 deliberately. ghcr.io/sullo/nikto:latest is stale (built
+      2026-02, labelled 2.5.0) and the 2.5.0 JSON writer is broken in five separate
+      ways, including never setting the `url` field -- benchmarking through it would
+      measure the exporter, not the scanner. Docker Hub's sullo/nikto does not exist.
+
+  skipfish:
+    image: ptaas-bench/skipfish:2.10b
+    digest: null
+    build:
+      context: runners/skipfish
+      dockerfile: Dockerfile
+    notes: >
+      Chosen over Arachni; the reasoning is in runners/skipfish/__init__.py. Dead
+      upstream since 2012 and included as a historical baseline, not as a live
+      contender. Still packaged in Kali, which is where the binary comes from.
+
+  generic:
+    # No container: the tool under test is driven by its vendor, and the harness
+    # only opens the run, holds it for the budget and ingests the export.
+    image: "-"
+    default_profile: import
+    profiles: [import, attach]

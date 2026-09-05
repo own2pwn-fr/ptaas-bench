@@ -1,0 +1,74 @@
+{
+  "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+  "version": "2.1.0",
+  "runs": [
+    {
+      "tool": {
+        "driver": {
+          "name": "AcmePTaaS",
+          "version": "7.2",
+          "rules": [
+            {
+              "id": "acme.xss.reflected",
+              "name": "ReflectedCrossSiteScripting",
+              "shortDescription": {
+                "text": "Reflected cross-site scripting"
+              },
+              "properties": {
+                "tags": [
+                  "security",
+                  "external/cwe/cwe-79"
+                ],
+                "security-severity": "7.5"
+              }
+            },
+            {
+              "id": "acme.info.banner",
+              "shortDescription": {
+                "text": "Server banner disclosed"
+              },
+              "properties": {
+                "tags": [
+                  "security"
+                ],
+                "security-severity": "0.0"
+              }
+            }
+          ]
+        }
+      },
+      "results": [
+        {
+          "ruleId": "acme.xss.reflected",
+          "message": {
+            "text": "Reflected XSS via the term parameter"
+          },
+          "level": "error",
+          "webRequest": {
+            "target": "http://legacy-web/search.php",
+            "method": "GET",
+            "parameters": {
+              "term": "<script>alert(1)</script>"
+            }
+          }
+        },
+        {
+          "ruleId": "acme.info.banner",
+          "message": {
+            "text": "Server: Apache/2.4.62"
+          },
+          "level": "note",
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "http://legacy-web/"
+                }
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,26 @@
+# The harness is not published as a package: it is run from the repository, because
+# a benchmark result has to be traceable to a commit rather than to a version
+# someone installed. This file exists for the test and lint configuration.
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# The drivers import `runners._lib.*`, so the repository root has to be importable.
+pythonpath = [".."]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "B", "I", "UP"]
+ignore = [
+  # Long, explanatory comments are the point of this component; the line-length
+  # rule already covers code.
+  "E501",
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["runners"]
+# `fakes` is a test-local module, imported by path the way pytest does it.
+known-local-folder = ["fakes"]

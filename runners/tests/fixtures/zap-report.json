@@ -1,0 +1,116 @@
+{
+  "@programName": "ZAP",
+  "@version": "2.16.1",
+  "@generated": "Fri, 5 Sep 2026 18:04:51",
+  "created": "2026-09-05T18:04:51.236211400Z",
+  "site": [
+    {
+      "@name": "http://shopfront-web:3000",
+      "@host": "shopfront-web",
+      "@port": "3000",
+      "@ssl": "false",
+      "alerts": [
+        {
+          "pluginid": "40018",
+          "alertRef": "40018",
+          "alert": "SQL Injection",
+          "name": "SQL Injection",
+          "riskcode": "3",
+          "confidence": "2",
+          "riskdesc": "High (Medium)",
+          "desc": "<p>SQL injection may be possible.</p>",
+          "instances": [
+            {
+              "id": "412",
+              "uri": "http://shopfront-web:3000/api/products?q=laptop%27+OR+%271%27%3D%271",
+              "nodeName": "http://shopfront-web:3000/api/products (q)",
+              "method": "GET",
+              "param": "q",
+              "attack": "laptop' OR '1'='1",
+              "evidence": "",
+              "otherinfo": "The page results were successfully manipulated."
+            },
+            {
+              "id": "413",
+              "uri": "http://shopfront-web:3000/api/orders?status=open",
+              "nodeName": "http://shopfront-web:3000/api/orders (status)",
+              "method": "POST",
+              "param": "status",
+              "attack": "open' AND '1'='1",
+              "evidence": "",
+              "otherinfo": ""
+            }
+          ],
+          "count": "2",
+          "systemic": false,
+          "solution": "<p>Use parameterised queries.</p>",
+          "otherinfo": "",
+          "reference": "<p>https://cheatsheetseries.owasp.org/</p>",
+          "cweid": "89",
+          "wascid": "19",
+          "sourceid": "36977"
+        },
+        {
+          "pluginid": "10021",
+          "alertRef": "10021",
+          "alert": "X-Content-Type-Options Header Missing",
+          "name": "X-Content-Type-Options Header Missing",
+          "riskcode": "1",
+          "confidence": "3",
+          "riskdesc": "Low (High)",
+          "desc": "<p>The header was not set.</p>",
+          "instances": [
+            {
+              "id": "9",
+              "uri": "http://shopfront-web:3000/",
+              "nodeName": "http://shopfront-web:3000/",
+              "method": "GET",
+              "param": "x-content-type-options",
+              "attack": "",
+              "evidence": "",
+              "otherinfo": ""
+            }
+          ],
+          "count": "1",
+          "systemic": false,
+          "solution": "<p>Set the header.</p>",
+          "otherinfo": "",
+          "reference": "<p>https://owasp.org/</p>",
+          "cweid": "693",
+          "wascid": "15",
+          "sourceid": "3"
+        },
+        {
+          "pluginid": "10096",
+          "alertRef": "10096",
+          "alert": "Timestamp Disclosure - Unix",
+          "name": "Timestamp Disclosure - Unix",
+          "riskcode": "0",
+          "confidence": "1",
+          "riskdesc": "Informational (Low)",
+          "desc": "<p>A timestamp was disclosed.</p>",
+          "instances": [
+            {
+              "id": "88",
+              "uri": "http://shopfront-web:3000/assets/app.js",
+              "nodeName": "http://shopfront-web:3000/assets/app.js",
+              "method": "GET",
+              "param": "",
+              "attack": "",
+              "evidence": "1750000000",
+              "otherinfo": ""
+            }
+          ],
+          "count": "1",
+          "systemic": false,
+          "solution": "<p>Ignore.</p>",
+          "otherinfo": "",
+          "reference": "",
+          "cweid": "0",
+          "wascid": "13",
+          "sourceid": "1"
+        }
+      ]
+    }
+  ]
+}

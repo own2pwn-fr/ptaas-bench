@@ -1,0 +1,178 @@
+{
+  "classifications": {
+    "SQL Injection": {
+      "desc": "SQL injection vulnerabilities allow an attacker to alter the queries...",
+      "sol": "To protect against SQL injection, user input must not be used directly...",
+      "ref": {
+        "OWASP: SQL Injection": "https://owasp.org/www-community/attacks/SQL_Injection",
+        "CWE-89: Improper Neutralization of Special Elements used in an SQL Command": "https://cwe.mitre.org/data/definitions/89.html"
+      },
+      "wstg": [
+        "WSTG-INPV-05"
+      ]
+    },
+    "Reflected Cross Site Scripting": {
+      "desc": "Cross-site scripting (XSS) is a type of computer security vulnerability...",
+      "sol": "The best way to protect a web application from XSS attacks is escaping...",
+      "ref": {
+        "OWASP: XSS": "https://owasp.org/www-community/attacks/xss/"
+      },
+      "wstg": [
+        "WSTG-INPV-01"
+      ]
+    },
+    "Quantum Flux Injection": {
+      "desc": "A category invented for this fixture: it is not in the mapping table, but its references name a CWE, which is the documented fallback.",
+      "sol": "n/a",
+      "ref": {
+        "CWE-943": "https://cwe.mitre.org/data/definitions/943.html"
+      },
+      "wstg": []
+    },
+    "Mysterious Anomaly": {
+      "desc": "Not in the table and no CWE anywhere: must come out as null.",
+      "sol": "n/a",
+      "ref": {
+        "Some blog": "https://example.invalid/post"
+      },
+      "wstg": []
+    }
+  },
+  "vulnerabilities": {
+    "Backup file": [],
+    "Blind SQL Injection": [],
+    "Weak credentials": [],
+    "CRLF Injection": [],
+    "Cross Site Request Forgery": [],
+    "Command execution": [],
+    "Path Traversal": [],
+    "Fingerprint web server": [],
+    "Open Redirect": [],
+    "Secure Flag cookie": [],
+    "SQL Injection": [
+      {
+        "method": "GET",
+        "path": "http://shopfront-web:3000/api/products",
+        "info": "SQL Injection (QUERY_STRING) in http://shopfront-web:3000/api/products via injection in the parameter q",
+        "level": 4,
+        "parameter": "q",
+        "referer": "http://shopfront-web:3000/catalog",
+        "module": "sql",
+        "http_request": "GET /api/products?q=%C2%BF%27%22%28 HTTP/1.1\nHost: shopfront-web:3000\n",
+        "curl_command": "curl \"http://shopfront-web:3000/api/products?q=%C2%BF%27%22%28\"",
+        "wstg": [
+          "WSTG-INPV-05"
+        ],
+        "detail": {
+          "response": {
+            "status_code": 500
+          }
+        }
+      }
+    ],
+    "Reflected Cross Site Scripting": [
+      {
+        "method": "GET",
+        "path": "http://legacy-web/search.php",
+        "info": "XSS vulnerability in http://legacy-web/search.php via injection in the parameter term",
+        "level": 2,
+        "parameter": "term",
+        "referer": "http://legacy-web/",
+        "module": "xss",
+        "http_request": "GET /search.php?term=%3Cscript%3E HTTP/1.1\nHost: legacy-web\n",
+        "curl_command": "curl \"http://legacy-web/search.php?term=%3Cscript%3E\"",
+        "wstg": [
+          "WSTG-INPV-01"
+        ]
+      }
+    ],
+    "Fingerprint web application framework": [
+      {
+        "method": "GET",
+        "path": "http://legacy-web/",
+        "info": "The web application is using Twig",
+        "level": 0,
+        "parameter": "",
+        "referer": "",
+        "module": "wapp",
+        "http_request": "GET / HTTP/1.1\nHost: legacy-web\n",
+        "curl_command": "curl \"http://legacy-web/\"",
+        "wstg": [
+          "WSTG-INFO-08"
+        ]
+      }
+    ],
+    "Quantum Flux Injection": [
+      {
+        "method": "POST",
+        "path": "http://blog-web:8000/api/posts",
+        "info": "Invented category with a CWE in its references",
+        "level": 3,
+        "parameter": "filter",
+        "referer": "",
+        "module": "sql",
+        "http_request": "POST /api/posts HTTP/1.1\nHost: blog-web:8000\n",
+        "curl_command": "curl -X POST \"http://blog-web:8000/api/posts\"",
+        "wstg": []
+      }
+    ],
+    "Mysterious Anomaly": [
+      {
+        "method": "GET",
+        "path": "http://blog-web:8000/weird",
+        "info": "Unknown to the mapping table and carrying no CWE",
+        "level": 1,
+        "parameter": "",
+        "referer": "",
+        "module": "buster",
+        "http_request": "GET /weird HTTP/1.1\nHost: blog-web:8000\n",
+        "curl_command": "curl \"http://blog-web:8000/weird\"",
+        "wstg": []
+      }
+    ]
+  },
+  "anomalies": {
+    "Internal Server Error": [
+      {
+        "method": "GET",
+        "path": "http://shopfront-web:3000/api/products",
+        "info": "Internal Server Error",
+        "level": 2,
+        "parameter": "q",
+        "referer": "",
+        "module": "sql",
+        "http_request": "GET /api/products?q=%27 HTTP/1.1\n",
+        "curl_command": "curl \"http://shopfront-web:3000/api/products?q=%27\"",
+        "wstg": []
+      }
+    ],
+    "Resource consumption": []
+  },
+  "additionals": {
+    "Fingerprint web technology": [
+      {
+        "method": "GET",
+        "path": "http://shopfront-web:3000/",
+        "info": "Express",
+        "level": 0,
+        "parameter": "",
+        "referer": "",
+        "module": "wapp",
+        "http_request": "GET / HTTP/1.1\n",
+        "curl_command": "curl \"http://shopfront-web:3000/\"",
+        "wstg": []
+      }
+    ],
+    "HTTP Methods": []
+  },
+  "suppressed_findings": {},
+  "infos": {
+    "target": "http://shopfront-web:3000/",
+    "date": "Sat, 05 Sep 2026 18:20:00 +0000",
+    "version": "Wapiti 3.3.2",
+    "scope": "folder",
+    "auth": null,
+    "crawled_pages_nbr": 42,
+    "detailed_report_level": 1
+  }
+}

@@ -1,0 +1,347 @@
+# Tool finding -> CWE. The auditable half of runners/_lib/normalise.py.
+#
+# WHY THIS IS DATA AND NOT CODE
+# The scoring engine compares the CWE a tool claimed against the CWE the catalog
+# planted. A wrong CWE therefore does two kinds of damage at once: the real
+# detection is scored as a miss, and the same finding is scored as a false positive
+# somewhere else. That is a worse outcome than admitting ignorance, so:
+#
+#   * every entry carries a `source` saying why that CWE and not another;
+#   * `cwe: null` is a legitimate, explicit answer, and the omission of the `cwe`
+#     key is a load error, not a shrug;
+#   * anything the table does not know about is emitted with a null CWE and listed
+#     in the run's unmapped.json, which is the maintenance to-do list.
+#
+# HOW A LOOKUP WORKS (per tool, see the parsers)
+#   1. a rule keyed by the tool's own identifier (plugin id, template id, category
+#      name, issue type) wins -- that is how a tool's own wrong CWE gets corrected;
+#   2. otherwise the tool's own CWE field, when it has one;
+#   3. otherwise a weaker signal the parser documents (nuclei tags, nikto's
+#      free-text references, wapiti's reference URLs);
+#   4. otherwise null.
+#
+# CWE VOCABULARY
+# Where a tool's finding corresponds to a class in catalog/taxonomy.yaml, the CWE
+# used here is the one that class declares. Using a synonym (CWE-1391 where the
+# catalog says CWE-1392, a pillar where the catalog says a base) would make a real
+# detection unscoreable, so a deliberate choice is recorded in `source` instead.
+# CWEs that no catalog class uses are listed under `out_of_catalog` with a reason:
+# they are real findings, they are simply not part of this corpus's ground truth.
+
+version: 1
+taxonomy: catalog/taxonomy.yaml
+
+out_of_catalog:
+  693: "Protection mechanism failure -- missing X-Content-Type-Options / CSP / charset. Real, but no catalog class plants it; the corpus tests exploitation, not header hygiene."
+  1004: "Cookie without HttpOnly. The catalog plants cookie_flags as CWE-614 (Secure flag) only."
+  598: "Sensitive data in a GET query string. No catalog class."
+  134: "Format string. skipfish probes for it; nothing in the corpus is written in C."
+  1391: "Use of weak credentials (parent of 1392). See the note on wapiti's 'Weak credentials'."
+
+tools:
+  # ---------------------------------------------------------------------------
+  # ZAP -- publishes its own CWE per alert, and it is generally right.
+  # ---------------------------------------------------------------------------
+  zap:
+    strategy: own_field
+    field: cweid
+    # ZAP writes these when an alert has no CWE. They are sentinels, not CWE 0.
+    null_values: [0, -1, "0", "-1", "", null]
+    # Keyed by alertRef first, then pluginid. Empty by design: ZAP's own cweid is
+    # authoritative, and every override added here is a place where this repository
+    # claims to know a tool's taxonomy better than the tool does. Add one only with
+    # a report in hand, and say which report in `source`.
+    rules: {}
+
+  # ---------------------------------------------------------------------------
+  # nuclei -- info.classification.cwe-id is a lowercased list, e.g. ["cwe-89"].
+  # Present on most templates that describe a weakness, absent on fingerprinting
+  # ones. Per-template corrections go in `rules`; `nuclei_tags` is the fallback.
+  # ---------------------------------------------------------------------------
+  nuclei:
+    strategy: own_field_then_tags
+    field: info.classification.cwe-id
+    rules: {}
+
+  nuclei_tags:
+    # Only consulted when a template carries no classification of its own. Tags are
+    # a search facility, not a taxonomy, so only the unambiguous ones are mapped.
+    rules:
+      sqli: {cwe: 89, source: "nuclei tag 'sqli'; catalog sqli_* classes use CWE-89."}
+      xss: {cwe: 79, source: "nuclei tag 'xss'; catalog xss_* classes use CWE-79."}
+      lfi: {cwe: 98, source: "catalog lfi class uses CWE-98 (PHP file inclusion), not CWE-22."}
+      rfi: {cwe: 98, source: "catalog rfi class uses CWE-98."}
+      ssrf: {cwe: 918, source: "catalog ssrf_* classes use CWE-918."}
+      rce: {cwe: 78, source: "catalog cmdi class uses CWE-78. A tag-only RCE claim is assumed OS command injection, which is what nuclei's rce templates overwhelmingly test."}
+      xxe: {cwe: 611, source: "catalog xxe class uses CWE-611."}
+      ssti: {cwe: 1336, source: "catalog ssti class uses CWE-1336."}
+      traversal: {cwe: 22, source: "catalog path_traversal class uses CWE-22."}
+      lfr: {cwe: 22, source: "'local file read' tag; same weakness as traversal."}
+      redirect: {cwe: 601, source: "catalog open_redirect class uses CWE-601."}
+      jwt: {cwe: 347, source: "catalog jwt_* classes use CWE-347."}
+      deserialization: {cwe: 502, source: "catalog deser_* classes use CWE-502."}
+      idor: {cwe: 639, source: "catalog idor_*/bola classes use CWE-639."}
+      default-login: {cwe: 1392, source: "catalog default_creds class uses CWE-1392."}
+      exposure: {cwe: 200, source: "catalog swagger_exposed/graphql_introspection use CWE-200."}
+      disclosure: {cwe: 200, source: "Same as the 'exposure' tag: the catalog uses CWE-200 for swagger_exposed and graphql_introspection."}
+      cve: {cwe: 1395, source: "a CVE-matching template claims 'this component is a known-vulnerable version', which is catalog class vulnerable_dependency (CWE-1395), not the CWE of the underlying bug."}
+      # Deliberate nulls: mapping these would be a guess dressed as a taxonomy.
+      misconfig: {cwe: null, source: "Covers everything from directory listing to debug endpoints; too broad to map."}
+      tech: {cwe: null, source: "Technology fingerprint. Not a weakness claim."}
+      detect: {cwe: null, source: "Detection-only template. Not a weakness claim."}
+      panel: {cwe: null, source: "Found a login panel. Says nothing about whether it is unprotected."}
+      injection: {cwe: null, source: "Ambiguous between SQL, command, template and header injection."}
+      takeover: {cwe: null, source: "Subdomain takeover has no agreed CWE and no catalog class."}
+
+  # ---------------------------------------------------------------------------
+  # wapiti -- emits NO CWE anywhere. Its report has WSTG codes only, so the
+  # category name is the whole signal. Category list verified against
+  # wapitiCore/definitions/ for 3.3.2 (38 vulnerability categories).
+  # `anomalies` and `additionals` are not turned into findings by the parser at
+  # all -- a 500 or a technology fingerprint is not a claim that a flaw exists --
+  # so they are documented here but need no mapping.
+  # ---------------------------------------------------------------------------
+  wapiti:
+    strategy: rules
+    rules:
+      "SQL Injection": {cwe: 89, source: "catalog sqli_* = CWE-89."}
+      "Blind SQL Injection": {cwe: 89, source: "catalog sqli_blind_* = CWE-89."}
+      "Cross Site Request Forgery": {cwe: 352, source: "catalog csrf = CWE-352."}
+      "Command execution": {cwe: 78, source: "catalog cmdi = CWE-78."}
+      "Path Traversal": {cwe: 22, source: "catalog path_traversal = CWE-22. wapiti's `file` module conflates traversal and PHP file inclusion (catalog lfi = CWE-98); CWE-22 is the reading its category name states."}
+      "CRLF Injection": {cwe: 113, source: "catalog crlf_injection = CWE-113."}
+      "Reflected Cross Site Scripting": {cwe: 79, source: "catalog xss_reflected = CWE-79."}
+      "Stored Cross Site Scripting": {cwe: 79, source: "catalog xss_stored = CWE-79."}
+      "HTML Injection": {cwe: 79, source: "Same neutralisation failure as XSS; the catalog has no HTML-injection-only class, and CWE-80 would never match a planted entry."}
+      "Stored HTML Injection": {cwe: 79, source: "Same neutralisation failure as stored XSS; the catalog has no HTML-injection-only class and CWE-80 would never match."}
+      "Server Side Request Forgery": {cwe: 918, source: "catalog ssrf_* = CWE-918."}
+      "XML External Entity": {cwe: 611, source: "catalog xxe = CWE-611."}
+      "LDAP Injection": {cwe: 90, source: "catalog ldapi = CWE-90."}
+      "Open Redirect": {cwe: 601, source: "catalog open_redirect = CWE-601."}
+      "Unrestricted File Upload": {cwe: 434, source: "catalog unrestricted_upload = CWE-434."}
+      "Backup file": {cwe: 530, source: "catalog backup_file = CWE-530."}
+      "Secure Flag cookie": {cwe: 614, source: "catalog cookie_flags = CWE-614."}
+      "HttpOnly Flag cookie": {cwe: 1004, source: "The HttpOnly counterpart of CWE-614; out of catalog."}
+      "Clickjacking Protection": {cwe: 1021, source: "catalog clickjacking = CWE-1021."}
+      "Stack Trace Disclosure": {cwe: 209, source: "catalog verbose_error = CWE-209."}
+      "Information Disclosure - Full Path": {cwe: 200, source: "Path disclosure is an information exposure; catalog uses CWE-200 for its exposure classes."}
+      "Cleartext Submission of Password": {cwe: 319, source: "catalog cleartext_transport = CWE-319."}
+      "Unencrypted Channels": {cwe: 319, source: "catalog cleartext_transport = CWE-319."}
+      "HTTP Strict Transport Security (HSTS)": {cwe: 319, source: "Missing HSTS is conventionally CWE-319 (ZAP maps its equivalent alert the same way)."}
+      "TLS/SSL misconfigurations": {cwe: 327, source: "catalog weak_hash/ecb_mode = CWE-327 (broken or risky crypto). NOTE: wapiti uses this same category name in both `vulnerabilities` and `additionals`; the parser only reads `vulnerabilities`."}
+      "Weak credentials": {cwe: 1392, source: "wapiti's brute_login_form proves a guessable login. CWE-1391 (weak credentials) is the strict parent, but every instance planted in this corpus is default_creds (CWE-1392), so 1391 would turn a genuine detection into a miss. Revisit if a weak-but-not-default credential is ever planted."}
+      "Log4Shell": {cwe: 1395, source: "A version/CVE check: the claim is 'this component is known-vulnerable', i.e. catalog vulnerable_dependency (CWE-1395). MITRE's CWE for the underlying bug is 917."}
+      "Spring4Shell": {cwe: 1395, source: "As Log4Shell. MITRE's CWE for the underlying bug is 94."}
+      "CVE-2024-55591": {cwe: 1395, source: "Single-CVE check; same reasoning as Log4Shell."}
+      "Vulnerable software": {cwe: 1395, source: "catalog vulnerable_dependency = CWE-1395."}
+      "Htaccess Bypass": {cwe: 650, source: "wapiti's htaccess module reaches a protected resource with an unusual verb: catalog method_override = CWE-650."}
+      "Content Security Policy Configuration": {cwe: 693, source: "Missing/weak CSP is a protection-mechanism failure. Out of catalog."}
+      "MIME Type Confusion": {cwe: 693, source: "Missing X-Content-Type-Options. Out of catalog."}
+      # Honest nulls. Each of these is a real wapiti category whose meaning does not
+      # determine a weakness class; guessing would corrupt the comparison.
+      "Potentially dangerous file": {cwe: null, source: "A grab bag from the nikto module: backups, admin scripts, sample files. The category alone does not say which."}
+      "Fingerprint web application framework": {cwe: null, source: "Fingerprint, not a weakness claim."}
+      "Fingerprint web server": {cwe: null, source: "Fingerprint, not a weakness claim."}
+      "Inconsistent Redirection": {cwe: null, source: "Emitted by the https_redirect module; the category does not distinguish 'does not redirect to HTTPS' (CWE-319) from 'redirects inconsistently' (no weakness). Left null pending a real report to read."}
+      "NS takeover": {cwe: null, source: "No agreed CWE and no catalog class."}
+      "Subdomain takeover": {cwe: null, source: "No agreed CWE and no catalog class."}
+    # Documented, deliberately not parsed:
+    #   anomalies:   "Internal Server Error", "Resource consumption"
+    #   additionals: "Review Webserver Metafiles for Information Leakage",
+    #                "Fingerprint web technology", "HTTP Methods",
+    #                "TLS/SSL misconfigurations"
+
+  # ---------------------------------------------------------------------------
+  # nikto -- prose. No CWE field, no severity, and the only stable identifier is
+  # the 6-digit test id. About 4% of its tests happen to put a CWE id in the
+  # free-text `references` column (CWE-552, CWE-200, CWE-548, and two hardcoded
+  # CWE-16); when they do, that is used first because it is nikto's own statement.
+  # Everything else is matched by ordered regex against the message. Order matters.
+  # ---------------------------------------------------------------------------
+  nikto:
+    strategy: patterns
+    use_reference_cwe: true
+    rules: {}
+    patterns:
+      - match: "directory indexing found|index of /"
+        cwe: 548
+        severity: medium
+        source: "catalog dir_listing = CWE-548."
+      - match: "/\\.git|git repository|\\.git/config"
+        cwe: 527
+        severity: high
+        source: "catalog exposed_vcs = CWE-527."
+      - match: "/\\.svn|subversion repository"
+        cwe: 527
+        severity: high
+        source: "catalog exposed_vcs = CWE-527."
+      - match: "/\\.env\\b|environment file"
+        cwe: 538
+        severity: high
+        source: "catalog exposed_env = CWE-538."
+      - match: "\\.(bak|old|orig|save|swp)\\b|backup file"
+        cwe: 530
+        severity: medium
+        source: "catalog backup_file = CWE-530."
+      - match: "trace method is active|http trace"
+        cwe: 16
+        severity: low
+        source: "catalog trace_enabled = CWE-16."
+      - match: "put method|allows clients to save files"
+        cwe: 434
+        severity: high
+        source: "A writable PUT is arbitrary file upload; catalog unrestricted_upload = CWE-434."
+      - match: "anti-clickjacking x-frame-options header is not present|x-frame-options"
+        cwe: 1021
+        severity: low
+        source: "catalog clickjacking = CWE-1021."
+      - match: "x-content-type-options header is not set"
+        cwe: 693
+        severity: low
+        source: "Protection-mechanism failure; out of catalog."
+      - match: "strict-transport-security header (is )?not defined"
+        cwe: 319
+        severity: low
+        source: "catalog cleartext_transport = CWE-319."
+      - match: "cookie .*without the secure flag|secure flag is not set"
+        cwe: 614
+        severity: low
+        source: "catalog cookie_flags = CWE-614."
+      - match: "cookie .*without the httponly flag|httponly flag is not set"
+        cwe: 1004
+        severity: low
+        source: "HttpOnly counterpart of CWE-614; out of catalog."
+      - match: "server leaks inodes via etags|phpinfo|information disclosure"
+        cwe: 200
+        severity: low
+        source: "catalog uses CWE-200 for information exposure."
+      # Deliberate nulls, matched so they do not clutter unmapped.json every run.
+      - match: "retrieved (x-powered-by|via|x-.*) header|uncommon header"
+        cwe: null
+        source: "Header observation. Not a weakness claim."
+      - match: "this might be interesting|may be interesting"
+        cwe: null
+        source: "Nikto's own hedge. Says a file exists, not that it is a flaw."
+
+  # ---------------------------------------------------------------------------
+  # skipfish -- no CWE, no useful text, but a stable numeric issue type. The full
+  # 82-entry table from skipfish 2.10b (assets/index.html `var issue_desc`) is
+  # reproduced here so a reviewer can see the whole tool's vocabulary and check
+  # what was and was not mapped.
+  #
+  # `skip: true` means "not a finding": the 2xxxx band is skipfish reporting on its
+  # own scan (fetch failures, IPS detection, limits hit). Emitting those as claims
+  # would credit skipfish with false positives it never made.
+  #
+  # Where the C constant name in src/database.h is more specific than the UI
+  # string, the constant wins -- e.g. 50103 is labelled "Query injection vector"
+  # but the constant is PROB_SQL_INJECT.
+  # ---------------------------------------------------------------------------
+  skipfish:
+    strategy: rules
+    # 'severity' in the .js files is PSEV(type)-1, so 0..4 for PSEV_INFO..PSEV_HI.
+    severity_map:
+      "0": info      # PSEV_INFO
+      "1": info      # PSEV_WARN -- scanner-internal, and skipped by type anyway
+      "2": low       # PSEV_LOW
+      "3": medium    # PSEV_MED
+      "4": high      # PSEV_HI ("high risk: system compromise"); skipfish has no
+                     # tier above this, so nothing maps to `critical`.
+    rules:
+      "10101": {cwe: null, name: "SSL certificate issuer information", source: "Reports who issued the certificate. An observation about the target, not a weakness."}
+      "10201": {cwe: null, name: "New HTTP cookie added", source: "Crawl observation: a cookie appeared. Says nothing about its flags or contents."}
+      "10202": {cwe: null, name: "New 'Server' header value seen", source: "Server banner fingerprint. Not a weakness claim; the catalog plants no banner-disclosure class."}
+      "10203": {cwe: null, name: "New 'Via' header value seen", source: "Proxy chain fingerprint. Not a weakness claim on its own."}
+      "10204": {cwe: null, name: "New 'X-*' header value seen", source: "Non-standard header fingerprint. Not a weakness claim on its own."}
+      "10205": {cwe: null, name: "New 404 signature seen", source: "How skipfish learns to recognise this site's not-found page. Pure scanner bookkeeping."}
+      "10401": {cwe: null, name: "Resource not directly accessible", source: "A resource was referenced but could not be fetched. A crawl observation, not a finding."}
+      "10402": {cwe: null, name: "HTTP authentication required", source: "Informational: auth exists, which is not a flaw."}
+      "10403": {cwe: 755, name: "Server error triggered", source: "catalog unhandled_exception = CWE-755."}
+      "10404": {cwe: 548, name: "Directory listing enabled", source: "catalog dir_listing = CWE-548."}
+      "10405": {cwe: null, name: "Hidden files / directories", source: "Unlinked does not mean unprotected; forced_browsing (CWE-425) would be a guess."}
+      "10501": {cwe: null, name: "All external links", source: "An inventory of outbound links, emitted for the operator to read. Not a claim."}
+      "10502": {cwe: null, name: "External URL redirector", source: "Reported as an observation, not as an exploitable redirect (that is 30401)."}
+      "10503": {cwe: null, name: "All e-mail addresses", source: "An inventory of addresses found in pages. Harvestable, but the catalog plants no class for it."}
+      "10504": {cwe: null, name: "Links to unknown protocols", source: "Inventory of non-http(s) URI schemes seen in the markup. Not a claim."}
+      "10505": {cwe: null, name: "Unknown form field (can't autocomplete)", source: "Scanner limitation, not a finding."}
+      "10601": {cwe: null, name: "HTML form (not classified otherwise)", source: "A form exists. That is attack surface, not a weakness, and the scorer measures surface from the collector, not from tool claims."}
+      "10602": {cwe: null, name: "Password entry form - consider brute-force", source: "A suggestion to the operator, not a claim."}
+      "10603": {cwe: null, name: "File upload form", source: "The form existing is not the flaw; 50301/40401 would be."}
+      "10701": {cwe: null, name: "User-supplied link rendered on a page", source: "XSS precursor; on its own it is not a claim of XSS."}
+      "10801": {cwe: 693, name: "Incorrect or missing MIME type (low risk)", source: "Protection-mechanism failure; out of catalog."}
+      "10802": {cwe: 693, name: "Generic MIME used (low risk)", source: "Content served as a generic type invites sniffing; CWE-693 (protection mechanism failure), out of catalog."}
+      "10803": {cwe: 693, name: "Incorrect or missing charset (low risk)", source: "A missing charset lets the browser choose one, defeating output encoding; CWE-693, out of catalog."}
+      "10804": {cwe: 693, name: "Conflicting MIME / charset info (low risk)", source: "Header and document disagree, so the browser decides; CWE-693, out of catalog."}
+      "10901": {cwe: null, name: "Numerical filename - consider enumerating", source: "A suggestion, not a claim. (An IDOR here would be reported by nobody but a human.)"}
+      "10902": {cwe: 917, name: "OGNL-like parameter behavior", source: "catalog el_injection = CWE-917; OGNL is exactly the expression language this class covers."}
+      "10909": {cwe: null, name: "Signature match (informational)", source: "Depends entirely on the user-supplied signature file."}
+      "20101": {cwe: null, skip: true, name: "Resource fetch failed", source: "Scanner telemetry, not a finding."}
+      "20102": {cwe: null, skip: true, name: "Limits exceeded, fetch suppressed", source: "skipfish hit its own crawl limits. Telemetry about the scan, not about the target."}
+      "20201": {cwe: null, skip: true, name: "Directory behavior checks failed (no brute force)", source: "skipfish could not calibrate the directory, so it skipped brute force. Scan telemetry."}
+      "20202": {cwe: null, skip: true, name: "Parent behavior checks failed (no brute force)", source: "Calibration of the parent node failed. Scan telemetry, and a warning that coverage here is incomplete."}
+      "20203": {cwe: null, skip: true, name: "IPS filtering enabled", source: "Something between skipfish and the target started dropping requests. Scan telemetry (and it invalidates coverage)."}
+      "20204": {cwe: null, skip: true, name: "IPS filtering disabled again", source: "The filtering above stopped. Scan telemetry, paired with 20203."}
+      "20205": {cwe: null, skip: true, name: "Response varies randomly, skipping checks", source: "The target is non-deterministic, so skipfish gave up on differential checks. Scan telemetry."}
+      "20301": {cwe: null, skip: true, name: "Node should be a directory, detection error?", source: "skipfish's own structure detection disagreed with itself. Scan telemetry."}
+      "30101": {cwe: 598, name: "HTTP credentials seen in URLs", source: "Credentials in a query string; out of catalog."}
+      "30201": {cwe: null, name: "SSL certificate expired or not yet valid", source: "Every CWE for certificate problems (295, 298) describes the *client* failing to validate. Asserting one against a server finding would be wrong."}
+      "30202": {cwe: null, name: "Self-signed SSL certificate", source: "As 30201: the CWEs for certificate problems (295, 298) all describe a client failing to validate, not a server presenting."}
+      "30203": {cwe: null, name: "SSL certificate host name mismatch", source: "As 30201: the available CWEs describe client-side validation failures, which is not what is being reported."}
+      "30204": {cwe: null, name: "No SSL certificate data found", source: "As 30201, and often just means the target speaks plain HTTP, which is the corpus default."}
+      "30205": {cwe: 327, name: "Weak SSL cipher negotiated", source: "catalog weak_hash/ecb_mode = CWE-327 (broken or risky crypto)."}
+      "30206": {cwe: null, name: "Host name length mismatch (name string has null byte)", source: "Certificate parsing oddity; see 30201."}
+      "30301": {cwe: 548, name: "Directory listing restrictions bypassed", source: "catalog dir_listing = CWE-548."}
+      "30401": {cwe: 601, name: "Redirection to attacker-supplied URLs", source: "catalog open_redirect = CWE-601."}
+      "30402": {cwe: null, name: "Attacker-supplied URLs in embedded content (lower risk)", source: "A controlled URL in embedded content is a precursor to several different classes; the code does not say which."}
+      "30501": {cwe: null, name: "External content embedded on a page (lower risk)", source: "Observation. Missing SRI (CWE-353) would be a different, unstated claim."}
+      "30502": {cwe: 319, name: "Mixed content embedded on a page (lower risk)", source: "Content fetched over cleartext on a secure page; catalog cleartext_transport = CWE-319."}
+      "30503": {cwe: 319, name: "HTTPS form submitting to a HTTP URL", source: "catalog cleartext_transport = CWE-319."}
+      "30601": {cwe: 352, name: "HTML form with no apparent XSRF protection", source: "catalog csrf = CWE-352."}
+      "30602": {cwe: null, name: "JSON response with no apparent XSSI protection", source: "XSSI has no agreed CWE and no catalog class."}
+      "30603": {cwe: null, name: "Auth form leaks credentials via HTTP GET", source: "DEAD ENTRY: present in skipfish's UI map but has no C constant and is never emitted. If this is ever seen, the parser or the tool is wrong, not the target."}
+      "30701": {cwe: 525, name: "Incorrect caching directives (lower risk)", source: "catalog cache_deception = CWE-525 (web cache holding sensitive information)."}
+      "30801": {cwe: null, name: "User-controlled response prefix (BOM / plugin attacks)", source: "Precursor to plugin-based XSS; too indirect to assert CWE-79."}
+      "30901": {cwe: 113, name: "HTTP header injection vector", source: "catalog crlf_injection/header_injection = CWE-113."}
+      "30909": {cwe: null, name: "Signature match detected", source: "User-supplied signature file."}
+      "40101": {cwe: 79, name: "XSS vector in document body", source: "catalog xss_* = CWE-79."}
+      "40102": {cwe: 79, name: "XSS vector via arbitrary URLs", source: "catalog xss_* = CWE-79."}
+      "40103": {cwe: 113, name: "HTTP response header splitting", source: "catalog crlf_injection = CWE-113."}
+      "40104": {cwe: null, name: "Attacker-supplied URLs in embedded content (higher risk)", source: "As 30402; the severity differs, the ambiguity does not."}
+      "40105": {cwe: 79, name: "XSS vector via injected HTML tag attribute", source: "catalog xss_attribute = CWE-79."}
+      "40201": {cwe: null, name: "External content embedded on a page (higher risk)", source: "As 30501: an observation. Missing subresource integrity (CWE-353) would be a different claim skipfish does not make."}
+      "40202": {cwe: 319, name: "Mixed content embedded on a page (higher risk)", source: "Content fetched over cleartext on a secure page; catalog cleartext_transport = CWE-319."}
+      "40301": {cwe: 693, name: "Incorrect or missing MIME type (higher risk)", source: "Same weakness as 10801 at a higher severity: CWE-693 (protection mechanism failure), out of catalog."}
+      "40302": {cwe: 693, name: "Generic MIME type (higher risk)", source: "Same weakness as 10802 at a higher severity: CWE-693, out of catalog."}
+      "40304": {cwe: 693, name: "Incorrect or missing charset (higher risk)", source: "As 10801. (40303 does not exist in skipfish.)"}
+      "40305": {cwe: 693, name: "Conflicting MIME / charset info (higher risk)", source: "Same weakness as 10804 at a higher severity: CWE-693, out of catalog."}
+      "40401": {cwe: null, name: "Interesting file", source: "Grab bag: backups, configs, admin scripts. The type alone does not say which."}
+      "40402": {cwe: null, name: "Interesting server message", source: "A grab bag: stack traces, debug output, error strings. Could be CWE-209 or nothing; the type does not say."}
+      "40501": {cwe: 22, name: "Directory traversal / file inclusion possible", source: "catalog path_traversal = CWE-22. skipfish conflates traversal with file inclusion (catalog lfi = CWE-98); the name leads with traversal."}
+      "40601": {cwe: 525, name: "Incorrect caching directives (higher risk)", source: "Same weakness as 30701 on a response skipfish considers sensitive; catalog cache_deception = CWE-525."}
+      "40701": {cwe: 319, name: "Password form submits from or to non-HTTPS page", source: "catalog cleartext_transport = CWE-319."}
+      "40909": {cwe: null, name: "Signature match detected (higher risk)", source: "User-supplied signature file."}
+      "50101": {cwe: 91, name: "Server-side XML injection vector", source: "catalog xslt_injection = CWE-91 (XML injection). CWE-611 (XXE) is a different, narrower claim skipfish does not make."}
+      "50102": {cwe: 78, name: "Shell injection vector", source: "PROB_SH_INJECT; catalog cmdi = CWE-78."}
+      "50103": {cwe: 89, name: "Query injection vector", source: "PROB_SQL_INJECT -- the constant is more specific than the UI string; catalog sqli_* = CWE-89."}
+      "50104": {cwe: 134, name: "Format string vector", source: "Out of catalog; nothing in the corpus is native code."}
+      "50105": {cwe: 190, name: "Integer overflow vector", source: "catalog integer_overflow = CWE-190."}
+      "50106": {cwe: 98, name: "File inclusion", source: "PROB_FI_LOCAL; catalog lfi = CWE-98."}
+      "50107": {cwe: 98, name: "Remote file inclusion", source: "PROB_FI_REMOTE; catalog rfi = CWE-98."}
+      "50201": {cwe: null, name: "SQL query or similar syntax in parameters", source: "An observation that a parameter looks like SQL, not a claim that it is injectable. Mapping it to CWE-89 would manufacture true positives."}
+      "50301": {cwe: 434, name: "PUT request accepted", source: "catalog unrestricted_upload = CWE-434."}
+      "50909": {cwe: null, name: "Signature match detected (high risk)", source: "User-supplied signature file."}
+      # Defined in src/database.h but never emitted by any code path. Listed so the
+      # table is provably complete against the tool's own constants.
+      "10102": {cwe: null, name: "SSL certificate will expire (dead constant)", source: "DEAD: defined in database.h, never emitted, absent from the UI map."}
+      "30802": {cwe: null, name: "XSS vector, lower risk (dead constant)", source: "DEAD: defined in database.h, never emitted, absent from the UI map."}
+
+  # ---------------------------------------------------------------------------
+  # generic -- vendor-supplied JSON/SARIF. The vendor's own CWE is used as given;
+  # nothing is inferred from a title, because a vendor's rule names are theirs to
+  # define and guessing at them would put words in their mouth. Per-rule overrides
+  # can be added here when a vendor's export is known to be systematically wrong,
+  # with the export in hand.
+  # ---------------------------------------------------------------------------
+  generic:
+    strategy: own_field
+    rules: {}

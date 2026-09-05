@@ -1,0 +1,30 @@
+{
+  "scanner": "AcmePTaaS",
+  "findings": [
+    {
+      "id": "ACME-1",
+      "title": "SQL injection in product search",
+      "affected_url": "http://shopfront-web:3000/api/products?q=1",
+      "http_method": "GET",
+      "parameter": "q",
+      "cwe_id": "CWE-89",
+      "risk": "critical",
+      "confidence": "firm"
+    },
+    {
+      "id": "ACME-2",
+      "title": "Session cookie without Secure flag",
+      "uri": "http://shopfront-web:3000/",
+      "verb": "GET",
+      "cwe": 614,
+      "severity": "low"
+    },
+    {
+      "id": "ACME-3",
+      "title": "Business logic flaw in checkout",
+      "url": "http://shopfront-web:3000/api/checkout",
+      "method": "POST",
+      "severity": "high"
+    }
+  ]
+}
