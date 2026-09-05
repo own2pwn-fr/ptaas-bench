@@ -118,9 +118,13 @@ export interface EgressCorrelation {
 export const UNMATCHED_ROUTE = "<unmatched>";
 
 /**
- * Metric naming convention: lowercase dotted segments, at least two of them.
+ * Metric naming convention: lowercase dotted segments, at least three of them.
  *
- * Enforced locally because the ingest endpoint rejects a whole batch when one event
- * fails validation, which would discard unrelated events queued alongside it.
+ * Copied verbatim from the metric registry's schema, which is the authority — the
+ * ingest endpoint applies the same rule. A name this client accepted but the registry
+ * did not would be taken by one endpoint and rejected by another: the counter would
+ * appear on dashboards while the egress correlation carrying the same name was dropped
+ * on the floor, with nothing logged at either end. Validating locally, at the call
+ * site, is the only place a developer ever sees the mistake.
  */
-export const SIGNAL_NAME_PATTERN = /^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+$/;
+export const SIGNAL_NAME_PATTERN = /^[a-z][a-z0-9]*(\.[a-z0-9_]+){2,}$/;

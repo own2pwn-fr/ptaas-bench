@@ -100,18 +100,42 @@ describe("client.signal", () => {
     expect(event!.attributes?.payload).toHaveLength(1024);
   });
 
-  it("accepts dotted lowercase names and rejects anything else", async () => {
-    for (const bad of ["Shop.Catalog", "shop", "shop..x", "shop.catalog ", "1shop.x", ""]) {
-      client.signal(bad);
-    }
-    client.signal("shop.catalog.query.plan_anomaly");
+  it("requires at least three segments, matching the metric registry", async () => {
+    // Two segments used to pass here and be rejected downstream. The counter would
+    // still have shown up, while the egress correlation using the same name was
+    // dropped in silence -- so a blind flaw in that code path would look like a code
+    // path nothing ever reached. Rejecting at the call site is the whole point.
+    client.signal("shop.catalog");
     const notes = await drain(
       (e) => e.filter((x): x is NoteEvent => (x as NoteEvent).type === "note"),
-      6,
+      1,
     );
-    expect(notes.filter((n) => n.message?.includes("invalid name"))).toHaveLength(6);
-    // The valid one still made it: one bad name must not poison the batch.
-    expect(collector.events.filter((e) => e.type === "signal")).toHaveLength(1);
+    expect(notes[0]!.message).toContain('invalid name "shop.catalog"');
+    expect(collector.events.some((e) => e.type === "signal")).toBe(false);
+  });
+
+  it("accepts registry-shaped names and rejects everything else", async () => {
+    const bad = [
+      "shop.catalog", // two segments
+      "shop", // one segment
+      "plan_anomaly.query.shop", // underscore in the leading segment
+      "Shop.Catalog.Query", // uppercase
+      "shop..query", // empty segment
+      "shop.catalog.query ", // trailing space
+      "1shop.catalog.query", // leading digit
+      "",
+    ];
+    for (const name of bad) client.signal(name);
+    client.signal("shop.catalog.query.plan_anomaly");
+    client.signal("shop.catalog.query");
+
+    const notes = await drain(
+      (e) => e.filter((x): x is NoteEvent => (x as NoteEvent).type === "note"),
+      bad.length,
+    );
+    expect(notes.filter((n) => n.message?.includes("invalid name"))).toHaveLength(bad.length);
+    // The valid ones still made it: one bad name must not poison the batch.
+    expect(collector.events.filter((e) => e.type === "signal")).toHaveLength(2);
   });
 
   it("never throws, whatever it is handed", () => {
@@ -156,9 +180,29 @@ describe("client.correlate", () => {
       client.correlate({ signal: "shop.imports.fetch.egress", destinationHost: "x.example", requestId: "rid-9" }),
     ).toBe("rid-9");
     expect(() =>
-      client.correlate({ signal: "x.y", destinationHost: undefined as unknown as string }),
+      client.correlate({
+        signal: "shop.imports.fetch.egress",
+        destinationHost: undefined as unknown as string,
+      }),
     ).not.toThrow();
     await collector.waitFor(() => collector.correlations.length >= 2);
+  });
+
+  it("applies the same naming rule, since the endpoint drops unknown names silently", async () => {
+    const requestId = client.correlate({
+      signal: "shop.imports",
+      destinationHost: "a1b2c3.oob.example",
+    });
+
+    // The caller's code path is unchanged -- it still gets an id to thread through --
+    // but the problem is now visible instead of costing a whole vulnerability class.
+    expect(requestId).toMatch(/[0-9a-f-]{8,}/);
+    const notes = await drain(
+      (e) => e.filter((x): x is NoteEvent => (x as NoteEvent).type === "note"),
+      1,
+    );
+    expect(notes[0]!.message).toContain('rejected correlation with invalid name "shop.imports"');
+    expect(collector.correlations).toHaveLength(0);
   });
 });
 

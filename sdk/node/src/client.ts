@@ -194,6 +194,14 @@ export class TelemetryClient {
   correlate(declaration: EgressDeclaration): string {
     const requestId = declaration.requestId ?? safeUuid();
     if (!this.config.enabled) return requestId;
+    if (typeof declaration.signal !== "string" || !SIGNAL_NAME_PATTERN.test(declaration.signal)) {
+      // The correlation endpoint drops an unregistered name without a word, so a typo
+      // here would otherwise cost every outbound call from this code path, silently.
+      this.note(
+        `telemetry: rejected correlation with invalid name ${JSON.stringify(declaration.signal)}`,
+      );
+      return requestId;
+    }
     try {
       const correlation: EgressCorrelation = {
         app: this.config.service,
