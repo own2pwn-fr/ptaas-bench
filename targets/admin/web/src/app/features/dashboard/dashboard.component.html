@@ -1,0 +1,146 @@
+<div class="page">
+  <mrd-page-header
+    [title]="greeting()"
+    [subtitle]="'Operations overview for ' + (desk.selectedAccountName() || 'your account')"
+  >
+    <button actions type="button" class="btn btn--sm" (click)="load()">Refresh</button>
+    <a actions class="btn btn--sm btn--primary" routerLink="/reports/summary">Open full summary</a>
+  </mrd-page-header>
+
+  <mrd-error-banner [error]="failure()" (retry)="load()" (dismiss)="failure.set(null)" />
+
+  @if (summaryLoading()) {
+    <div class="card card--pad">
+      <mrd-skeleton [rows]="4" />
+    </div>
+  } @else if (summary()) {
+    @let report = summary()!;
+    <section class="grid grid--4 tiles">
+      @for (tile of report.tiles; track tile.key) {
+        <article class="card metric">
+          <div class="metric__label">{{ tile.label }}</div>
+          <div class="metric__value">
+            {{ tile.value | number: '1.0-2' }}
+            @if (tile.unit) {
+              <span class="metric__unit">{{ tile.unit }}</span>
+            }
+          </div>
+          @if (tile.delta !== undefined) {
+            <div class="metric__trend" [class.metric__trend--down]="tile.delta < 0">
+              {{ tile.delta > 0 ? '▲' : '▼' }} {{ tile.delta | number: '1.0-1' }}% on last period
+            </div>
+          }
+        </article>
+      }
+    </section>
+
+    <section class="grid grid--2">
+      <div class="card">
+        <div class="card__header">
+          <h2>Busiest lanes</h2>
+          <a class="small" routerLink="/reports/volumes">Volumes</a>
+        </div>
+        <div class="card__body">
+          @if (report.topLanes.length === 0) {
+            <mrd-empty-state
+              title="No lane activity"
+              message="Nothing has moved on this account in the selected period."
+            />
+          } @else {
+            <table class="data">
+              <thead>
+                <tr>
+                  <th scope="col">Lane</th>
+                  <th scope="col" class="numeric">Consignments</th>
+                  <th scope="col" class="numeric">Gross weight</th>
+                </tr>
+              </thead>
+              <tbody>
+                @for (lane of report.topLanes; track lane.lane) {
+                  <tr>
+                    <td>{{ lane.lane }}</td>
+                    <td class="numeric">{{ lane.consignments | number }}</td>
+                    <td class="numeric">{{ lane.grossWeightKg | number: '1.0-0' }} kg</td>
+                  </tr>
+                }
+              </tbody>
+            </table>
+          }
+        </div>
+        <div class="card__footer small muted">
+          Compiled {{ report.generatedAt | date: 'd MMM y, HH:mm' }} for
+          {{ report.accountName }}
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card__header">
+          <h2>Approvals waiting</h2>
+          @if (canSeeApprovals()) {
+            <a class="small" routerLink="/approvals">All approvals</a>
+          }
+        </div>
+        @if (!canSeeApprovals()) {
+          <div class="card__body">
+            <mrd-empty-state
+              title="Not part of your role"
+              message="Approvals are handled by the commercial desk."
+            />
+          </div>
+        } @else {
+          <mrd-data-table
+            [columns]="approvalColumns"
+            [rows]="pending()"
+            [loading]="pendingLoading()"
+            [link]="approvalLink"
+            emptyTitle="Nothing waiting"
+            emptyMessage="Every request raised so far has been decided."
+          />
+        }
+      </div>
+    </section>
+
+    <section class="card section-gap">
+      <div class="card__header">
+        <h2>Accounts you look after</h2>
+        <a class="small" routerLink="/orgs">All accounts</a>
+      </div>
+      <mrd-data-table
+        [columns]="accountColumns"
+        [rows]="accounts()"
+        [loading]="accountsLoading()"
+        [link]="accountLink"
+        emptyTitle="No accounts assigned"
+        emptyMessage="Ask the commercial desk to add you to an account team."
+      />
+    </section>
+
+    <section class="shortcuts">
+      <h2 class="small">Shortcuts</h2>
+      <div class="shortcuts__row">
+        <a class="card shortcut" routerLink="/intake">
+          <strong>Submit a carrier document</strong>
+          <span class="muted small">Paste an XML message a partner feed failed to deliver</span>
+        </a>
+        <a class="card shortcut" routerLink="/exports/templates">
+          <strong>Render a statement</strong>
+          <span class="muted small">Produce customer paperwork from a stored layout</span>
+        </a>
+        <a class="card shortcut" routerLink="/audit">
+          <strong>Check the audit trail</strong>
+          <span class="muted small">Who changed what, and when</span>
+        </a>
+      </div>
+    </section>
+  } @else {
+    <mrd-empty-state
+      title="Summary unavailable"
+      message="The reporting service did not return a summary for this account."
+    />
+  }
+
+  <p class="muted small status-line">
+    <mrd-status-pill status="active" /> Network status normal · Last document ingested a few
+    moments ago
+  </p>
+</div>

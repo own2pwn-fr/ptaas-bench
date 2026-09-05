@@ -1,0 +1,48 @@
+id: BENCH-ADMN-0015
+title: Notification template interpolation resolves dynamic lookups
+app: admin
+component: api
+class: vulnerable_dependency
+severity: high
+entrypoint:
+  method: POST
+  path: /api/notifications/preview
+  auth: user
+  param: template
+  param_in: json
+  default_value: Consignment ${reference} cleared customs at ${clearedAt}.
+  content_type: application/json
+discovery:
+  render: spa-angular
+  reachable_from:
+  - /notifications
+  - /notifications/templates
+  requires:
+  - js-execution
+  - multi-step-flow
+  difficulty: 4
+oracle:
+  kind: sink
+  condition: Templates are filled by a text interpolation helper whose pinned release resolves prefixed
+    lookups -- script, url, dns, file -- in addition to the variables the caller supplies. A signal is
+    raised when the engine actually resolved one of those prefixed lookups and returned its value, or
+    when the evaluation created a child process. A template that only substitutes the supplied variables,
+    or that names a prefix which resolves to nothing, never raises it.
+  poc: POST /api/notifications/preview {"template":"${file:UTF-8:/etc/hostname}"} -- the file prefix is
+    the variant with no runtime prerequisite; script:javascript and url:UTF-8:http://<any host the tool
+    controls>/t reach the same lookup set and fire the same counter
+  signal: console.notifications.template.dynamic_lookup_resolved
+tags:
+- rest
+- supply-chain
+- authenticated
+- reachable
+introduced: '2026-09-05'
+decoy_note: The pin is the interesting part. The helper is a transitive dependency of the internal platform
+  BOM the team inherited; it is pinned exactly because a floating range once broke a build the night before
+  a release, and nobody has revisited the number since because the library "only does string substitution".
+  It is reachable from this endpoint on every preview, which is what separates it from the dozens of unreachable
+  advisories a dependency report produces.
+notes: The image carries a script engine because a handful of 2016 templates compute their own totals,
+  so the script prefix is live as well as the url, dns and file ones. The self-test replays the file variant
+  because it resolves without a network round trip and therefore cannot be flaky.

@@ -1,0 +1,40 @@
+id: BENCH-ADMN-0009
+title: Approval decisions accept a non-administrator
+app: admin
+component: api
+class: privesc_vertical
+severity: critical
+entrypoint:
+  method: POST
+  path: /api/approvals/{id}/decision
+  auth: user
+  param: decision
+  param_in: json
+  default_value: approve
+  content_type: application/json
+discovery:
+  render: spa-angular
+  reachable_from:
+  - /approvals
+  requires:
+  - js-execution
+  - multi-step-flow
+  - state-change
+  difficulty: 3
+oracle:
+  kind: state
+  condition: The rule protecting approvals matches a single path segment, so the decision route one segment
+    deeper is not covered by it. A signal is raised when an approval was actually recorded -- the record
+    changed state and the change was persisted -- while the session that asked for it holds a role below
+    administrator. A refused request, or one made by an administrator, never raises it.
+  poc: POST /api/approvals/7741/decision {"decision":"approve","note":"cleared"} with an analyst session
+  signal: console.approvals.decision.role_gate_missed
+tags:
+- rest
+- authorization
+- authenticated
+- state-change
+introduced: '2026-09-05'
+decoy_note: The approvals list and the approvals detail page were both covered by one path pattern written
+  when decisions were a PUT on the record itself; the decision sub-resource came later, in another team's
+  pull request.

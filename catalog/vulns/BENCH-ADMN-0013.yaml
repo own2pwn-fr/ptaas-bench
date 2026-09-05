@@ -1,0 +1,40 @@
+id: BENCH-ADMN-0013
+title: Session token verified with the public key as an HMAC secret
+app: admin
+component: api
+class: jwt_confusion
+severity: critical
+entrypoint:
+  method: GET
+  path: /api/session/context
+  auth: none
+  param: authorization
+  param_in: header
+  default_value: Bearer <token issued by /api/auth/login>
+discovery:
+  render: spa-angular
+  reachable_from:
+  - /
+  requires:
+  - js-execution
+  - custom-header
+  difficulty: 4
+oracle:
+  kind: sink
+  condition: 'Verification picks its key from the token''s own algorithm header: an asymmetric algorithm
+    verifies against the public key, a symmetric one uses the same PEM bytes as a shared secret. The public
+    key is published at /api/auth/keys. A signal is raised when a request was actually admitted -- served
+    as an authenticated principal -- on a token whose header names a symmetric algorithm, which the issuer
+    never produces. Presenting such a token and being refused never raises it.'
+  poc: GET /api/session/context with an HS256 token whose subject is 4001, signed with the PEM bytes served
+    at /api/auth/keys
+  signal: console.session.token_algorithm_downgraded
+tags:
+- rest
+- jwt
+- auth
+- unauthenticated
+introduced: '2026-09-05'
+decoy_note: The service moved from a shared secret to a key pair and kept both branches of the verifier
+  so that tokens issued before the cutover would keep working for their remaining hour of life. The branch
+  outlived the hour.

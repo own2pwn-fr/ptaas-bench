@@ -1,0 +1,39 @@
+id: BENCH-ADMN-0001
+title: Time-based blind SQL injection in the ledger report window filter
+app: admin
+component: api
+class: sqli_blind_time
+severity: critical
+entrypoint:
+  method: GET
+  path: /api/reports/ledger
+  auth: user
+  param: window
+  param_in: query
+  default_value: last-30-days
+discovery:
+  render: spa-angular
+  reachable_from:
+  - /reports
+  - /reports/ledger
+  requires:
+  - js-execution
+  difficulty: 3
+oracle:
+  kind: timing
+  condition: The reporting service pastes the window filter into the WHERE fragment of the ledger statement
+    instead of binding it. A signal is raised when the statement the driver actually sent to the server
+    carried SQL structure introduced by this parameter AND the server spent more than four seconds executing
+    that single statement, which means an injected sleep really ran. A payload that is echoed back, that
+    fails to parse, or that returns promptly never raises it.
+  poc: GET /api/reports/ledger?window=last-30-days' AND (SELECT SLEEP(6)) AND 'a'='a
+  signal: console.reporting.ledger.statement_stall
+tags:
+- rest
+- mysql
+- authenticated
+- blind
+introduced: '2026-09-05'
+decoy_note: The window filter started life as a fixed enum and grew a free-text form when finance asked
+  for arbitrary date ranges two days before quarter end. The bound parameters around it are still bound;
+  only the fragment somebody added in a hurry is not.

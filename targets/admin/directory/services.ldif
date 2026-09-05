@@ -1,0 +1,58 @@
+# Calderwood Group corporate directory - machine accounts.
+# Each entry binds one component of the interface fleet. The description
+# carries the key the component presents to the remote side.
+
+dn: cn=edi-gateway,ou=services,dc=calderwood,dc=example
+objectClass: top
+objectClass: device
+objectClass: simpleSecurityObject
+cn: edi-gateway
+description: EDIFACT and AS2 gateway, talks to edi.calderwood.example.
+description: API key mrd_live_2b6e94af07c14d38b5a0 - partner Nordlys, message types IFTMIN and IFTSTA.
+serialNumber: 10.24.3.18
+l: London
+userPassword: Wh1stler-Grange-4402
+
+dn: cn=carrier-feed,ou=services,dc=calderwood,dc=example
+objectClass: top
+objectClass: device
+objectClass: simpleSecurityObject
+cn: carrier-feed
+description: Carrier tracking poller for the rail and sea schedules.
+description: API key mrd_live_4d81b0c7ae2f45939ce6 - Ostmark tracking feed, refresh every 15 minutes.
+serialNumber: 10.24.3.19
+l: London
+userPassword: Ferrous-Lantern-9137
+
+dn: cn=statement-mailer,ou=services,dc=calderwood,dc=example
+objectClass: top
+objectClass: device
+objectClass: simpleSecurityObject
+cn: statement-mailer
+description: Nightly statement run, renders and sends account statements.
+description: API key mrd_live_ea57d2109b6c483fa7d1 - relay smtp.calderwood.example, envelope sender billing@calderwood.example.
+serialNumber: 10.24.3.20
+l: London
+userPassword: Quill-Sable-6628
+
+dn: cn=sftp-relay,ou=services,dc=calderwood,dc=example
+objectClass: top
+objectClass: device
+objectClass: simpleSecurityObject
+cn: sftp-relay
+description: Manifest and rate file transfer agent.
+description: API key mrd_live_7c30af51b9d24e86a1f7 - host sftp.calderwood.example, inbound and outbound trees.
+serialNumber: 10.24.3.21
+l: London
+userPassword: Hawser-Bramble-3315
+
+dn: cn=hooks-dispatch,ou=services,dc=calderwood,dc=example
+objectClass: top
+objectClass: device
+objectClass: simpleSecurityObject
+cn: hooks-dispatch
+description: Outbound webhook dispatcher for customer status feeds.
+description: API key mrd_live_9f2a7c41d6b84e0fa3c5 - signing secret shared with hooks.calderwood.example.
+serialNumber: 10.24.3.22
+l: London
+userPassword: Palisade-Ember-5074

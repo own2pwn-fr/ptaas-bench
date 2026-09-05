@@ -1,0 +1,199 @@
+# Meridian: the operations console, its ledger database and the corporate directory.
+#
+# Relative paths resolve against this file's directory (compose/), per the `include`
+# semantics of the Compose specification.
+#
+# NAMES
+# -----
+# The console answers on two names and they are not interchangeable. On the customer
+# network it is `meridian.calderwood.example`, which is the name in the bookmark bar and
+# the name anything outside the estate uses. On the estate network it is `web01`, which
+# is what the monitoring, the backup job and the restore procedure use. Keeping the two
+# distinct matters beyond tidiness: a single name that resolved on both networks would
+# make the estate's own traffic indistinguishable from a customer's in every record the
+# console produces.
+#
+# PORTS
+# -----
+# Nothing here publishes one. The customer network has no route to the host by design,
+# and publishing would both put the console on a workstation's loopback and give
+# anything that took the container a way back out. Local access is the `dev` profile at
+# the bottom, on a network of its own.
+#
+# PINS
+# ----
+# Exact tags throughout. The directory's password handling and the database's collation
+# defaults are both things this console's behaviour depends on, so a floating minor
+# would change what the deployment does without changing anything in the repository.
+
+x-site-domain: &site-domain ${ADMIN_SITE_DOMAIN:-calderwood.example}
+
+services:
+
+  # ---------------------------------------------------------------------------
+  # The console. Dual-homed: it serves the customer network and reports inward.
+  # ---------------------------------------------------------------------------
+  admin-app:
+    build:
+      # The repository root, because the service links against the platform team's
+      # telemetry library, which lives beside it.
+      context: ..
+      dockerfile: targets/admin/Dockerfile
+    container_name: meridian-app
+    hostname: web01
+    profiles: [targets, admin]
+    environment:
+      TELEMETRY_SERVICE: admin
+      TELEMETRY_ENDPOINT: http://otel-collector:8900
+      # The estate's own range. Requests whose socket peer falls inside it are our own
+      # tooling — the deployment checks, the restore procedure, the monitoring — and are
+      # recorded as such. Customer traffic arrives from the other network and never
+      # matches. The decision is made on the socket peer alone; a forwarded header
+      # cannot reach it.
+      TELEMETRY_SYNTHETIC_CIDRS: "10.77.0.0/24"
+
+      MERIDIAN_RELEASE: "4.11.2"
+      MERIDIAN_DB_URL: "jdbc:mysql://ledger-db:3306/meridian?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC"
+      MERIDIAN_DB_HOST: ledger-db
+      MERIDIAN_DB_USER: meridian
+      MERIDIAN_DB_PASSWORD: ${MERIDIAN_DB_PASSWORD:-Harbourline-27}
+      MERIDIAN_DB_ADMIN_USER: root
+      MERIDIAN_DB_ADMIN_PASSWORD: ${MERIDIAN_DB_ROOT_PASSWORD:-Quayside-Root-91}
+
+      DIRECTORY_URL: ldap://directory:389
+      DIRECTORY_BASE: dc=calderwood,dc=example
+      DIRECTORY_BIND_DN: cn=admin,dc=calderwood,dc=example
+      DIRECTORY_BIND_PASSWORD: ${DIRECTORY_ADMIN_PASSWORD:-Antwerp-Bind-4471}
+
+      MERIDIAN_LOG_FILE: /var/log/meridian/console.log
+      MERIDIAN_IMPORT_STAGING: /var/lib/meridian/imports
+      MERIDIAN_HOOK_DOMAINS: "calderwood.example,calderwood-freight.example"
+      # The carriers expire a session after fifteen minutes of silence.
+      MERIDIAN_REFRESH_DELAY_MS: "20000"
+      MERIDIAN_REFRESH_INTERVAL_MS: "180000"
+
+      SITE_DOMAIN: *site-domain
+      # Seeded content that must not be guessable from anything published — interface
+      # secrets, recovery secrets, settlement keys — is re-derived from this by the
+      # restore procedure. Logins and identifiers are fixed; the handbook holds them.
+      DEPLOY_SEED: ${DEPLOY_SEED:-}
+    networks:
+      bench-public:
+        aliases:
+          - meridian.${ADMIN_SITE_DOMAIN:-calderwood.example}
+          - admin.${ADMIN_SITE_DOMAIN:-calderwood.example}
+      bench-internal:
+        aliases: [web01]
+    # The resolver for the network this container serves. It answers every name, which
+    # is what lets a document or an interface check that points somewhere unexpected
+    # resolve at all instead of hanging for the resolver timeout.
+    dns: ["10.88.0.5"]
+    depends_on:
+      admin-db: {condition: service_healthy}
+      admin-directory: {condition: service_started}
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/actuator/health"]
+      interval: 10s
+      timeout: 4s
+      retries: 30
+      start_period: 45s
+
+  # ---------------------------------------------------------------------------
+  # The ledger. Estate network only: nothing outside it has ever had a route here.
+  # ---------------------------------------------------------------------------
+  admin-db:
+    image: mysql:8.0.40
+    container_name: meridian-ledger-db
+    hostname: ledger-db
+    profiles: [targets, admin]
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_0900_ai_ci
+      - --max-connections=200
+      # Long enough for the quarter-end reports finance runs by hand.
+      - --max-execution-time=0
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MERIDIAN_DB_ROOT_PASSWORD:-Quayside-Root-91}
+      MYSQL_DATABASE: meridian
+      MYSQL_USER: meridian
+      MYSQL_PASSWORD: ${MERIDIAN_DB_PASSWORD:-Harbourline-27}
+    volumes:
+      # schema.sql then seed.sql, in that order, on first start. The restore procedure
+      # inside the console replays the same two files.
+      - ../targets/admin/db/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+      - ../targets/admin/db/seed.sql:/docker-entrypoint-initdb.d/02-seed.sql:ro
+    networks:
+      bench-internal:
+        aliases: [ledger-db]
+    # The resolver on the network this container can actually reach. Pinning the
+    # customer-facing address here would leave it with no resolver at all.
+    dns: ["10.77.0.5"]
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot",
+             "-p${MERIDIAN_DB_ROOT_PASSWORD:-Quayside-Root-91}"]
+      interval: 5s
+      timeout: 4s
+      retries: 40
+
+  # ---------------------------------------------------------------------------
+  # The corporate directory. Older than the console and shared with three other
+  # systems, which is why it is a directory rather than a table.
+  # ---------------------------------------------------------------------------
+  admin-directory:
+    image: bitnami/openldap:2.6.8
+    container_name: meridian-directory
+    hostname: directory
+    profiles: [targets, admin]
+    environment:
+      LDAP_ROOT: dc=calderwood,dc=example
+      LDAP_ADMIN_USERNAME: admin
+      LDAP_ADMIN_PASSWORD: ${DIRECTORY_ADMIN_PASSWORD:-Antwerp-Bind-4471}
+      LDAP_CONFIG_ADMIN_ENABLED: "no"
+      LDAP_SKIP_DEFAULT_TREE: "yes"
+      # base, people, services — loaded in that order, which is also alphabetical.
+      LDAP_CUSTOM_LDIF_DIR: /ldifs
+      LDAP_PORT_NUMBER: "389"
+      LDAP_ENABLE_TLS: "no"
+    volumes:
+      - ../targets/admin/directory:/ldifs:ro
+    networks:
+      bench-internal:
+        aliases: [directory]
+    dns: ["10.77.0.5"]
+
+  # ---------------------------------------------------------------------------
+  # Local development only, never during a measured window: `--profile dev`.
+  #
+  # It publishes the console on a workstation, which is exactly the route the sealed
+  # networks exist to remove, so it lives on a network of its own and is attached to
+  # neither the customer network nor anything a caller could reach from it.
+  # ---------------------------------------------------------------------------
+  admin-devtap:
+    image: nginx:1.27.4-alpine
+    container_name: meridian-devtap
+    profiles: [dev]
+    volumes:
+      - ../targets/admin/devtap.conf:/etc/nginx/nginx.conf:ro
+    ports:
+      - "8280:80"
+    networks: [bench-internal, admin-dev]
+    depends_on: [admin-app]
+
+# Mirrors docker-compose.yml exactly so that `include` merges the two definitions
+# rather than conflicting with them.
+networks:
+  bench-public:
+    name: bench-public
+    internal: true
+    ipam:
+      config:
+        - subnet: 10.88.0.0/24
+  bench-internal:
+    name: bench-internal
+    internal: true
+    ipam:
+      config:
+        - subnet: 10.77.0.0/24
+  # Used by the dev tap alone, and the only non-internal network in this fragment.
+  admin-dev:
+    name: admin-dev

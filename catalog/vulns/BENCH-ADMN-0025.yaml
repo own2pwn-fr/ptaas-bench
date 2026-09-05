@@ -1,0 +1,35 @@
+id: BENCH-ADMN-0025
+title: Sort expression in global search is evaluated
+app: admin
+component: api
+class: el_injection
+severity: critical
+entrypoint:
+  method: GET
+  path: /api/search
+  auth: user
+  param: sort
+  param_in: query
+  default_value: updatedAt desc
+discovery:
+  render: spa-angular
+  reachable_from:
+  - /
+  requires:
+  - js-execution
+  difficulty: 2
+oracle:
+  kind: sink
+  condition: Cross-entity search sorts its merged result list by evaluating the sort clause as an expression
+    against each row, because the rows come from three stores and cannot be sorted by the database. A
+    signal is raised when that evaluation actually resolved a member on a type outside the row model,
+    or created a child process. An ordinary field name, and an expression that fails to parse, never raise
+    it.
+  poc: GET /api/search?q=calderwood&sort=T(java.lang.Runtime).getRuntime().exec('sleep 1')
+  signal: console.search.sort_expression_host_type_reached
+tags:
+- rest
+- authenticated
+introduced: '2026-09-05'
+decoy_note: The global search box is on every screen, so its sort had to work across three different stores;
+  evaluating the clause per row was the smallest change that made one ordering apply to all of them.

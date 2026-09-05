@@ -1,0 +1,39 @@
+id: BENCH-ADMN-0007
+title: Expression evaluation in the routing-rule preview
+app: admin
+component: api
+class: el_injection
+severity: critical
+entrypoint:
+  method: POST
+  path: /api/rules/preview
+  auth: user
+  param: expression
+  param_in: json
+  default_value: shipment.weightKg > 1200
+  content_type: application/json
+discovery:
+  render: spa-angular
+  reachable_from:
+  - /rules
+  - /rules/preview
+  requires:
+  - js-execution
+  - multi-step-flow
+  difficulty: 4
+oracle:
+  kind: sink
+  condition: Routing rules are written as expressions and previewed against a sample consignment by evaluating
+    them directly. A signal is raised when the evaluation actually resolved a member on a type outside
+    the rule model -- a runtime, process, class or system type -- or when it created a child process.
+    An expression that only reads the sample consignment, or that fails to parse, never raises it.
+  poc: POST /api/rules/preview {"expression":"T(java.lang.Runtime).getRuntime().exec('sleep 1')"}
+  signal: console.rules.expression.host_type_reached
+tags:
+- rest
+- json
+- authenticated
+introduced: '2026-09-05'
+decoy_note: Operations wanted to author routing rules without a release, so rules are expressions and
+  the preview button is the only way to check one before saving. The evaluation context was never narrowed
+  because the screen is behind a login.

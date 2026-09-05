@@ -1,0 +1,120 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  telemetry-agent — the platform team's request instrumentation library.
+
+  Two jobs and nothing else: record what each served request carried, and record the
+  counters an application decides are worth raising. Interpretation happens in the
+  collector; this library stays small enough to be read in one sitting and trusted on
+  the hot path.
+
+  Dependency policy: every compile dependency is `provided` and every one beyond the
+  Servlet API is `optional`. The library is dropped into services whose dependency
+  trees are already contentious, so it brings nothing of its own onto their classpath —
+  no JSON library, no HTTP client, no logging facade. JSON is written and read by
+  `internal.telemetry.Json`, and transport is `java.net.http.HttpClient` from the
+  platform. A service that does not use Spring links only against jakarta.servlet.
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <groupId>internal.platform</groupId>
+  <artifactId>telemetry-agent</artifactId>
+  <version>1.0.0</version>
+  <packaging>jar</packaging>
+
+  <name>telemetry-agent</name>
+  <description>Request records, application signals and dependency links for internal services.</description>
+
+  <properties>
+    <maven.compiler.release>21</maven.compiler.release>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+
+    <!-- Aligned with the platform BOM: Spring Framework 6.2.x / Spring Boot 3.4.x,
+         which is Servlet 6.0 (Tomcat 10.1). Exact versions, never ranges. -->
+    <jakarta.servlet.version>6.0.0</jakarta.servlet.version>
+    <spring.version>6.2.7</spring.version>
+    <spring.boot.version>3.4.5</spring.boot.version>
+    <junit.version>5.11.4</junit.version>
+  </properties>
+
+  <dependencies>
+    <dependency>
+      <groupId>jakarta.servlet</groupId>
+      <artifactId>jakarta.servlet-api</artifactId>
+      <version>${jakarta.servlet.version}</version>
+      <scope>provided</scope>
+    </dependency>
+
+    <!-- Optional: only the classes under internal.telemetry.spring touch these, and
+         they are never loaded unless the host application is a Spring MVC service. -->
+    <dependency>
+      <groupId>org.springframework</groupId>
+      <artifactId>spring-web</artifactId>
+      <version>${spring.version}</version>
+      <scope>provided</scope>
+      <optional>true</optional>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework</groupId>
+      <artifactId>spring-webmvc</artifactId>
+      <version>${spring.version}</version>
+      <scope>provided</scope>
+      <optional>true</optional>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework</groupId>
+      <artifactId>spring-context</artifactId>
+      <version>${spring.version}</version>
+      <scope>provided</scope>
+      <optional>true</optional>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-autoconfigure</artifactId>
+      <version>${spring.boot.version}</version>
+      <scope>provided</scope>
+      <optional>true</optional>
+    </dependency>
+
+    <dependency>
+      <groupId>org.junit.jupiter</groupId>
+      <artifactId>junit-jupiter</artifactId>
+      <version>${junit.version}</version>
+      <scope>test</scope>
+    </dependency>
+    <!-- MockHttpServletRequest / MockFilterChain. Test scope only: implementing sixty
+         Servlet API methods by hand in a fixture would test the fixture. -->
+    <dependency>
+      <groupId>org.springframework</groupId>
+      <artifactId>spring-test</artifactId>
+      <version>${spring.version}</version>
+      <scope>test</scope>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <plugins>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-compiler-plugin</artifactId>
+        <version>3.13.0</version>
+        <configuration>
+          <release>21</release>
+          <compilerArgs><arg>-Xlint:all</arg></compilerArgs>
+        </configuration>
+      </plugin>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-surefire-plugin</artifactId>
+        <version>3.5.2</version>
+      </plugin>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-jar-plugin</artifactId>
+        <version>3.4.2</version>
+      </plugin>
+    </plugins>
+  </build>
+</project>

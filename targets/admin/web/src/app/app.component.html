@@ -1,0 +1,117 @@
+@if (chromeVisible()) {
+  <header class="topbar">
+    <button
+      type="button"
+      class="topbar__toggle"
+      aria-label="Toggle navigation"
+      (click)="toggleNav()"
+    >
+      ☰
+    </button>
+
+    <a class="brand" routerLink="/">
+      <span class="brand__mark" aria-hidden="true">◆</span>
+      <span class="brand__name">Meridian</span>
+      <span class="brand__org">Calderwood Group</span>
+    </a>
+
+    <form class="quick-search" (ngSubmit)="submitSearch()">
+      <label class="visually-hidden" for="quick-search">Search Meridian</label>
+      <input
+        id="quick-search"
+        type="search"
+        placeholder="Search accounts, consignments, invoices…"
+        autocomplete="off"
+        [formControl]="quickSearch"
+      />
+    </form>
+
+    <div class="spacer"></div>
+
+    @if (canSwitchAccount()) {
+      <!-- Support desk: which customer account the summary report is compiled for. -->
+      <label class="desk">
+        <span class="desk__label">Desk</span>
+        <select
+          [value]="desk.selectedAccountId() ?? ''"
+          (change)="onDeskChange($any($event.target).value)"
+          aria-label="Account handled at the support desk"
+        >
+          <option value="">{{ session.accountName() || 'My account' }}</option>
+          @for (account of desk.accounts(); track account.id) {
+            <option [value]="account.id">{{ account.name }}</option>
+          }
+        </select>
+      </label>
+    }
+
+    <a class="topbar__badge" routerLink="/approvals" title="Approvals waiting">
+      <span aria-hidden="true">✓</span>
+      <span class="topbar__count">{{ operations.openApprovals() }}</span>
+    </a>
+
+    <div class="user">
+      <button type="button" class="user__button" (click)="toggleUserMenu()">
+        <span class="user__initials" aria-hidden="true">{{ session.initials() }}</span>
+        <span class="user__name">{{ session.displayName() }}</span>
+        <span class="user__role">{{ session.context().role }}</span>
+      </button>
+      @if (userMenuOpen()) {
+        <div class="user__menu">
+          <a routerLink="/settings/profile" class="user__menu-item">My profile</a>
+          <a routerLink="/settings/workspace" class="user__menu-item">Workspace</a>
+          <a routerLink="/audit" class="user__menu-item">My recent activity</a>
+          <button type="button" class="user__menu-item" (click)="signOut()">Sign out</button>
+        </div>
+      }
+    </div>
+  </header>
+
+  <mrd-notice-banner />
+}
+
+<div class="layout" [class.layout--bare]="!chromeVisible()">
+  @if (chromeVisible() && navOpen()) {
+    <nav class="sidenav" aria-label="Main">
+      @for (group of groups(); track group.name) {
+        <div class="sidenav__group">
+          <h2 class="sidenav__heading">{{ group.name }}</h2>
+          <ul>
+            @for (item of group.items; track item.link) {
+              <li>
+                <a
+                  [routerLink]="item.link"
+                  routerLinkActive="active"
+                  [routerLinkActiveOptions]="{ exact: item.link === '/' }"
+                  [title]="item.hint"
+                >
+                  {{ item.label }}
+                </a>
+              </li>
+            }
+          </ul>
+        </div>
+      }
+      <div class="sidenav__foot small muted">
+        <p>Signed in as {{ session.displayName() }}</p>
+        <p>{{ session.accountName() }}</p>
+      </div>
+    </nav>
+  }
+
+  <main class="content" id="content" tabindex="-1">
+    <router-outlet />
+  </main>
+</div>
+
+@if (chromeVisible()) {
+  <footer class="footer">
+    <span>Meridian {{ year }} · Calderwood Group Freight &amp; Logistics AB</span>
+    <span class="spacer"></span>
+    <a href="/.well-known/security.txt">Security contact</a>
+    <a routerLink="/notices">Service notices</a>
+    <span class="muted">Service desk: extension 4120</span>
+  </footer>
+}
+
+<mrd-cookie-consent />

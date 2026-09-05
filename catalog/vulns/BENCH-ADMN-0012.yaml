@@ -1,0 +1,38 @@
+id: BENCH-ADMN-0012
+title: Installer provisioning account still enabled in production
+app: admin
+component: api
+class: default_creds
+severity: critical
+entrypoint:
+  method: POST
+  path: /api/auth/login
+  auth: none
+  param: email
+  param_in: json
+  default_value: h.lindqvist@calderwood.example
+  content_type: application/json
+discovery:
+  render: spa-angular
+  reachable_from:
+  - /
+  - /sign-in
+  requires:
+  - js-execution
+  - form-submit
+  difficulty: 1
+oracle:
+  kind: state
+  condition: A signal is raised when a session is actually issued for the provisioning account the installer
+    creates, using the password the installer sets. Failed attempts, and sign-ins by any of the seeded
+    staff accounts, never raise it.
+  poc: POST /api/auth/login {"email":"setup@meridian.local","password":"meridian"}
+  signal: console.session.factory_account_signed_in
+tags:
+- rest
+- auth
+- unauthenticated
+introduced: '2026-09-05'
+decoy_note: The provisioning account exists so the first administrator can be created before there is
+  anyone to create them; the installation guide says to disable it afterwards, and the guide is a PDF
+  nobody opened after the migration weekend.

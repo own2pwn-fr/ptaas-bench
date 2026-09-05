@@ -1,0 +1,64 @@
+<div class="auth">
+  <div class="auth__panel card">
+    <div class="auth__brand">
+      <span class="auth__mark" aria-hidden="true">◆</span>
+      <div>
+        <h1>Account recovery</h1>
+        <p class="muted small">Meridian · Calderwood Group</p>
+      </div>
+    </div>
+
+    @if (sent()) {
+      <div class="auth__done">
+        <h2>Check your inbox</h2>
+        <p class="small">
+          If that reference belongs to an active account, a recovery link is on its way to
+          the address held for it. The link is valid for 30 minutes.
+        </p>
+        <p class="small muted">
+          Nothing arrived? The service desk can confirm which address we hold — extension
+          4120, Monday to Friday, 07:00–19:00 CET.
+        </p>
+        <a class="btn" routerLink="/sign-in">Back to sign in</a>
+      </div>
+    } @else {
+      <mrd-error-banner
+        [error]="failure()"
+        heading="Recovery request failed"
+        [retryable]="false"
+        (dismiss)="failure.set(null)"
+      />
+
+      <p class="small">
+        Enter your work email address or your staff number and we will send a recovery link
+        to the address on file.
+      </p>
+
+      <form [formGroup]="form" (ngSubmit)="submit()" novalidate>
+        <div class="field">
+          <label for="reference">Email address or staff number</label>
+          <input
+            id="reference"
+            type="text"
+            autocomplete="username"
+            formControlName="reference"
+            placeholder="first.last@calderwood.example or 40118"
+          />
+          <mrd-field-error
+            [control]="form.controls.reference"
+            label="Reference"
+            [submitted]="submitted()"
+          />
+        </div>
+
+        <button type="submit" class="btn btn--primary auth__submit" [disabled]="busy()">
+          {{ busy() ? 'Sending…' : 'Send recovery link' }}
+        </button>
+      </form>
+
+      <div class="auth__links small">
+        <a routerLink="/sign-in">Back to sign in</a>
+      </div>
+    }
+  </div>
+</div>

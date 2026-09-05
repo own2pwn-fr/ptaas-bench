@@ -1,0 +1,71 @@
+# Calderwood Group corporate directory - structural entries.
+# Load order: base.ldif, then people.ldif, then services.ldif.
+
+dn: dc=calderwood,dc=example
+objectClass: top
+objectClass: dcObject
+objectClass: organization
+dc: calderwood
+o: Calderwood Group
+description: Freight forwarding and logistics, registered in London and Antwerp.
+
+dn: ou=people,dc=calderwood,dc=example
+objectClass: top
+objectClass: organizationalUnit
+ou: people
+description: Employees and contractors with a console account.
+
+dn: ou=groups,dc=calderwood,dc=example
+objectClass: top
+objectClass: organizationalUnit
+ou: groups
+description: Console entitlement groups consumed by Meridian.
+
+dn: ou=services,dc=calderwood,dc=example
+objectClass: top
+objectClass: organizationalUnit
+ou: services
+description: Machine accounts used by the interface fleet.
+
+dn: cn=viewers,ou=groups,dc=calderwood,dc=example
+objectClass: top
+objectClass: groupOfNames
+cn: viewers
+description: Read only access to the operations console.
+member: uid=r.achterberg,ou=people,dc=calderwood,dc=example
+member: uid=a.brennan,ou=people,dc=calderwood,dc=example
+member: uid=e.lefevre,ou=people,dc=calderwood,dc=example
+member: uid=n.corrigan,ou=people,dc=calderwood,dc=example
+member: uid=l.novotny,ou=people,dc=calderwood,dc=example
+member: uid=t.wisniewski,ou=people,dc=calderwood,dc=example
+member: uid=r.dahlberg,ou=people,dc=calderwood,dc=example
+member: uid=m.kowalczyk,ou=people,dc=calderwood,dc=example
+member: uid=c.wiedemann,ou=people,dc=calderwood,dc=example
+member: uid=p.rautio,ou=people,dc=calderwood,dc=example
+
+dn: cn=analysts,ou=groups,dc=calderwood,dc=example
+objectClass: top
+objectClass: groupOfNames
+cn: analysts
+description: Operational edit rights on movements and billing.
+member: uid=h.lindqvist,ou=people,dc=calderwood,dc=example
+member: uid=m.duarte,ou=people,dc=calderwood,dc=example
+member: uid=s.vogelaar,ou=people,dc=calderwood,dc=example
+member: uid=p.mancini,ou=people,dc=calderwood,dc=example
+member: uid=j.weisser,ou=people,dc=calderwood,dc=example
+member: uid=m.solana,ou=people,dc=calderwood,dc=example
+member: uid=f.ostergaard,ou=people,dc=calderwood,dc=example
+member: uid=b.halasz,ou=people,dc=calderwood,dc=example
+member: uid=i.carvalho,ou=people,dc=calderwood,dc=example
+member: uid=s.poulain,ou=people,dc=calderwood,dc=example
+member: uid=e.brodie,ou=people,dc=calderwood,dc=example
+
+dn: cn=administrators,ou=groups,dc=calderwood,dc=example
+objectClass: top
+objectClass: groupOfNames
+cn: administrators
+description: Full administrative rights, including approvals.
+member: uid=setup,ou=people,dc=calderwood,dc=example
+member: uid=d.wolstenholme,ou=people,dc=calderwood,dc=example
+member: uid=k.bauer,ou=people,dc=calderwood,dc=example
+member: uid=g.lindholm,ou=people,dc=calderwood,dc=example

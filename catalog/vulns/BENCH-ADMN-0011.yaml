@@ -1,0 +1,41 @@
+id: BENCH-ADMN-0011
+title: Webhook probe allowlist matches destinations by suffix
+app: admin
+component: api
+class: ssrf_filter_bypass
+severity: critical
+entrypoint:
+  method: POST
+  path: /api/integrations/webhooks/probe
+  auth: admin
+  param: endpoint
+  param_in: json
+  default_value: https://hooks.calderwood.example/inbound
+  content_type: application/json
+discovery:
+  render: spa-angular
+  reachable_from:
+  - /integrations
+  - /integrations/webhooks
+  requires:
+  - js-execution
+  - multi-step-flow
+  difficulty: 4
+oracle:
+  kind: oob
+  condition: The probe checks the destination host with a suffix comparison and no boundary, so a name
+    that merely ends with the allowlisted string passes. A signal is raised when the probe actually issued
+    its request to a host that is neither an allowlisted domain nor a proper subdomain of one. The destination
+    is declared to the egress registry immediately before the fetch, so a callback to a host the tool
+    controls is attributed to this request even when the response body is discarded. A destination the
+    check refuses is never fetched and never raises it.
+  poc: POST /api/integrations/webhooks/probe {"endpoint":"http://<any host the tool controls>-calderwood.example/x"}
+  signal: console.integrations.probe.offlist_host_fetched
+tags:
+- rest
+- oob
+- authenticated
+- admin
+introduced: '2026-09-05'
+decoy_note: The allowlist was added after an incident, written as endsWith against the corporate domain,
+  and reviewed by people who were checking that legitimate hooks still worked.

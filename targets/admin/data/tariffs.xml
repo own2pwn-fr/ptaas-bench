@@ -1,0 +1,140 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Carrier tariff document for the Meridian rating engine.
+  Issued by the Calderwood Group procurement desk, one file per quarter.
+  The rate bands are keyed by the code quoted on the carrier rate schedule; the
+  partner section below carries the settlement details the carriers return to us
+  in the same file, so that the nightly settlement run has everything it needs.
+-->
+<tariffs version="2026.3" issuedOn="2026-06-24" issuedBy="procurement@calderwood.example">
+
+  <bands>
+
+    <band code="EU-STD-1">
+      <name>European standard groupage, zone 1</name>
+      <mode>road</mode>
+      <validFrom>2026-07-01</validFrom>
+      <validTo>2026-09-30</validTo>
+      <rate weightFrom="0" weightTo="100" perKg="1.94" currency="EUR"/>
+      <rate weightFrom="100" weightTo="500" perKg="1.42" currency="EUR"/>
+      <rate weightFrom="500" weightTo="2500" perKg="0.96" currency="EUR"/>
+      <rate weightFrom="2500" weightTo="10000" perKg="0.71" currency="EUR"/>
+      <rate weightFrom="10000" weightTo="24000" perKg="0.58" currency="EUR"/>
+    </band>
+
+    <band code="EU-STD-2">
+      <name>European standard groupage, zone 2</name>
+      <mode>road</mode>
+      <validFrom>2026-07-01</validFrom>
+      <validTo>2026-09-30</validTo>
+      <rate weightFrom="0" weightTo="100" perKg="2.28" currency="EUR"/>
+      <rate weightFrom="100" weightTo="500" perKg="1.71" currency="EUR"/>
+      <rate weightFrom="500" weightTo="2500" perKg="1.14" currency="EUR"/>
+      <rate weightFrom="2500" weightTo="10000" perKg="0.85" currency="EUR"/>
+      <rate weightFrom="10000" weightTo="24000" perKg="0.69" currency="EUR"/>
+    </band>
+
+    <band code="EU-EXP-1">
+      <name>European express, next day before noon</name>
+      <mode>road</mode>
+      <validFrom>2026-07-01</validFrom>
+      <validTo>2026-09-30</validTo>
+      <rate weightFrom="0" weightTo="50" perKg="4.65" currency="EUR"/>
+      <rate weightFrom="50" weightTo="250" perKg="3.40" currency="EUR"/>
+      <rate weightFrom="250" weightTo="1000" perKg="2.55" currency="EUR"/>
+      <rate weightFrom="1000" weightTo="5000" perKg="1.88" currency="EUR"/>
+    </band>
+
+    <band code="UK-DOM-2">
+      <name>United Kingdom domestic, mainland pallet network</name>
+      <mode>road</mode>
+      <validFrom>2026-07-01</validFrom>
+      <validTo>2026-12-31</validTo>
+      <rate weightFrom="0" weightTo="250" perKg="1.35" currency="GBP"/>
+      <rate weightFrom="250" weightTo="1000" perKg="0.92" currency="GBP"/>
+      <rate weightFrom="1000" weightTo="4000" perKg="0.64" currency="GBP"/>
+      <rate weightFrom="4000" weightTo="26000" perKg="0.47" currency="GBP"/>
+    </band>
+
+    <band code="INTL-AIR-3">
+      <name>Intercontinental air freight, consolidated</name>
+      <mode>air</mode>
+      <validFrom>2026-07-01</validFrom>
+      <validTo>2026-09-30</validTo>
+      <rate weightFrom="0" weightTo="45" perKg="7.90" currency="EUR"/>
+      <rate weightFrom="45" weightTo="100" perKg="6.35" currency="EUR"/>
+      <rate weightFrom="100" weightTo="300" perKg="5.10" currency="EUR"/>
+      <rate weightFrom="300" weightTo="1000" perKg="4.28" currency="EUR"/>
+      <rate weightFrom="1000" weightTo="5000" perKg="3.61" currency="EUR"/>
+    </band>
+
+    <band code="INTL-SEA-1">
+      <name>Intercontinental sea freight, less than container load</name>
+      <mode>sea</mode>
+      <validFrom>2026-07-01</validFrom>
+      <validTo>2026-12-31</validTo>
+      <rate weightFrom="0" weightTo="1000" perKg="0.41" currency="USD"/>
+      <rate weightFrom="1000" weightTo="5000" perKg="0.33" currency="USD"/>
+      <rate weightFrom="5000" weightTo="20000" perKg="0.27" currency="USD"/>
+      <rate weightFrom="20000" weightTo="60000" perKg="0.22" currency="USD"/>
+    </band>
+
+  </bands>
+
+  <partners>
+
+    <partner code="OSTMARK">
+      <name>Ostmark Rail Cargo GmbH</name>
+      <contact>settlement@ostmark-rail.example</contact>
+      <bands>EU-STD-1 EU-STD-2</bands>
+      <settlementAccount>DE44 5001 0517 5407 3249 31</settlementAccount>
+      <settlementKey>mrd_stl_ostmark_4d81b0c7ae2f45939ce6</settlementKey>
+      <validFrom>2026-01-01</validFrom>
+    </partner>
+
+    <partner code="HALVARD">
+      <name>Halvard Terminals SA</name>
+      <contact>settlement@halvard-terminals.example</contact>
+      <bands>EU-STD-1 INTL-SEA-1</bands>
+      <settlementAccount>BE68 5390 0754 7034</settlementAccount>
+      <settlementKey>mrd_stl_halvard_7c30af51b9d24e86a1f7</settlementKey>
+      <validFrom>2025-10-01</validFrom>
+    </partner>
+
+    <partner code="NORDLYS">
+      <name>Nordlys Cold Chain AS</name>
+      <contact>settlement@nordlys-coldchain.example</contact>
+      <bands>EU-EXP-1 EU-STD-2</bands>
+      <settlementAccount>NO93 8601 1117 947</settlementAccount>
+      <settlementKey>mrd_stl_nordlys_2b6e94af07c14d38b5a0</settlementKey>
+      <validFrom>2026-04-01</validFrom>
+    </partner>
+
+    <partner code="SABLEBAY">
+      <name>Sable Bay Shipping Ltd</name>
+      <contact>settlement@sablebayshipping.example</contact>
+      <bands>INTL-SEA-1</bands>
+      <settlementAccount>IE29 AIBK 9311 5212 3456 78</settlementAccount>
+      <settlementKey>mrd_stl_sablebay_05fbc38a71e94d60c2a8</settlementKey>
+      <validFrom>2026-02-01</validFrom>
+    </partner>
+
+    <partner code="PERRAULT">
+      <name>Perrault Logistique SAS</name>
+      <contact>settlement@perrault-logistique.example</contact>
+      <bands>EU-STD-1 EU-EXP-1 UK-DOM-2</bands>
+      <settlementAccount>FR14 2004 1010 0505 0001 3M02 606</settlementAccount>
+      <settlementKey>mrd_stl_perrault_18c4b7e0a95d436e82fb</settlementKey>
+      <validFrom>2025-07-01</validFrom>
+    </partner>
+
+  </partners>
+
+  <surcharges>
+    <surcharge code="FUEL" description="Fuel adjustment, revised monthly" percent="8.40"/>
+    <surcharge code="TOLL" description="Road toll recovery, per movement" amount="14.50" currency="EUR"/>
+    <surcharge code="SEC" description="Security screening, air freight only" perKg="0.19" currency="EUR"/>
+    <surcharge code="WAIT" description="Waiting time beyond one hour, per hour" amount="46.00" currency="EUR"/>
+  </surcharges>
+
+</tariffs>

@@ -1,0 +1,200 @@
+#!/bin/sh
+# Put the console back to its seeded state.
+#
+# Run it before a measurement window and again afterwards: the digest printed on the
+# last line must be identical both times. It is a function of the seeded state alone,
+# so if it moves, something is still holding state from the previous window and the two
+# windows are not comparable.
+#
+# Idempotent by construction — every step drops and rebuilds rather than patching — and
+# non-zero on the first failure, because a half-restored console is worse than an
+# obviously broken one.
+#
+# WHAT IS REBUILT
+#   * the ledger database, from schema.sql and seed.sql, with fixed ids and fixed
+#     timestamps: nothing here calls NOW(), RAND() or UUID(), so two rebuilds are
+#     byte-identical;
+#   * the corporate directory, by removing the three containers and loading the three
+#     LDIFs again;
+#   * the import staging area, and anything an extraction put outside it;
+#   * the application log.
+#
+# WHAT MOVES WITH DEPLOY_SEED
+#   Logins, staff ids and account ids are fixed: the operations handbook holds them and
+#   the reporting checks compare against them. The values that must not be guessable
+#   from anything published — the interface secrets, the per-person recovery secrets and
+#   the settlement keys in the tariff file — are re-derived from DEPLOY_SEED here, so
+#   two deployments of this image share none of them. With DEPLOY_SEED unset the file's
+#   own values are kept, which is what a workstation wants.
+set -eu
+
+DB_HOST="${MERIDIAN_DB_HOST:-ledger-db}"
+DB_PORT="${MERIDIAN_DB_PORT:-3306}"
+DB_NAME="${MERIDIAN_DB_NAME:-meridian}"
+DB_USER="${MERIDIAN_DB_ADMIN_USER:-root}"
+DB_PASSWORD="${MERIDIAN_DB_ADMIN_PASSWORD:-${MERIDIAN_DB_PASSWORD:-meridian}}"
+
+DIR_URL="${DIRECTORY_URL:-ldap://directory:389}"
+DIR_BASE="${DIRECTORY_BASE:-dc=calderwood,dc=example}"
+DIR_BIND_DN="${DIRECTORY_BIND_DN:-cn=admin,dc=calderwood,dc=example}"
+DIR_BIND_PASSWORD="${DIRECTORY_BIND_PASSWORD:-}"
+
+HOME_DIR="${MERIDIAN_HOME:-/opt/meridian}"
+DATA_DIR="${MERIDIAN_DATA:-$HOME_DIR/data}"
+STAGING="${MERIDIAN_IMPORT_STAGING:-/var/lib/meridian/imports}"
+LOG_FILE="${MERIDIAN_LOG_FILE:-/var/log/meridian/console.log}"
+SEED="${DEPLOY_SEED:-}"
+
+fail() {
+    echo "state-reset: $1" >&2
+    exit 1
+}
+
+mysql_do() {
+    mysql --protocol=TCP -h "$DB_HOST" -P "$DB_PORT" -u "$DB_USER" \
+        --password="$DB_PASSWORD" --default-character-set=utf8mb4 "$@"
+}
+
+# Deterministic derivation. Same seed and same label always give the same value, and a
+# different seed gives an unrelated one.
+derive() {
+    if [ -z "$SEED" ]; then
+        printf ''
+        return
+    fi
+    printf '%s' "$1" | openssl dgst -sha256 -hmac "$SEED" -r 2>/dev/null | cut -d' ' -f1
+}
+
+# ---------------------------------------------------------------- ledger database
+
+command -v mysql >/dev/null 2>&1 || fail "the database client is not on this image"
+
+for attempt in 1 2 3 4 5 6 7 8 9 10; do
+    if mysql_do -e 'SELECT 1' >/dev/null 2>&1; then
+        break
+    fi
+    [ "$attempt" = 10 ] && fail "the ledger database at $DB_HOST:$DB_PORT did not answer"
+    sleep 2
+done
+
+[ -r "$HOME_DIR/db/schema.sql" ] || fail "schema.sql is missing from $HOME_DIR/db"
+[ -r "$HOME_DIR/db/seed.sql" ] || fail "seed.sql is missing from $HOME_DIR/db"
+
+mysql_do < "$HOME_DIR/db/schema.sql" || fail "the schema could not be rebuilt"
+mysql_do "$DB_NAME" < "$HOME_DIR/db/seed.sql" || fail "the seed data could not be loaded"
+
+# ------------------------------------------------------- values that follow the seed
+
+if [ -n "$SEED" ]; then
+    # Interface secrets.
+    mysql_do -N -B "$DB_NAME" -e 'SELECT id FROM integrations ORDER BY id' | while read -r id; do
+        value="mrd_live_$(derive "integration:$id" | cut -c1-20)"
+        mysql_do "$DB_NAME" -e \
+            "UPDATE integrations SET secret = '$value' WHERE id = $id" \
+            || fail "an interface secret could not be re-derived"
+    done
+
+    # Per-person recovery secrets.
+    mysql_do -N -B "$DB_NAME" -e 'SELECT id FROM staff ORDER BY id' | while read -r id; do
+        value="$(derive "recovery:$id" | cut -c1-32)"
+        mysql_do "$DB_NAME" -e \
+            "UPDATE staff SET recovery_secret = '$value' WHERE id = $id" \
+            || fail "a recovery secret could not be re-derived"
+    done
+fi
+
+# ------------------------------------------------------------------- tariff file
+
+if [ -r "$DATA_DIR/tariffs.xml.seeded" ]; then
+    cp "$DATA_DIR/tariffs.xml.seeded" "$DATA_DIR/tariffs.xml"
+    if [ -n "$SEED" ]; then
+        # One settlement key per partner, keyed on the partner's own name so the
+        # substitution is stable across rebuilds.
+        grep -o '<settlementKey>[^<]*</settlementKey>' "$DATA_DIR/tariffs.xml" \
+            | sed 's/<settlementKey>//; s|</settlementKey>||' \
+            | while read -r current; do
+                label="$(printf '%s' "$current" | sed 's/^mrd_stl_//; s/_.*$//')"
+                value="mrd_stl_${label}_$(derive "settlement:$label" | cut -c1-20)"
+                sed -i "s|$current|$value|g" "$DATA_DIR/tariffs.xml"
+            done
+    fi
+fi
+
+# --------------------------------------------------------------- corporate directory
+
+if command -v ldapadd >/dev/null 2>&1; then
+    for attempt in 1 2 3 4 5 6 7 8 9 10; do
+        if ldapsearch -x -H "$DIR_URL" -D "$DIR_BIND_DN" -w "$DIR_BIND_PASSWORD" \
+            -b "$DIR_BASE" -s base '(objectClass=*)' dn >/dev/null 2>&1; then
+            break
+        fi
+        [ "$attempt" = 10 ] && fail "the directory at $DIR_URL did not answer"
+        sleep 2
+    done
+
+    for container in "ou=people,$DIR_BASE" "ou=services,$DIR_BASE" "ou=groups,$DIR_BASE"; do
+        ldapdelete -x -H "$DIR_URL" -D "$DIR_BIND_DN" -w "$DIR_BIND_PASSWORD" \
+            -r "$container" >/dev/null 2>&1 || true
+    done
+
+    for file in base people services; do
+        [ -r "$HOME_DIR/directory/$file.ldif" ] || fail "$file.ldif is missing"
+        ldapadd -x -H "$DIR_URL" -D "$DIR_BIND_DN" -w "$DIR_BIND_PASSWORD" \
+            -c -f "$HOME_DIR/directory/$file.ldif" >/dev/null 2>&1 || true
+    done
+
+    entries="$(ldapsearch -x -LLL -H "$DIR_URL" -D "$DIR_BIND_DN" -w "$DIR_BIND_PASSWORD" \
+        -b "$DIR_BASE" '(objectClass=*)' dn 2>/dev/null | grep -c '^dn:' || true)"
+    [ "${entries:-0}" -ge 30 ] || fail "the directory came back with only ${entries:-0} entries"
+else
+    entries=0
+fi
+
+# ------------------------------------------------------------------ files on disk
+
+rm -rf "${STAGING:?}" 2>/dev/null || true
+mkdir -p "$STAGING"
+
+# Anything an extraction dropped outside the staging area.
+rm -rf /tmp/rate-cache 2>/dev/null || true
+
+mkdir -p "$(dirname "$LOG_FILE")"
+: > "$LOG_FILE"
+
+# ------------------------------------------------------------------------ digest
+#
+# Row counts plus the columns a rebuild is supposed to restore exactly, plus the number
+# of directory entries. It includes the secrets and the approval states on purpose: those
+# are what a measurement window changes, and a digest that ignored them would say
+# "restored" after a window that had changed both.
+
+digest_input() {
+    mysql_do -N -B "$DB_NAME" -e "
+        SELECT 'accounts', COUNT(*), COALESCE(SUM(id), 0) FROM accounts
+        UNION ALL SELECT 'staff', COUNT(*), COALESCE(SUM(id), 0) FROM staff
+        UNION ALL SELECT 'invoices', COUNT(*), COALESCE(SUM(id), 0) FROM invoices
+        UNION ALL SELECT 'consignments', COUNT(*), COALESCE(SUM(id), 0) FROM consignments
+        UNION ALL SELECT 'ledger_entries', COUNT(*), COALESCE(SUM(id), 0) FROM ledger_entries
+        UNION ALL SELECT 'audit_events', COUNT(*), COALESCE(SUM(id), 0) FROM audit_events
+        UNION ALL SELECT 'notices', COUNT(*), COALESCE(SUM(id), 0) FROM notices
+        UNION ALL SELECT 'routing_rules', COUNT(*), COALESCE(SUM(id), 0) FROM routing_rules
+        UNION ALL SELECT 'export_jobs', COUNT(*), COALESCE(SUM(id), 0) FROM export_jobs
+        UNION ALL SELECT 'import_batches', COUNT(*), COALESCE(SUM(id), 0) FROM import_batches
+        UNION ALL SELECT 'saved_layouts', COUNT(*), COALESCE(SUM(id), 0) FROM saved_layouts
+        UNION ALL SELECT 'notification_log', COUNT(*), COALESCE(SUM(id), 0) FROM notification_log;"
+    mysql_do -N -B "$DB_NAME" -e \
+        'SELECT id, email, role, account_id, directory_uid, status, recovery_secret
+           FROM staff ORDER BY id;'
+    mysql_do -N -B "$DB_NAME" -e \
+        'SELECT id, state, decided_by, IFNULL(note, "") FROM approvals ORDER BY id;'
+    mysql_do -N -B "$DB_NAME" -e \
+        'SELECT id, kind, endpoint_url, secret, status FROM integrations ORDER BY id;'
+    printf 'directory %s\n' "${entries:-0}"
+    [ -r "$DATA_DIR/tariffs.xml" ] && sha256sum "$DATA_DIR/tariffs.xml" | cut -d' ' -f1
+    printf 'staging %s\n' "$(find "$STAGING" -type f 2>/dev/null | wc -l | tr -d ' ')"
+}
+
+digest="$(digest_input | sha256sum | cut -c1-16)"
+[ -n "$digest" ] || fail "the digest could not be computed"
+
+printf 'state %s\n' "$digest"

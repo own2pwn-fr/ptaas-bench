@@ -1,0 +1,38 @@
+id: BENCH-ADMN-0005
+title: XML external entity in the consignment intake parser
+app: admin
+component: api
+class: xxe
+severity: critical
+entrypoint:
+  method: POST
+  path: /api/intake/documents
+  auth: user
+  param: body
+  param_in: raw
+  default_value: <consignment><reference>CW-40118</reference></consignment>
+  content_type: application/xml
+discovery:
+  render: spa-angular
+  reachable_from:
+  - /intake
+  requires:
+  - js-execution
+  - form-submit
+  difficulty: 3
+oracle:
+  kind: sink
+  condition: 'The intake parser is built with entity expansion left on. A signal is raised when the parser
+    actually resolved an external entity the submitted document declared: the resolver was called for
+    a system identifier the document supplied, it returned content, and that content was substituted into
+    the parsed tree. A doctype whose entity is never referenced, or one that fails to resolve, never raises
+    it.'
+  poc: POST /api/intake/documents  <!DOCTYPE c [<!ENTITY x SYSTEM "file:///etc/passwd">]><consignment><reference>&x;</reference></consignment>
+  signal: console.intake.document.entity_resolved
+tags:
+- rest
+- xml
+- authenticated
+introduced: '2026-09-05'
+decoy_note: Consignment documents come from thirty different forwarders and half of them send a doctype,
+  so the parser was configured to be permissive during onboarding and the setting outlived the onboarding.

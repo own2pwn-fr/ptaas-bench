@@ -1,0 +1,479 @@
+# Calderwood Group corporate directory - person entries.
+# One entry per member of staff holding a Meridian console account.
+# Loaded with ldapadd at provisioning time. This directory is the
+# authoritative copy of staff contact details and console entitlements.
+
+dn: uid=setup,ou=people,dc=calderwood,dc=example
+objectClass: top
+objectClass: person
+objectClass: organizationalPerson
+objectClass: inetOrgPerson
+uid: setup
+cn: Meridian Setup
+sn: Setup
+givenName: Meridian
+displayName: Meridian Setup
+mail: setup@meridian.local
+telephoneNumber: +44 20 7946 0001
+title: Deployment Account
+departmentNumber: DPT-01
+ou: Platform
+employeeNumber: 1
+employeeType: administrator
+userPassword: meridian
+
+dn: uid=d.wolstenholme,ou=people,dc=calderwood,dc=example
+objectClass: top
+objectClass: person
+objectClass: organizationalPerson
+objectClass: inetOrgPerson
+uid: d.wolstenholme
+cn: Daniel Wolstenholme
+sn: Wolstenholme
+givenName: Daniel
+displayName: Daniel Wolstenholme
+mail: d.wolstenholme@calderwood.example
+telephoneNumber: +44 20 7946 0134
+title: Head of Operations Systems
+departmentNumber: DPT-04
+ou: Operations
+employeeNumber: 4001
+employeeType: administrator
+userPassword: Quarry-Lantern!73
+
+dn: uid=h.lindqvist,ou=people,dc=calderwood,dc=example
+objectClass: top
+objectClass: person
+objectClass: organizationalPerson
+objectClass: inetOrgPerson
+uid: h.lindqvist
+cn: Hanna Lindqvist
+sn: Lindqvist
+givenName: Hanna
+displayName: Hanna Lindqvist
+mail: h.lindqvist@calderwood.example
+telephoneNumber: +46 8 505 41 02
+title: Freight Operations Analyst
+departmentNumber: DPT-07
+ou: Operations
+employeeNumber: 4102
+employeeType: analyst
+userPassword: atlas-pennant-5106
+
+dn: uid=m.duarte,ou=people,dc=calderwood,dc=example
+objectClass: top
+objectClass: person
+objectClass: organizationalPerson
+objectClass: inetOrgPerson
+uid: m.duarte
+cn: Mateus Duarte
+sn: Duarte
+givenName: Mateus
+displayName: Mateus Duarte
+mail: m.duarte@calderwood.example
+telephoneNumber: +32 2 588 41 18
+title: Terminal Planning Analyst
+departmentNumber: DPT-09
+ou: Planning
+employeeNumber: 4118
+employeeType: analyst
+userPassword: cobalt-harrow-2884
+
+dn: uid=r.achterberg,ou=people,dc=calderwood,dc=example
+objectClass: top
+objectClass: person
+objectClass: organizationalPerson
+objectClass: inetOrgPerson
+uid: r.achterberg
+cn: Renske Achterberg
+sn: Achterberg
+givenName: Renske
+displayName: Renske Achterberg
+mail: r.achterberg@calderwood.example
+telephoneNumber: +31 10 240 71 30
+title: Customer Desk Officer
+departmentNumber: DPT-11
+ou: Customer Desk
+employeeNumber: 4130
+employeeType: viewer
+userPassword: birch-signal-7720
+
+dn: uid=a.brennan,ou=people,dc=calderwood,dc=example
+objectClass: top
+objectClass: person
+objectClass: organizationalPerson
+objectClass: inetOrgPerson
+uid: a.brennan
+cn: Aoife Brennan
+sn: Brennan
+givenName: Aoife
+displayName: Aoife Brennan
+mail: a.brennan@calderwood.example
+telephoneNumber: +353 1 619 41 00
+title: Customer Desk Officer
+departmentNumber: DPT-11
+ou: Customer Desk
+employeeNumber: 4100
+employeeType: viewer
+userPassword: Slipway-Meadow-4417
+
+dn: uid=s.vogelaar,ou=people,dc=calderwood,dc=example
+objectClass: top
+objectClass: person
+objectClass: organizationalPerson
+objectClass: inetOrgPerson
+uid: s.vogelaar
+cn: Sanne Vogelaar
+sn: Vogelaar
+givenName: Sanne
+displayName: Sanne Vogelaar
+mail: s.vogelaar@calderwood.example
+telephoneNumber: +31 10 240 71 01
+title: Cold Chain Analyst
+departmentNumber: DPT-07
+ou: Operations
+employeeNumber: 4101
+employeeType: analyst
+userPassword: Fenwick-Orchard-2093
+
+dn: uid=p.mancini,ou=people,dc=calderwood,dc=example
+objectClass: top
+objectClass: person
+objectClass: organizationalPerson
+objectClass: inetOrgPerson
+uid: p.mancini
+cn: Paolo Mancini
+sn: Mancini
+givenName: Paolo
+displayName: Paolo Mancini
+mail: p.mancini@calderwood.example
+telephoneNumber: +39 02 3057 41 03
+title: Customs Analyst
+departmentNumber: DPT-08
+ou: Customs
+employeeNumber: 4103
+employeeType: analyst
+userPassword: Tessera-Fulcrum-6620
+
+dn: uid=e.lefevre,ou=people,dc=calderwood,dc=example
+objectClass: top
+objectClass: person
+objectClass: organizationalPerson
+objectClass: inetOrgPerson
+uid: e.lefevre
+cn: Elodie Lefevre
+sn: Lefevre
+givenName: Elodie
+displayName: Elodie Lefevre
+mail: e.lefevre@calderwood.example
+telephoneNumber: +33 1 44 52 41 04
+title: Billing Clerk
+departmentNumber: DPT-12
+ou: Finance
+employeeNumber: 4104
+employeeType: viewer
+userPassword: Cordage-Ferry-8851
+
+dn: uid=j.weisser,ou=people,dc=calderwood,dc=example
+objectClass: top
+objectClass: person
+objectClass: organizationalPerson
+objectClass: inetOrgPerson
+uid: j.weisser
+cn: Jonas Weisser
+sn: Weisser
+givenName: Jonas
+displayName: Jonas Weisser
+mail: j.weisser@calderwood.example
+telephoneNumber: +49 30 8974 41 06
+title: Rail Operations Analyst
+departmentNumber: DPT-07
+ou: Operations
+employeeNumber: 4106
+employeeType: analyst
+userPassword: Rampart-Willow-3374
+
+dn: uid=k.bauer,ou=people,dc=calderwood,dc=example
+objectClass: top
+objectClass: person
+objectClass: organizationalPerson
+objectClass: inetOrgPerson
+uid: k.bauer
+cn: Katrin Bauer
+sn: Bauer
+givenName: Katrin
+displayName: Katrin Bauer
+mail: k.bauer@calderwood.example
+telephoneNumber: +49 30 8974 41 08
+title: Systems Administrator
+departmentNumber: DPT-03
+ou: Platform
+employeeNumber: 4108
+employeeType: administrator
+userPassword: Pinnacle-Cistern!52
+
+dn: uid=n.corrigan,ou=people,dc=calderwood,dc=example
+objectClass: top
+objectClass: person
+objectClass: organizationalPerson
+objectClass: inetOrgPerson
+uid: n.corrigan
+cn: Niall Corrigan
+sn: Corrigan
+givenName: Niall
+displayName: Niall Corrigan
+mail: n.corrigan@calderwood.example
+telephoneNumber: +353 1 619 41 10
+title: Customer Desk Officer
+departmentNumber: DPT-11
+ou: Customer Desk
+employeeNumber: 4110
+employeeType: viewer
+userPassword: Harbour-Kestrel-1948
+
+dn: uid=m.solana,ou=people,dc=calderwood,dc=example
+objectClass: top
+objectClass: person
+objectClass: organizationalPerson
+objectClass: inetOrgPerson
+uid: m.solana
+cn: Mireia Solana
+sn: Solana
+givenName: Mireia
+displayName: Mireia Solana
+mail: m.solana@calderwood.example
+telephoneNumber: +34 91 435 41 11
+title: Forwarding Analyst
+departmentNumber: DPT-07
+ou: Operations
+employeeNumber: 4111
+employeeType: analyst
+userPassword: Lantana-Bridge-7265
+
+dn: uid=l.novotny,ou=people,dc=calderwood,dc=example
+objectClass: top
+objectClass: person
+objectClass: organizationalPerson
+objectClass: inetOrgPerson
+uid: l.novotny
+cn: Lukas Novotny
+sn: Novotny
+givenName: Lukas
+displayName: Lukas Novotny
+mail: l.novotny@calderwood.example
+telephoneNumber: +46 8 505 41 13
+title: Billing Clerk
+departmentNumber: DPT-12
+ou: Finance
+employeeNumber: 4113
+employeeType: viewer
+userPassword: Gantry-Verdant-5502
+
+dn: uid=f.ostergaard,ou=people,dc=calderwood,dc=example
+objectClass: top
+objectClass: person
+objectClass: organizationalPerson
+objectClass: inetOrgPerson
+uid: f.ostergaard
+cn: Freya Ostergaard
+sn: Ostergaard
+givenName: Freya
+displayName: Freya Ostergaard
+mail: f.ostergaard@calderwood.example
+telephoneNumber: +45 33 74 41 14
+title: Capacity Planning Analyst
+departmentNumber: DPT-09
+ou: Planning
+employeeNumber: 4114
+employeeType: analyst
+userPassword: Norther-Almanac-3186
+
+dn: uid=t.wisniewski,ou=people,dc=calderwood,dc=example
+objectClass: top
+objectClass: person
+objectClass: organizationalPerson
+objectClass: inetOrgPerson
+uid: t.wisniewski
+cn: Tomasz Wisniewski
+sn: Wisniewski
+givenName: Tomasz
+displayName: Tomasz Wisniewski
+mail: t.wisniewski@calderwood.example
+telephoneNumber: +48 22 519 41 16
+title: Customer Desk Officer
+departmentNumber: DPT-11
+ou: Customer Desk
+employeeNumber: 4116
+employeeType: viewer
+userPassword: Quayside-Ember-4470
+
+dn: uid=b.halasz,ou=people,dc=calderwood,dc=example
+objectClass: top
+objectClass: person
+objectClass: organizationalPerson
+objectClass: inetOrgPerson
+uid: b.halasz
+cn: Beatrix Halasz
+sn: Halasz
+givenName: Beatrix
+displayName: Beatrix Halasz
+mail: b.halasz@calderwood.example
+telephoneNumber: +31 10 240 71 19
+title: Freight Operations Analyst
+departmentNumber: DPT-07
+ou: Operations
+employeeNumber: 4119
+employeeType: analyst
+userPassword: Marlin-Chapter-9037
+
+dn: uid=r.dahlberg,ou=people,dc=calderwood,dc=example
+objectClass: top
+objectClass: person
+objectClass: organizationalPerson
+objectClass: inetOrgPerson
+uid: r.dahlberg
+cn: Rune Dahlberg
+sn: Dahlberg
+givenName: Rune
+displayName: Rune Dahlberg
+mail: r.dahlberg@calderwood.example
+telephoneNumber: +46 8 505 41 21
+title: Billing Clerk
+departmentNumber: DPT-12
+ou: Finance
+employeeNumber: 4121
+employeeType: viewer
+userPassword: Sundial-Ridgeway-2718
+
+dn: uid=i.carvalho,ou=people,dc=calderwood,dc=example
+objectClass: top
+objectClass: person
+objectClass: organizationalPerson
+objectClass: inetOrgPerson
+uid: i.carvalho
+cn: Ines Carvalho
+sn: Carvalho
+givenName: Ines
+displayName: Ines Carvalho
+mail: i.carvalho@calderwood.example
+telephoneNumber: +32 2 588 41 23
+title: Terminal Planning Analyst
+departmentNumber: DPT-09
+ou: Planning
+employeeNumber: 4123
+employeeType: analyst
+userPassword: Corvette-Pastel-6431
+
+dn: uid=g.lindholm,ou=people,dc=calderwood,dc=example
+objectClass: top
+objectClass: person
+objectClass: organizationalPerson
+objectClass: inetOrgPerson
+uid: g.lindholm
+cn: Gustav Lindholm
+sn: Lindholm
+givenName: Gustav
+displayName: Gustav Lindholm
+mail: g.lindholm@calderwood.example
+telephoneNumber: +46 8 505 41 25
+title: Systems Administrator
+departmentNumber: DPT-03
+ou: Platform
+employeeNumber: 4125
+employeeType: administrator
+userPassword: Beacon-Foundry!68
+
+dn: uid=m.kowalczyk,ou=people,dc=calderwood,dc=example
+objectClass: top
+objectClass: person
+objectClass: organizationalPerson
+objectClass: inetOrgPerson
+uid: m.kowalczyk
+cn: Marta Kowalczyk
+sn: Kowalczyk
+givenName: Marta
+displayName: Marta Kowalczyk
+mail: m.kowalczyk@calderwood.example
+telephoneNumber: +48 22 519 41 27
+title: Brokerage Clerk
+departmentNumber: DPT-11
+ou: Customs
+employeeNumber: 4127
+employeeType: viewer
+userPassword: Trellis-Salvage-5024
+
+dn: uid=s.poulain,ou=people,dc=calderwood,dc=example
+objectClass: top
+objectClass: person
+objectClass: organizationalPerson
+objectClass: inetOrgPerson
+uid: s.poulain
+cn: Sebastien Poulain
+sn: Poulain
+givenName: Sebastien
+displayName: Sebastien Poulain
+mail: s.poulain@calderwood.example
+telephoneNumber: +33 1 44 52 41 29
+title: Freight Operations Analyst
+departmentNumber: DPT-07
+ou: Operations
+employeeNumber: 4129
+employeeType: analyst
+userPassword: Meridien-Cobble-7743
+
+dn: uid=c.wiedemann,ou=people,dc=calderwood,dc=example
+objectClass: top
+objectClass: person
+objectClass: organizationalPerson
+objectClass: inetOrgPerson
+uid: c.wiedemann
+cn: Clara Wiedemann
+sn: Wiedemann
+givenName: Clara
+displayName: Clara Wiedemann
+mail: c.wiedemann@calderwood.example
+telephoneNumber: +49 30 8974 41 33
+title: Billing Clerk
+departmentNumber: DPT-12
+ou: Finance
+employeeNumber: 4133
+employeeType: viewer
+userPassword: Amberley-Tundra-3369
+
+dn: uid=e.brodie,ou=people,dc=calderwood,dc=example
+objectClass: top
+objectClass: person
+objectClass: organizationalPerson
+objectClass: inetOrgPerson
+uid: e.brodie
+cn: Ewan Brodie
+sn: Brodie
+givenName: Ewan
+displayName: Ewan Brodie
+mail: e.brodie@calderwood.example
+telephoneNumber: +44 20 7946 0136
+title: Customs Analyst
+departmentNumber: DPT-08
+ou: Customs
+employeeNumber: 4136
+employeeType: analyst
+userPassword: Thistle-Cordial-8290
+
+dn: uid=p.rautio,ou=people,dc=calderwood,dc=example
+objectClass: top
+objectClass: person
+objectClass: organizationalPerson
+objectClass: inetOrgPerson
+uid: p.rautio
+cn: Pia Rautio
+sn: Rautio
+givenName: Pia
+displayName: Pia Rautio
+mail: p.rautio@calderwood.example
+telephoneNumber: +358 9 4245 41 39
+title: Customer Desk Officer
+departmentNumber: DPT-11
+ou: Customer Desk
+employeeNumber: 4139
+employeeType: viewer
+userPassword: Kalevala-Pumice-6158

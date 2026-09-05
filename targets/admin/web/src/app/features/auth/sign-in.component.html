@@ -1,0 +1,59 @@
+<div class="auth">
+  <div class="auth__panel card">
+    <div class="auth__brand">
+      <span class="auth__mark" aria-hidden="true">◆</span>
+      <div>
+        <h1>Meridian</h1>
+        <p class="muted small">Calderwood Group operations console</p>
+      </div>
+    </div>
+
+    <mrd-error-banner
+      [error]="failure()"
+      heading="Sign-in failed"
+      [retryable]="false"
+      (dismiss)="failure.set(null)"
+    />
+
+    <form [formGroup]="form" (ngSubmit)="submit()" novalidate>
+      <div class="field">
+        <label for="email">Work email</label>
+        <input
+          id="email"
+          type="email"
+          autocomplete="username"
+          formControlName="email"
+          placeholder="first.last@calderwood.example"
+        />
+        <mrd-field-error
+          [control]="form.controls.email"
+          label="Work email"
+          [submitted]="submitted()"
+        />
+      </div>
+
+      <div class="field">
+        <label for="password">Password</label>
+        <input id="password" type="password" autocomplete="current-password" formControlName="password" />
+        <mrd-field-error
+          [control]="form.controls.password"
+          label="Password"
+          [submitted]="submitted()"
+        />
+      </div>
+
+      <button type="submit" class="btn btn--primary auth__submit" [disabled]="busy()">
+        {{ busy() ? 'Signing in…' : 'Sign in' }}
+      </button>
+    </form>
+
+    <div class="auth__links small">
+      <a routerLink="/account-recovery">Trouble signing in?</a>
+      <span class="muted">Service desk: extension 4120</span>
+    </div>
+  </div>
+
+  <p class="auth__legal small muted">
+    Access is limited to Calderwood Group staff and is recorded in the audit trail.
+  </p>
+</div>

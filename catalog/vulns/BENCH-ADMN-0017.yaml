@@ -1,0 +1,39 @@
+id: BENCH-ADMN-0017
+title: Archive import writes entries outside the extraction directory
+app: admin
+component: api
+class: zip_slip
+severity: critical
+entrypoint:
+  method: POST
+  path: /api/imports/archives
+  auth: admin
+  param: archive
+  param_in: multipart
+  default_value: tariffs-2026Q1.zip
+  content_type: multipart/form-data
+discovery:
+  render: spa-angular
+  reachable_from:
+  - /imports
+  requires:
+  - js-execution
+  - file-upload
+  - multi-step-flow
+  difficulty: 4
+oracle:
+  kind: artifact
+  condition: Entry names are joined to the staging directory without normalising them. A signal is raised
+    when an entry was actually written to a path outside that directory -- the file exists at the escaped
+    location once extraction finishes. An archive whose names contain traversal but still resolve inside
+    the root, and one that is rejected before extraction, never raise it.
+  poc: POST /api/imports/archives with a zip containing an entry named ../../../../tmp/rate-cache/seed.properties
+  signal: console.imports.archive.entry_escaped_root
+tags:
+- rest
+- file
+- authenticated
+- admin
+introduced: '2026-09-05'
+decoy_note: Carriers send rate cards as zip archives and the importer was written against the archives
+  they actually send, none of which has ever contained a relative path.

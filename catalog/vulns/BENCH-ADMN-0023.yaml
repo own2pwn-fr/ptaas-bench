@@ -1,0 +1,37 @@
+id: BENCH-ADMN-0023
+title: Audit expansion returns operator secrets to analysts
+app: admin
+component: api
+class: bopla
+severity: high
+entrypoint:
+  method: GET
+  path: /api/audit/events
+  auth: user
+  param: expand
+  param_in: query
+  default_value: actor
+discovery:
+  render: spa-angular
+  reachable_from:
+  - /audit
+  requires:
+  - js-execution
+  - multi-step-flow
+  difficulty: 4
+oracle:
+  kind: differential
+  condition: The audit list expands related objects by dotted path and serialises whatever the path reaches.
+    A signal is raised when an expanded actor object actually carried a property reserved for administrators
+    -- recovery secret, token digest or national identifier -- in a response served to a caller who is
+    not one. Naming the path and receiving an unexpanded actor never raises it.
+  poc: GET /api/audit/events?expand=actor.credentials with an analyst session
+  signal: console.audit.expansion.restricted_field_served
+tags:
+- rest
+- json
+- authenticated
+introduced: '2026-09-05'
+decoy_note: Expansion by dotted path is what the audit grid needed to stop making one request per row,
+  and the property filter lives on the list serializer rather than on the expander, so it applies to the
+  row and not to what the row pulled in.

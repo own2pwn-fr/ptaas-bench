@@ -1,0 +1,110 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Account statement produced by the nightly statement run. One file per account
+  per period, kept on the shared volume until the retention job removes it.
+  The document is rendered to HTML with one of the stored layouts before it is
+  attached to the covering message.
+-->
+<statement number="7741" issuedOn="2026-08-31" layout="statement-a4">
+
+  <header>
+    <account id="1042" reference="CWF-1042">
+      <name>Calderwood Freight Ltd</name>
+      <legalName>Calderwood Freight Limited</legalName>
+      <countryCode>GB</countryCode>
+      <address>
+        <line>Unit 14, Trinity Wharf</line>
+        <line>Dock Road</line>
+        <city>Felixstowe</city>
+        <postcode>IP11 3TL</postcode>
+        <country>United Kingdom</country>
+      </address>
+    </account>
+    <period from="2026-01-01" to="2026-08-31"/>
+    <currency>GBP</currency>
+    <accountManager>
+      <name>Daniel Wolstenholme</name>
+      <email>d.wolstenholme@calderwood.example</email>
+      <telephone>+44 20 7946 0134</telephone>
+    </accountManager>
+    <remitTo>
+      <bank>Thameside Commercial Bank</bank>
+      <iban>GB29 THCB 6016 1331 9268 19</iban>
+      <bic>THCBGB2LXXX</bic>
+      <paymentReference>CWF-1042-7741</paymentReference>
+    </remitTo>
+  </header>
+
+  <lines>
+    <line seq="1" date="2026-01-01" type="opening" reference="OB-2026">
+      <description>Balance brought forward from the 2025 statement</description>
+      <net>12480.55</net>
+      <tax>0.00</tax>
+      <gross>12480.55</gross>
+      <balance>12480.55</balance>
+    </line>
+    <line seq="2" date="2026-01-20" type="invoice" reference="INV-2026-0003">
+      <description>Groupage movements, first period, band UK-DOM-2</description>
+      <net>35186.11</net>
+      <tax>8796.53</tax>
+      <gross>43982.64</gross>
+      <balance>56463.19</balance>
+    </line>
+    <line seq="3" date="2026-02-14" type="payment" reference="RCT-2026-0188">
+      <description>Bank transfer received, allocated to the opening balance</description>
+      <net>-12480.55</net>
+      <tax>0.00</tax>
+      <gross>-12480.55</gross>
+      <balance>43982.64</balance>
+    </line>
+    <line seq="4" date="2026-02-23" type="credit" reference="CRN-2026-0011">
+      <description>Credit raised, document INV-2026-0003 cancelled after a rating correction</description>
+      <net>-35186.11</net>
+      <tax>-8796.53</tax>
+      <gross>-43982.64</gross>
+      <balance>0.00</balance>
+    </line>
+    <line seq="5" date="2026-03-12" type="invoice" reference="INV-2026-0006">
+      <description>Groupage and rail movements, second period, corrected rating</description>
+      <net>20181.64</net>
+      <tax>0.00</tax>
+      <gross>20181.64</gross>
+      <balance>20181.64</balance>
+    </line>
+    <line seq="6" date="2026-04-24" type="payment" reference="RCT-2026-0341">
+      <description>Bank transfer received, document INV-2026-0006 settled in full</description>
+      <net>-20181.64</net>
+      <tax>0.00</tax>
+      <gross>-20181.64</gross>
+      <balance>0.00</balance>
+    </line>
+    <line seq="7" date="2026-07-19" type="invoice" reference="INV-2026-0004">
+      <description>Rail and sea movements, third period, due 2026-09-02</description>
+      <net>28004.90</net>
+      <tax>0.00</tax>
+      <gross>28004.90</gross>
+      <balance>28004.90</balance>
+    </line>
+  </lines>
+
+  <totals currency="GBP">
+    <invoiced>83372.65</invoiced>
+    <credited>-43982.64</credited>
+    <received>-32662.19</received>
+    <openingBalance>12480.55</openingBalance>
+    <closingBalance>28004.90</closingBalance>
+    <ageing>
+      <bucket range="current" amount="28004.90"/>
+      <bucket range="1-30" amount="0.00"/>
+      <bucket range="31-60" amount="0.00"/>
+      <bucket range="61-90" amount="0.00"/>
+      <bucket range="over-90" amount="0.00"/>
+    </ageing>
+  </totals>
+
+  <footer>
+    <note>Payment is due within the terms held on your rate schedule. Please quote the payment reference shown above so that receipts are allocated on the day they arrive.</note>
+    <issuer>Calderwood Group, registered in England and Wales, company number 04127755.</issuer>
+  </footer>
+
+</statement>

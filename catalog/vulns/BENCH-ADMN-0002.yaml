@@ -1,0 +1,41 @@
+id: BENCH-ADMN-0002
+title: Client-side template injection in operator banner notices
+app: admin
+component: web
+class: csti
+severity: high
+entrypoint:
+  method: POST
+  path: /api/notices
+  auth: user
+  param: body
+  param_in: json
+  default_value: Scheduled maintenance window on Sunday 02:00-04:00 UTC.
+  content_type: application/json
+discovery:
+  render: spa-angular
+  reachable_from:
+  - /notices
+  - /notices/new
+  requires:
+  - js-execution
+  - form-submit
+  difficulty: 3
+oracle:
+  kind: sink
+  condition: Banner notices are stored as authored and compiled by the shell as a runtime template so
+    that operators can embed live counters. The renderer reports the text it actually painted. A signal
+    is raised when the painted text no longer contains the stored interpolation literally and carries
+    a value the stored body does not contain, which can only happen if the expression was evaluated in
+    a browser. Storing braces, or fetching the notice as JSON without rendering it, never raises it.
+  poc: POST /api/notices {"title":"Rate card update","body":"{{ 6109*3 }}"} then load /notices in a client
+    that executes JavaScript
+  signal: console.notices.render.expression_evaluated
+tags:
+- spa
+- stored
+- authenticated
+- client-side
+introduced: '2026-09-05'
+decoy_note: The banner was specified as "operators must be able to put the current queue depth in the
+  message", which is one line of runtime compilation and years of nobody revisiting who can author a notice.

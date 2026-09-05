@@ -1,0 +1,18 @@
+.status {
+  max-width: 620px;
+  padding-top: 56px;
+}
+
+.status__code {
+  margin: 0;
+  font-size: 44px;
+  font-weight: 700;
+  color: var(--mrd-line-strong);
+  line-height: 1;
+}
+
+.status__actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 20px;
+}

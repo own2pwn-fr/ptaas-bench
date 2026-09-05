@@ -1,0 +1,7 @@
+Contact: mailto:security@calderwood.example
+Expires: 2027-03-31T23:00:00.000Z
+Encryption: https://calderwood.example/.well-known/pgp-key.txt
+Preferred-Languages: en, sv, de
+Canonical: https://meridian.calderwood.example/.well-known/security.txt
+Policy: https://calderwood.example/legal/coordinated-disclosure
+Hiring: https://calderwood.example/careers

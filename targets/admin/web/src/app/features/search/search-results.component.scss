@@ -1,0 +1,38 @@
+.search-field {
+  min-width: 320px;
+  margin-bottom: 0;
+}
+
+.results {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.results__loading {
+  padding: 16px;
+}
+
+.result {
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--mrd-line);
+}
+
+.result:last-child {
+  border-bottom: none;
+}
+
+.result__head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.result__head a {
+  font-weight: 600;
+}
+
+.result__summary {
+  margin: 4px 0 2px;
+  color: var(--mrd-ink-soft);
+}

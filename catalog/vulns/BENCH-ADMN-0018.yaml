@@ -1,0 +1,41 @@
+id: BENCH-ADMN-0018
+title: Export batch allocates from a caller-supplied row count
+app: admin
+component: api
+class: resource_exhaustion
+severity: medium
+entrypoint:
+  method: POST
+  path: /api/exports/batch
+  auth: user
+  param: rows
+  param_in: json
+  default_value: '500'
+  content_type: application/json
+discovery:
+  render: spa-angular
+  reachable_from:
+  - /exports
+  requires:
+  - js-execution
+  difficulty: 3
+oracle:
+  kind: sink
+  condition: The batch exporter sizes its result buffer from the row count in the body, with no ceiling
+    and no check against how many rows exist. A signal is raised when a single request actually reserved
+    more than sixty-four mebibytes of heap for that buffer, i.e. the allocation really happened rather
+    than being requested and refused. Requests within the documented range never raise it.
+  poc: POST /api/exports/batch {"format":"csv","rows":200000}
+  signal: console.exports.batch_allocation_overrun
+tags:
+- rest
+- availability
+- authenticated
+introduced: '2026-09-05'
+decoy_note: The row count is there because the export screen offers "first N rows" and the team sized
+  the buffer up front to avoid resizing a very large list; the ceiling was going to be added when someone
+  complained about a slow export.
+notes: 'The buffer is reserved in one-mebibyte chunks and the loop abandons the run when the heap has
+  under three chunks of headroom left, so a request large enough to fire the counter does not also take
+  the console down for the rest of the window. That guard is a real one added after an incident, not a
+  limit on the flaw: the row count is still unbounded and still sizes the buffer.'

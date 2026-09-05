@@ -1,0 +1,36 @@
+id: BENCH-ADMN-0014
+title: Management endpoints served without authentication
+app: admin
+component: api
+class: actuator_exposed
+severity: high
+entrypoint:
+  method: GET
+  path: /actuator/env
+  auth: none
+  param: null
+  param_in: query
+  default_value: null
+discovery:
+  render: api-only
+  reachable_from:
+  - /actuator
+  requires:
+  - wordlist
+  difficulty: 2
+oracle:
+  kind: artifact
+  condition: A signal is raised when an unauthenticated caller was actually served the body of a management
+    endpoint that exposes configuration or runtime internals -- environment, configuration properties,
+    beans, mappings, thread dump, heap dump or the log file. Liveness and build information are public
+    by design and never raise it, nor does a request that is refused or that returns an empty body.
+  poc: GET /actuator/env
+  signal: console.management.internals_served_anonymous
+tags:
+- misconfiguration
+- unauthenticated
+- spring
+introduced: '2026-09-05'
+decoy_note: Exposure was widened to everything during a memory investigation, behind a network policy
+  that was supposed to keep the management port internal; the policy was written for the old deployment
+  and the endpoints now answer on the same port as the API.

@@ -1,0 +1,75 @@
+<div class="page">
+  <mrd-page-header
+    [title]="heading()"
+    subtitle="Accounts, consignments, invoices, people and notices"
+  />
+
+  <mrd-error-banner [error]="failure()" (retry)="run()" (dismiss)="failure.set(null)" />
+
+  <mrd-filter-bar (reset)="clear()">
+    <form class="field search-field" (ngSubmit)="submit()">
+      <label for="search-term">Search term</label>
+      <input
+        id="search-term"
+        type="search"
+        [formControl]="term"
+        placeholder="Reference, account name, vessel, invoice number…"
+      />
+    </form>
+
+    <div class="field">
+      <label for="search-sort">Order by</label>
+      <select id="search-sort" [value]="sort()" (change)="changeSort($any($event.target).value)">
+        @for (choice of sortChoices; track choice.value) {
+          <option [value]="choice.value">{{ choice.label }}</option>
+        }
+        @if (!isKnownSort()) {
+          <option [value]="sort()">{{ sort() }}</option>
+        }
+      </select>
+      <span class="field__hint">Applied as sent: {{ sort() }}</span>
+    </div>
+
+    <button extraActions type="button" class="btn btn--sm btn--primary" (click)="submit()">
+      Search
+    </button>
+  </mrd-filter-bar>
+
+  <div class="card">
+    @if (loading()) {
+      <div class="results__loading">
+        <mrd-skeleton [rows]="6" />
+      </div>
+    } @else if (query() === '') {
+      <mrd-empty-state
+        title="Start typing"
+        message="Search across accounts, consignments, invoices, staff and notices."
+      />
+    } @else if (results().items.length === 0) {
+      <mrd-empty-state
+        title="No matches"
+        message="Nothing in Meridian matches that term. Try a reference such as CW-40118."
+      />
+    } @else {
+      <ul class="results">
+        @for (hit of results().items; track hit.id) {
+          <li class="result">
+            <div class="result__head">
+              <a [routerLink]="hit.routerLink">{{ hit.title }}</a>
+              <mrd-status-pill [status]="hit.kind" />
+              <span class="mono muted small">{{ hit.reference }}</span>
+            </div>
+            <p class="result__summary small">{{ hit.summary }}</p>
+            <p class="muted small">Updated {{ hit.updatedAt | date: 'd MMM y, HH:mm' }}</p>
+          </li>
+        }
+      </ul>
+      <mrd-pagination
+        [page]="results().page"
+        [size]="results().size"
+        [total]="results().total"
+        (pageChange)="goToPage($event)"
+      />
+    }
+  </div>
+</div>

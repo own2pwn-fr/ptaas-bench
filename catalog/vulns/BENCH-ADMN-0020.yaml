@@ -1,0 +1,41 @@
+id: BENCH-ADMN-0020
+title: Time-based blind SQL injection in the account recovery lookup
+app: admin
+component: api
+class: sqli_blind_time
+severity: critical
+entrypoint:
+  method: POST
+  path: /api/auth/recover
+  auth: none
+  param: reference
+  param_in: json
+  default_value: CW-40118
+  content_type: application/json
+discovery:
+  render: spa-angular
+  reachable_from:
+  - /sign-in
+  - /account-recovery
+  requires:
+  - js-execution
+  - form-submit
+  difficulty: 2
+oracle:
+  kind: timing
+  condition: The recovery lookup concatenates the account reference into its statement and answers identically
+    whether or not an account matched, so the only observable is time. A signal is raised when the statement
+    the driver actually sent carried SQL structure introduced by this parameter AND the server spent more
+    than four seconds executing it. A payload that fails to parse, or one that returns promptly, never
+    raises it.
+  poc: POST /api/auth/recover {"reference":"CW-40118' AND (SELECT SLEEP(6)) AND 'a'='a"}
+  signal: console.recovery.lookup.statement_stall
+tags:
+- rest
+- mysql
+- unauthenticated
+- blind
+introduced: '2026-09-05'
+decoy_note: Account recovery is the oldest endpoint in the service, written before the repository layer
+  existed, and it is deliberately silent about whether a reference matched -- which is also why nobody
+  has ever looked at what it does with the string.

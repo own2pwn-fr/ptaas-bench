@@ -1,0 +1,35 @@
+id: BENCH-ADMN-0004
+title: XPath injection in the tariff band lookup
+app: admin
+component: api
+class: xpathi
+severity: high
+entrypoint:
+  method: GET
+  path: /api/tariffs/lookup
+  auth: user
+  param: band
+  param_in: query
+  default_value: EU-STD-2
+discovery:
+  render: spa-angular
+  reachable_from:
+  - /tariffs
+  requires:
+  - js-execution
+  difficulty: 3
+oracle:
+  kind: differential
+  condition: Tariff bands live in an XML document and the lookup builds its expression by concatenation.
+    A signal is raised when the evaluated expression actually returned nodes from outside the requested
+    band's subtree, so the response carried rate cards or partner keys the predicate was supposed to exclude.
+    An expression that fails to compile, or that stays inside its subtree, never raises it.
+  poc: GET /api/tariffs/lookup?band=' or '1'='1
+  signal: console.tariffs.lookup.node_escape
+tags:
+- rest
+- xml
+- authenticated
+introduced: '2026-09-05'
+decoy_note: Tariffs arrive from the carriers as XML and are queried in place rather than imported, because
+  the schema changes every time a carrier reprices and nobody wants to migrate a table for it.

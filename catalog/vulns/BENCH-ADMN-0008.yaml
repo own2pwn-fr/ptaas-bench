@@ -1,0 +1,38 @@
+id: BENCH-ADMN-0008
+title: Field projection serves restricted member properties
+app: admin
+component: api
+class: bopla
+severity: high
+entrypoint:
+  method: GET
+  path: /api/orgs/{orgId}/members
+  auth: user
+  param: fields
+  param_in: query
+  default_value: id,displayName,role
+discovery:
+  render: spa-angular
+  reachable_from:
+  - /orgs
+  - /orgs/{orgId}/members
+  requires:
+  - js-execution
+  - multi-step-flow
+  difficulty: 3
+oracle:
+  kind: differential
+  condition: The members endpoint projects whichever properties the caller names, and the role check is
+    applied to the endpoint rather than to the properties. A signal is raised when a response actually
+    carried a member property the caller's role is not cleared for -- national identifier, pay band or
+    recovery secret -- measured on what was serialised, not on what was asked for. Naming a restricted
+    property and receiving nothing back never raises it.
+  poc: GET /api/orgs/1042/members?fields=id,displayName,nationalId,payBand
+  signal: console.members.projection.restricted_field_served
+tags:
+- rest
+- json
+- authenticated
+introduced: '2026-09-05'
+decoy_note: A sparse-fieldset parameter is the standard answer to "the members grid is slow", and the
+  property allowlist that was supposed to accompany it was left for the follow-up ticket.

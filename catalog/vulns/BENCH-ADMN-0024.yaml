@@ -1,0 +1,38 @@
+id: BENCH-ADMN-0024
+title: Account context header overrides the session's scope
+app: admin
+component: api
+class: tenant_isolation
+severity: critical
+entrypoint:
+  method: GET
+  path: /api/reports/summary
+  auth: user
+  param: x-account-context
+  param_in: header
+  default_value: '1042'
+discovery:
+  render: spa-angular
+  reachable_from:
+  - /reports
+  requires:
+  - js-execution
+  - custom-header
+  difficulty: 4
+oracle:
+  kind: differential
+  condition: The summary resolves the account it aggregates from a request header when one is present,
+    falling back to the session only when it is absent. A signal is raised when a response actually carried
+    figures aggregated over an account the session is not scoped to. A header naming the caller's own
+    account, and an absent header, never raise it.
+  poc: 'GET /api/reports/summary with X-Account-Context: 1043 on a session scoped to 1042'
+  signal: console.reports.summary.header_scope_override
+tags:
+- rest
+- multi-tenant
+- authenticated
+- header
+introduced: '2026-09-05'
+decoy_note: The header exists because the internal support console renders a client's dashboard on their
+  behalf, and it reaches the same controller as the client's own screen; the check that the caller may
+  act for that account sits in the support console, which is the only caller anyone imagined.

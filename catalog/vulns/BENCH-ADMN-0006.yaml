@@ -1,0 +1,41 @@
+id: BENCH-ADMN-0006
+title: Caller-supplied XSLT stylesheet in the statement exporter
+app: admin
+component: api
+class: xslt_injection
+severity: high
+entrypoint:
+  method: POST
+  path: /api/exports/render
+  auth: admin
+  param: stylesheet
+  param_in: json
+  default_value: statement-a4
+  content_type: application/json
+discovery:
+  render: spa-angular
+  reachable_from:
+  - /exports
+  - /exports/templates
+  requires:
+  - js-execution
+  - multi-step-flow
+  difficulty: 4
+oracle:
+  kind: sink
+  condition: 'The exporter accepts either the name of a stored stylesheet or an inline one, and compiles
+    the inline form with secure processing disabled. A signal is raised when the transform actually reached
+    outside its input document: the processor invoked the resolver for a resource the stylesheet named,
+    or the transform created a child process. Submitting a stylesheet that only formats the input never
+    raises it.'
+  poc: POST /api/exports/render {"statementId":"7741","stylesheet":"<xsl:stylesheet version=\"1.0\" xmlns:xsl=\"http://www.w3.org/1999/XSL/Transform\"><xsl:template
+    match=\"/\"><xsl:value-of select=\"document('http://<any host the tool controls>/s')\"/></xsl:template></xsl:stylesheet>"}
+  signal: console.exports.stylesheet.external_call
+tags:
+- rest
+- xml
+- authenticated
+- admin
+introduced: '2026-09-05'
+decoy_note: Two large clients insisted on their own statement layout, so the export screen grew a "paste
+  your stylesheet" box for the integration team, gated on the administrator role and forgotten there.

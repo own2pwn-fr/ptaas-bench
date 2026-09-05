@@ -1,0 +1,45 @@
+id: BENCH-ADMN-0022
+title: Blind external entity in the manifest upload parser
+app: admin
+component: api
+class: xxe
+severity: critical
+entrypoint:
+  method: POST
+  path: /api/intake/manifests
+  auth: admin
+  param: manifest
+  param_in: multipart
+  default_value: manifest-2026-02.xml
+  content_type: multipart/form-data
+discovery:
+  render: spa-angular
+  reachable_from:
+  - /intake
+  - /intake/manifests
+  requires:
+  - js-execution
+  - file-upload
+  - multi-step-flow
+  difficulty: 4
+oracle:
+  kind: oob
+  condition: 'The manifest parser resolves external entities and its response says only how many lines
+    were accepted, so nothing is reflected. A signal is raised when the parser actually resolved an entity
+    over the network: the destination is declared to the egress registry immediately before the fetch,
+    and the resolver returned. Because the sinkhole is the resolver for the whole target network, a callback
+    aimed at any domain the tool chose is captured and joined back to this request. An entity that never
+    resolves, and one resolved locally, never raise it.'
+  poc: POST /api/intake/manifests multipart with a manifest declaring <!ENTITY x SYSTEM "http://<any host
+    the tool controls>/m"> and referencing it
+  signal: console.intake.manifest.entity_resolved_remote
+tags:
+- rest
+- xml
+- oob
+- authenticated
+- admin
+introduced: '2026-09-05'
+decoy_note: Manifests are uploaded rather than posted because they are produced by a terminal operating
+  system that writes files; the upload path reuses the same permissive parser as intake, one import statement
+  away.

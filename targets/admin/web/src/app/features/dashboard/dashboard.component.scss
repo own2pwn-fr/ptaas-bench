@@ -1,0 +1,58 @@
+.card--pad {
+  padding: 16px;
+}
+
+.tiles {
+  margin-bottom: 16px;
+}
+
+.metric__unit {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--mrd-ink-faint);
+  margin-left: 4px;
+}
+
+.metric__trend--down {
+  color: var(--mrd-danger);
+}
+
+.section-gap {
+  margin-top: 16px;
+}
+
+.shortcuts {
+  margin-top: 20px;
+}
+
+.shortcuts h2 {
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--mrd-ink-faint);
+}
+
+.shortcuts__row {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+}
+
+.shortcut {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 14px 16px;
+  color: inherit;
+}
+
+.shortcut:hover {
+  text-decoration: none;
+  border-color: var(--mrd-line-strong);
+}
+
+.status-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 20px;
+}

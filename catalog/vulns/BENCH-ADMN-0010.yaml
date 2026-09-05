@@ -1,0 +1,37 @@
+id: BENCH-ADMN-0010
+title: Invoice listing ignores the caller's account scope
+app: admin
+component: api
+class: tenant_isolation
+severity: critical
+entrypoint:
+  method: GET
+  path: /api/orgs/{orgId}/invoices
+  auth: other-user
+  param: orgId
+  param_in: path
+  default_value: '1042'
+discovery:
+  render: spa-angular
+  reachable_from:
+  - /orgs
+  - /orgs/{orgId}/invoices
+  requires:
+  - js-execution
+  - multi-step-flow
+  difficulty: 3
+oracle:
+  kind: differential
+  condition: The invoice query filters on the account id in the path and never on the account the session
+    is scoped to. A signal is raised when a response actually carried invoice rows whose account id differs
+    from the caller's scope, i.e. the caller received another client's billing data. Requests for the
+    caller's own account, and refusals, never raise it.
+  poc: GET /api/orgs/1043/invoices with the session of a member scoped to account 1042
+  signal: console.orgs.invoices.foreign_scope_served
+tags:
+- rest
+- multi-tenant
+- authenticated
+introduced: '2026-09-05'
+decoy_note: Every screen that reaches this endpoint gets the account id from a picker that already only
+  lists the caller's accounts, so the server-side check looked redundant to whoever wrote it.

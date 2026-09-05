@@ -1,0 +1,41 @@
+id: BENCH-ADMN-0021
+title: Directory bind filter injection at sign-in
+app: admin
+component: api
+class: ldapi
+severity: high
+entrypoint:
+  method: POST
+  path: /api/auth/login
+  auth: none
+  param: email
+  param_in: json
+  default_value: h.lindqvist@calderwood.example
+  content_type: application/json
+discovery:
+  render: spa-angular
+  reachable_from:
+  - /
+  - /sign-in
+  requires:
+  - js-execution
+  - form-submit
+  difficulty: 1
+oracle:
+  kind: state
+  condition: Sign-in is a single directory search whose filter carries both the identifier and the password,
+    and a non-empty result is taken as proof of authentication. A signal is raised when a session was
+    actually issued while the password submitted does not match the one stored for the entry that was
+    matched, i.e. structure introduced by the identifier made the filter match without the password ever
+    being compared. A correct sign-in, and a refused one, never raise it.
+  poc: POST /api/auth/login {"email":"d.wolstenholme@calderwood.example)(|(uid=*","password":"anything"}
+  signal: console.session.bind_filter_widened
+tags:
+- rest
+- ldap
+- auth
+- unauthenticated
+introduced: '2026-09-05'
+decoy_note: Authenticating with one search instead of a search followed by a bind halves the round trips
+  to a directory that used to be the slowest thing in the request, and it worked, which is why nobody
+  revisited it.

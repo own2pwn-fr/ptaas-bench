@@ -1,0 +1,164 @@
+# Route inventory for the operations console.
+#
+# Two uses. Crawl coverage over the whole reachable surface, rather than over the
+# handful of routes the catalog happens to name — those are the interesting ones by
+# construction, so measuring only them flatters every crawler. And a denominator for
+# precision: a finding reported against a route marked `safe` here is a confirmed false
+# positive rather than merely unmatched.
+#
+# Ratio: 83 safe routes to 25 planted, 3.3:1, against the 3:1 the target contract asks
+# for. Twenty-five rather than twenty-six because two catalog entries share one
+# entrypoint: the sign-in endpoint hosts both the provisioning account and the filter
+# the identifier is pasted into.
+#
+# Paths are the templates the framework registered, which is what the SDK reports and
+# what the catalog entrypoints are written against — `/api/orgs/{orgId}/invoices`, never
+# `/api/orgs/1042/invoices`. Client-side routes are listed with the path the router
+# owns; the server answers all of them with the shell, and a crawler that does not
+# execute JavaScript sees exactly one page behind every one of them.
+#
+# `render: spa-angular` on a client-side route is the point of this target. The routes
+# are declared in the bundle rather than emitted as links, and fourteen of the areas
+# below are lazily loaded: their route tables, their components and every API call they
+# make live in chunks that are only fetched when the router first enters them. A tool
+# that reads the entry bundle and stops sees the six eager screens and none of the rest.
+
+app: admin
+base_url: http://meridian.calderwood.example:8080
+
+routes:
+
+  # ---------------------------------------------------------------------------
+  # Static surface. Everything a browser asks for before anybody has signed in.
+  # ---------------------------------------------------------------------------
+  - {path: /,                          method: GET,  auth: none,  render: spa-angular,  params: [],        status: safe}
+  - {path: /index.html,                method: GET,  auth: none,  render: static-html,  params: [],        status: safe}
+  - {path: /favicon.ico,               method: GET,  auth: none,  render: static-html,  params: [],        status: safe}
+  - {path: /robots.txt,                method: GET,  auth: none,  render: static-html,  params: [],        status: safe}
+  - {path: /manifest.webmanifest,      method: GET,  auth: none,  render: static-html,  params: [],        status: safe}
+  - {path: /.well-known/security.txt,  method: GET,  auth: none,  render: static-html,  params: [],        status: safe}
+  - {path: /assets/metrics.js,         method: GET,  auth: none,  render: static-html,  params: [],        status: safe}
+
+  # ---------------------------------------------------------------------------
+  # Client-side routes, eager. These six are in the entry bundle.
+  # ---------------------------------------------------------------------------
+  - {path: /sign-in,                   method: GET,  auth: none,  render: spa-angular,  params: [],        status: safe}
+  - {path: /account-recovery,          method: GET,  auth: none,  render: spa-angular,  params: [],        status: safe}
+  - {path: /forbidden,                 method: GET,  auth: none,  render: spa-angular,  params: [],        status: safe}
+  - {path: /search,                    method: GET,  auth: user,  render: spa-angular,  params: [q, sort], status: safe}
+
+  # ---------------------------------------------------------------------------
+  # Client-side routes, lazily loaded. One chunk per area; nothing below appears
+  # in the entry bundle.
+  # ---------------------------------------------------------------------------
+  - {path: /orgs,                          method: GET, auth: user,  render: spa-angular, params: [],       status: safe}
+  - {path: '/orgs/{orgId}',                  method: GET, auth: user,  render: spa-angular, params: [orgId],  status: safe}
+  - {path: '/orgs/{orgId}/members',          method: GET, auth: user,  render: spa-angular, params: [orgId],  status: safe}
+  - {path: '/orgs/{orgId}/invoices',         method: GET, auth: user,  render: spa-angular, params: [orgId],  status: safe}
+  - {path: '/orgs/{orgId}/consignments',     method: GET, auth: user,  render: spa-angular, params: [orgId],  status: safe}
+  - {path: /reports,                       method: GET, auth: user,  render: spa-angular, params: [],       status: safe}
+  - {path: /reports/ledger,                method: GET, auth: user,  render: spa-angular, params: [],       status: safe}
+  - {path: /reports/summary,               method: GET, auth: user,  render: spa-angular, params: [],       status: safe}
+  - {path: /reports/volumes,               method: GET, auth: user,  render: spa-angular, params: [],       status: safe}
+  - {path: /directory,                     method: GET, auth: user,  render: spa-angular, params: [],       status: safe}
+  - {path: '/directory/{uid}',               method: GET, auth: user,  render: spa-angular, params: [uid],    status: safe}
+  - {path: /tariffs,                       method: GET, auth: user,  render: spa-angular, params: [],       status: safe}
+  - {path: /tariffs/bands,                 method: GET, auth: user,  render: spa-angular, params: [],       status: safe}
+  - {path: /intake,                        method: GET, auth: user,  render: spa-angular, params: [],       status: safe}
+  - {path: /intake/manifests,              method: GET, auth: user,  render: spa-angular, params: [],       status: safe}
+  - {path: /intake/history,                method: GET, auth: user,  render: spa-angular, params: [],       status: safe}
+  - {path: /exports,                       method: GET, auth: user,  render: spa-angular, params: [],       status: safe}
+  - {path: /exports/templates,             method: GET, auth: user,  render: spa-angular, params: [],       status: safe}
+  - {path: /exports/history,               method: GET, auth: user,  render: spa-angular, params: [],       status: safe}
+  - {path: /rules,                         method: GET, auth: user,  render: spa-angular, params: [],       status: safe}
+  - {path: /rules/preview,                 method: GET, auth: user,  render: spa-angular, params: [],       status: safe}
+  - {path: '/rules/{id}',                    method: GET, auth: user,  render: spa-angular, params: [id],     status: safe}
+  - {path: /approvals,                     method: GET, auth: user,  render: spa-angular, params: [],       status: safe}
+  - {path: '/approvals/{id}',                method: GET, auth: user,  render: spa-angular, params: [id],     status: safe}
+  - {path: /notices,                       method: GET, auth: user,  render: spa-angular, params: [],       status: safe}
+  - {path: /notices/new,                   method: GET, auth: user,  render: spa-angular, params: [],       status: safe}
+  - {path: /notifications,                 method: GET, auth: user,  render: spa-angular, params: [],       status: safe}
+  - {path: /notifications/templates,       method: GET, auth: user,  render: spa-angular, params: [],       status: safe}
+  - {path: /notifications/log,             method: GET, auth: user,  render: spa-angular, params: [],       status: safe}
+  - {path: /audit,                         method: GET, auth: user,  render: spa-angular, params: [],       status: safe}
+  - {path: '/audit/{id}',                    method: GET, auth: user,  render: spa-angular, params: [id],     status: safe}
+  - {path: /imports,                       method: GET, auth: admin, render: spa-angular, params: [],       status: safe}
+  - {path: /imports/history,               method: GET, auth: admin, render: spa-angular, params: [],       status: safe}
+  - {path: /integrations,                  method: GET, auth: admin, render: spa-angular, params: [],       status: safe}
+  - {path: /integrations/webhooks,         method: GET, auth: admin, render: spa-angular, params: [],       status: safe}
+  - {path: /integrations/credentials,      method: GET, auth: admin, render: spa-angular, params: [],       status: safe}
+  - {path: /settings,                      method: GET, auth: user,  render: spa-angular, params: [],       status: safe}
+  - {path: /settings/profile,              method: GET, auth: user,  render: spa-angular, params: [],       status: safe}
+  - {path: /settings/workspace,            method: GET, auth: user,  render: spa-angular, params: [],       status: safe}
+
+  # ---------------------------------------------------------------------------
+  # API, safe. Same handlers, same validation style, same error shape as the
+  # planted ones below — which is what makes them a fair denominator.
+  # ---------------------------------------------------------------------------
+  - {path: /api/status,                    method: GET,   auth: none,  render: api-only, params: [],                 status: safe}
+  - {path: /api/auth/keys,                 method: GET,   auth: none,  render: api-only, params: [],                 status: safe}
+  - {path: /api/auth/logout,               method: POST,  auth: user,  render: api-only, params: [],                 status: safe}
+  - {path: /api/orgs,                      method: GET,   auth: user,  render: api-only, params: [page, size, q],     status: safe}
+  - {path: '/api/orgs/{orgId}',              method: GET,   auth: user,  render: api-only, params: [orgId],             status: safe}
+  - {path: '/api/orgs/{orgId}/consignments', method: GET,   auth: user,  render: api-only, params: [orgId, status, page, size], status: safe}
+  - {path: /api/reports/volumes,           method: GET,   auth: user,  render: api-only, params: [from, to, granularity], status: safe}
+  - {path: '/api/directory/people/{uid}',    method: GET,   auth: user,  render: api-only, params: [uid],               status: safe}
+  - {path: /api/tariffs,                   method: GET,   auth: user,  render: api-only, params: [],                  status: safe}
+  - {path: /api/intake/history,            method: GET,   auth: user,  render: api-only, params: [page, size],        status: safe}
+  - {path: /api/exports/templates,         method: GET,   auth: user,  render: api-only, params: [],                  status: safe}
+  - {path: /api/exports/history,           method: GET,   auth: user,  render: api-only, params: [page, size],        status: safe}
+  - {path: /api/rules,                     method: GET,   auth: user,  render: api-only, params: [],                  status: safe}
+  - {path: '/api/rules/{id}',                method: GET,   auth: user,  render: api-only, params: [id],                status: safe}
+  - {path: /api/rules,                     method: POST,  auth: user,  render: api-only, params: [name, expression, priority, enabled], status: safe}
+  - {path: /api/approvals,                 method: GET,   auth: user,  render: api-only, params: [state, page, size],  status: safe}
+  - {path: '/api/approvals/{id}',            method: GET,   auth: user,  render: api-only, params: [id],                status: safe}
+  # The decision endpoint the integrations were written against, before the note
+  # and the outcome were split apart. Same effect, and correctly refused to
+  # anybody below administrator — a finding here is a false positive, and the
+  # sub-resource one segment deeper is the planted one.
+  - {path: '/api/approvals/{id}',            method: POST,  auth: admin, render: api-only, params: [decision, note],    status: safe}
+  - {path: /api/notices,                   method: GET,   auth: none,  render: api-only, params: [],                  status: safe}
+  - {path: /api/notifications/templates,   method: GET,   auth: user,  render: api-only, params: [],                  status: safe}
+  - {path: /api/notifications/log,         method: GET,   auth: user,  render: api-only, params: [page, size],        status: safe}
+  - {path: '/api/audit/events/{id}',         method: GET,   auth: user,  render: api-only, params: [id],                status: safe}
+  - {path: /api/imports/history,           method: GET,   auth: admin, render: api-only, params: [page, size],        status: safe}
+  - {path: /api/integrations,              method: GET,   auth: admin, render: api-only, params: [],                  status: safe}
+  - {path: /api/integrations,              method: POST,  auth: admin, render: api-only, params: [kind, name, endpointUrl, accountId], status: safe}
+  - {path: /api/integrations/credentials,  method: POST,  auth: admin, render: api-only, params: [integrationId, secret], status: safe}
+  - {path: /api/profile,                   method: GET,   auth: user,  render: api-only, params: [],                  status: safe}
+  - {path: /api/profile,                   method: PATCH, auth: user,  render: api-only, params: [displayName, givenName, familyName], status: safe}
+  - {path: /api/workspace/layout,          method: POST,  auth: user,  render: api-only, params: [state, name],       status: safe}
+  - {path: /api/client/metrics,            method: POST,  auth: none,  render: api-only, params: [path, referrer, viewportWidth, durationMs], status: safe}
+  - {path: /api/client/diagnostics,        method: POST,  auth: none,  render: api-only, params: [component, noticeId, source, painted], status: safe}
+  - {path: /actuator/health,               method: GET,   auth: none,  render: api-only, params: [],                  status: safe}
+  - {path: /actuator/info,                 method: GET,   auth: none,  render: api-only, params: [],                  status: safe}
+
+  # ---------------------------------------------------------------------------
+  # Planted. One row per catalog entrypoint. The sign-in endpoint carries two
+  # entries, so twenty-six entries appear here as twenty-five routes.
+  # ---------------------------------------------------------------------------
+  - {path: /api/reports/ledger,               method: GET,  auth: user,  render: spa-angular, params: [window, account],  status: planted}
+  - {path: /api/notices,                      method: POST, auth: user,  render: spa-angular, params: [title, body, severity, publishedFrom, publishedTo], status: planted}
+  - {path: /api/directory/people,             method: GET,  auth: user,  render: spa-angular, params: [surname, department, page, size], status: planted}
+  - {path: /api/tariffs/lookup,               method: GET,  auth: user,  render: spa-angular, params: [band],             status: planted}
+  - {path: /api/intake/documents,             method: POST, auth: user,  render: spa-angular, params: [body],             status: planted}
+  - {path: /api/exports/render,               method: POST, auth: admin, render: spa-angular, params: [statementId, stylesheet], status: planted}
+  - {path: /api/rules/preview,                method: POST, auth: user,  render: spa-angular, params: [expression, sample], status: planted}
+  - {path: '/api/orgs/{orgId}/members',         method: GET,  auth: user,  render: spa-angular, params: [orgId, fields],    status: planted}
+  - {path: '/api/approvals/{id}/decision',      method: POST, auth: user,  render: spa-angular, params: [id, decision, note], status: planted}
+  - {path: '/api/orgs/{orgId}/invoices',        method: GET,  auth: other-user, render: spa-angular, params: [orgId, status, page, size], status: planted}
+  - {path: /api/integrations/webhooks/probe,  method: POST, auth: admin, render: spa-angular, params: [endpoint],         status: planted}
+  - {path: /api/auth/login,                   method: POST, auth: none,  render: spa-angular, params: [email, password],  status: planted}
+  - {path: /api/session/context,              method: GET,  auth: none,  render: spa-angular, params: [authorization],    status: planted}
+  - {path: /actuator/env,                     method: GET,  auth: none,  render: api-only,    params: [],                 status: planted}
+  - {path: /api/notifications/preview,        method: POST, auth: user,  render: spa-angular, params: [template, sample], status: planted}
+  - {path: /api/workspace/layout/restore,     method: POST, auth: user,  render: spa-angular, params: [state],            status: planted}
+  - {path: /api/imports/archives,             method: POST, auth: admin, render: spa-angular, params: [archive],          status: planted}
+  - {path: /api/exports/batch,                method: POST, auth: user,  render: spa-angular, params: [format, rows],     status: planted}
+  - {path: /actuator/logfile,                 method: GET,  auth: none,  render: api-only,    params: [],                 status: planted}
+  - {path: /api/auth/recover,                 method: POST, auth: none,  render: spa-angular, params: [reference],        status: planted}
+  - {path: /api/intake/manifests,             method: POST, auth: admin, render: spa-angular, params: [manifest],         status: planted}
+  - {path: /api/audit/events,                 method: GET,  auth: user,  render: spa-angular, params: [page, size, actor, action, expand], status: planted}
+  - {path: /api/reports/summary,              method: GET,  auth: user,  render: spa-angular, params: [x-account-context], status: planted}
+  - {path: /api/search,                       method: GET,  auth: user,  render: spa-angular, params: [q, sort, page, size], status: planted}
+  - {path: /api/workspace/layout,             method: GET,  auth: none,  render: spa-angular, params: [mrd_layout],       status: planted}

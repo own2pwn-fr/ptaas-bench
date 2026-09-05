@@ -1,0 +1,36 @@
+id: BENCH-ADMN-0003
+title: LDAP filter injection in the staff directory surname search
+app: admin
+component: api
+class: ldapi
+severity: high
+entrypoint:
+  method: GET
+  path: /api/directory/people
+  auth: user
+  param: surname
+  param_in: query
+  default_value: lindqvist
+discovery:
+  render: spa-angular
+  reachable_from:
+  - /directory
+  requires:
+  - js-execution
+  difficulty: 2
+oracle:
+  kind: differential
+  condition: The surname is concatenated into the search filter rather than escaped. A signal is raised
+    when the filter the directory actually parsed contained parenthesised structure introduced by this
+    parameter AND the entries returned were a strict superset of what the same search returns with the
+    value properly escaped, i.e. the caller really received entries the intended filter excludes. A metacharacter
+    that widens nothing never raises it.
+  poc: GET /api/directory/people?surname=*)(objectClass=*
+  signal: console.directory.people.filter_widened
+tags:
+- rest
+- ldap
+- authenticated
+introduced: '2026-09-05'
+decoy_note: Directory search was the first feature written against the corporate directory, before anyone
+  had wrapped filter building in a helper, and it has never needed changing since.
