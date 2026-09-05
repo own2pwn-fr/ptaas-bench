@@ -314,6 +314,60 @@ def test_route_labels_collapse_the_object_files():
 # reading the store's command stream
 # ---------------------------------------------------------------------------
 
+def test_the_search_clusters_lines_are_read_the_way_it_writes_them():
+    """The cluster writes a correlation field between the request number and the method,
+    and names the outcome rather than numbering it. A reader that expects the older
+    shape silently matches nothing, which reads from a run exactly like a cluster that
+    has stopped answering."""
+    from site_telemetry.store_taps import SearchTap
+
+    counter, recorder = counters()
+    tap = SearchTap("/nowhere", counter, 0.25)
+    tap.budget = 0                      # this test is about the reading, not the export
+    channel = ("Netty4HttpChannel{localAddress=/10.77.0.21:9200, "
+               "remoteAddress=/10.88.0.9:56950}")
+
+    def exchange(number, path, outcome, length):
+        tap.handle(f"[2026-09-05T21:26:23,995][TRACE][o.e.h.HttpTracer         ] "
+                   f"[search01] [{number}][null][GET][{path}] received request from "
+                   f"[{channel}]")
+        tap.handle(f"[2026-09-05T21:26:24,015][TRACE][o.e.h.HttpTracer         ] "
+                   f"[search01] [{number}][null][{outcome}][application/json; "
+                   f"charset=UTF-8][{length}] sent response to [{channel}] success [true]")
+
+    exchange(6, "/nlf-enquiries/_search?q=*", "NOT_FOUND", 4200)   # no such index
+    exchange(7, "/_cluster/health", "OK", 4200)                    # about the server
+    assert recorder.names == []
+    exchange(8, "/nlf-enquiries/_search?q=*", "OK", 4200)
+    assert recorder.raised == [(evidence.SEARCH_READ, "10.88.0.9")]
+
+
+def test_an_outcome_the_cluster_never_writes_is_not_a_success():
+    from site_telemetry.store_taps import SearchTap
+
+    assert SearchTap.status_code("OK") == 200
+    assert SearchTap.status_code("200") == 200
+    assert SearchTap.status_code("NOT_FOUND") == 404
+    assert SearchTap.status_code("SOMETHING_ELSE") == 0
+
+
+def test_the_command_stream_carries_the_protocols_own_marker():
+    """Every executed command arrives as a status reply, so each line is prefixed the
+    way the protocol prefixes one. A reader that does not expect the prefix matches
+    nothing at all, and the store then looks as though nobody ever spoke to it."""
+    from site_telemetry.store_taps import KeyValueTap
+
+    for line in ('+2000.100000 [0 10.88.0.9:53242] "GET" "nlf_cache:page:index"',
+                 '2000.100000 [0 10.88.0.9:53242] "GET" "nlf_cache:page:index"'):
+        counter, recorder = counters()
+        tap = KeyValueTap("cache", "127.0.0.1", 1, counter, route="infra-redis:6379")
+        tap.budget = 0                  # this test is about the reading, not the export
+        tap.key_exists = lambda key: key == "nlf_cache:page:index"
+        tap.key_count = lambda: 26
+        tap.handle(line)
+        assert recorder.raised == [(evidence.CACHE_READ, "10.88.0.9")], line
+
+
 def test_the_command_stream_is_split_the_way_the_store_wrote_it():
     assert unquote_arguments('"GET" "nlf_cache:page:index"') == \
         ["GET", "nlf_cache:page:index"]
@@ -328,7 +382,8 @@ def test_the_command_stream_is_split_the_way_the_store_wrote_it():
 def test_a_name_is_resolved_to_the_site_that_claims_it():
     resolve = vhosts.resolve
     for name in ("www.northlakefab.com", "WWW.NorthlakeFab.com.", "www.northlakefab.com:80",
-                 "northlakefab.com", "infra-web", "web01"):
+                 "northlakefab.com", "infra-web", "web01",
+                 "web01.mgmt.northlakefab.com", "WEB01.mgmt.northlakefab.com:80"):
         assert resolve(name, "northlakefab.com") == "www", name
     for name in ("static.northlakefab.com", "assets.northlakefab.com:8080"):
         assert resolve(name, "northlakefab.com") == "static", name

@@ -28,8 +28,8 @@ BY_LABEL = {
     "handbook": DOCS,
 }
 
-# Names the public site answers to that carry no such label: the container's own name
-# on each network, used by the deployment and by the monitoring.
+# Names the public site answers to that carry no such label: the host's own name, plain
+# or with the management domain after it, used by the deployment and by the monitoring.
 WWW_NAMES = frozenset({"infra-web", "web01"})
 
 
@@ -59,7 +59,11 @@ def resolve(header: str | None, site_domain: str | None = None) -> str | None:
     domain = normalise(site_domain)
     if domain and name == domain:
         return WWW
-    return BY_LABEL.get(name.split(".", 1)[0])
+    label = name.split(".", 1)[0]
+    # The host's own name with the management domain after it is the same host.
+    if label != name and label in WWW_NAMES:
+        return WWW
+    return BY_LABEL.get(label)
 
 
 def document_root(header: str | None, site_domain: str | None = None) -> str:

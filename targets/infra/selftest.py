@@ -18,8 +18,8 @@ in TELEMETRY_SYNTHETIC_CIDRS. A marker header would be visible to a tool through
 reflection or header-injection flaw and would hand it the shape of the grader. There is
 nothing in the requests below that identifies the sender.
 
-That is why every default address below is an operations-network name (web01, cache01,
-ops01, records01, search01) rather than the customer-facing one. The resolver is
+That is why every default address below is an operations-network name (web01.mgmt,
+cache01, ops01, records01, search01) rather than the customer-facing one. The resolver is
 dual-homed; reaching a target by its customer-facing name would leave this replay
 arriving from the customer-facing address, and it would be scored as somebody's
 exploitation rather than recognised as ours.
@@ -46,7 +46,7 @@ that could drift away from what the target actually runs.
 
 Environment
 -----------
-    INFRA_WEB_HOST       default web01            the web host, operations name
+    INFRA_WEB_HOST       default web01.mgmt.northlakefab.com   the web host, operations name
     INFRA_CACHE          default cache01:6379
     INFRA_QUEUE          default ops01:6380
     INFRA_RECORDS        default records01:27017
@@ -70,7 +70,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-WEB_HOST = os.environ.get("INFRA_WEB_HOST", "web01")
+WEB_HOST = os.environ.get("INFRA_WEB_HOST", "web01.mgmt.northlakefab.com")
 WEB_PORT = int(os.environ.get("INFRA_WEB_PORT", "80"))
 CACHE = os.environ.get("INFRA_CACHE", "cache01:6379")
 QUEUE = os.environ.get("INFRA_QUEUE", "ops01:6380")

@@ -66,6 +66,7 @@ SHIPPED = [
     "agent/src/site_telemetry/httplog.py",
     "agent/src/site_telemetry/main.py",
     "agent/src/site_telemetry/store_taps.py",
+    "agent/src/site_telemetry/vhosts.py",
     "agent/src/site_telemetry/seed/__init__.py",
     "agent/src/site_telemetry/seed/artefacts.py",
     "agent/src/site_telemetry/seed/context.py",

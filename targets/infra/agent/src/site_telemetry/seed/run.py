@@ -69,9 +69,20 @@ def _write_tree(root: str, files: dict[str, bytes]) -> list[tuple[str, bytes]]:
 
 
 def _reset_dir(path: str) -> None:
-    if os.path.isdir(path):
-        shutil.rmtree(path)
+    """Empty a directory in place, keeping the directory itself.
+
+    In place rather than removed and recreated: the document roots and the password
+    file's directory are separate mounts on this host, and a mount point cannot be
+    unlinked from inside the container that holds it -- the attempt fails with
+    "resource busy" and takes the whole deployment with it.
+    """
     os.makedirs(path, mode=0o755, exist_ok=True)
+    for name in os.listdir(path):
+        full = os.path.join(path, name)
+        if os.path.isdir(full) and not os.path.islink(full):
+            shutil.rmtree(full)
+        else:
+            os.unlink(full)
 
 
 def _tracked_source(ctx, site: dict[str, bytes]) -> dict[str, bytes]:

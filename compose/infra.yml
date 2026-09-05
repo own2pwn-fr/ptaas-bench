@@ -66,7 +66,11 @@ services:
           - "static.${INFRA_SITE_DOMAIN:-northlakefab.com}"
           - "docs.${INFRA_SITE_DOMAIN:-northlakefab.com}"
       bench-internal:
-        aliases: [web01]
+        # The management name of this host, which is the name the deployment notes and
+        # the monitoring both use for it. Written out in full: `web01` on its own is a
+        # house number that half the racks in the country answer to, and on a shared
+        # operations segment the short name resolves to whichever of them replies first.
+        aliases: ["web01.mgmt.${INFRA_SITE_DOMAIN:-northlakefab.com}"]
     dns: ["10.88.0.5"]
     healthcheck:
       test: ["CMD-SHELL", "nc -z 127.0.0.1 80"]
@@ -163,9 +167,14 @@ services:
       xpack.ml.enabled: "false"
       bootstrap.memory_lock: "false"
       # Request tracing: a line per request and a line per response, with the remote
-      # address on both. Turned on to chase a partner's timeouts.
-      http.tracer.enabled: "true"
-      logger.org.elasticsearch.http.HttpTracer: trace
+      # address on both. Turned on to chase a partner's timeouts. The switch is the
+      # logger's own level, and the filter has to name what it covers -- an empty
+      # filter matches nothing, so the tracer would stay quiet with the level alone.
+      logger.org.elasticsearch.http: trace
+      http.tracer.include: "*"
+      # Logs to the cluster's own log directory rather than to the container's output,
+      # which is where the estate's log shipping has always picked them up.
+      ES_LOG_STYLE: file
       # A works cluster of this size never needed more, and the host it shares is small.
       ES_JAVA_OPTS: "-Xms512m -Xmx512m"
     volumes:
@@ -264,7 +273,7 @@ services:
       SITES_ROOT: /srv/sites
       PRIVATE_ROOT: /srv/private
       ACCESS_LOG: /var/log/site/access.log
-      SITE_BASE_URL: http://web01
+      SITE_BASE_URL: http://web01.mgmt.${INFRA_SITE_DOMAIN:-northlakefab.com}
       SEARCH_LOG_DIR: /var/log/search
 
       CACHE_HOST: cache01

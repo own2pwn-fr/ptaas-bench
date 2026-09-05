@@ -99,7 +99,12 @@ class KeyValueTap(threading.Thread):
         finally:
             stream.close()
 
-    LINE = re.compile(r"^(?P<when>\d+\.\d+) \[(?P<db>\d+) (?P<peer>[^\]]+)\] (?P<rest>.*)$")
+    # Each executed command arrives as one status reply, so the line carries the marker
+    # the protocol puts in front of one. Optional, because the marker is a fact about
+    # the wire rather than about the record, and a reader that insists on it would stop
+    # reading the moment the store's own framing changed.
+    LINE = re.compile(
+        r"^\+?(?P<when>\d+\.\d+) \[(?P<db>\d+) (?P<peer>[^\]]+)\] (?P<rest>.*)$")
 
     def handle(self, line: str) -> None:
         match = self.LINE.match(line)
@@ -279,13 +284,49 @@ class SearchTap(threading.Thread):
 
     daemon = True
 
+    # The cluster writes, in bracketed fields: the request number, the correlation
+    # header the caller may have sent (`null` when it did not), then the method and the
+    # target on the way in, and the outcome, the media type and the length on the way
+    # out. The outcome is written by name -- `OK`, `NOT_FOUND` -- rather than as a
+    # number, and older releases wrote the number, so both spellings are read.
     RECEIVED = re.compile(
-        r"\[(?P<identifier>\d+)\]\[(?P<method>[A-Z]+)\]\[(?P<path>[^\]]+)\]"
-        r".*?received request from \[(?P<channel>.*?)\]")
+        r"\[(?P<identifier>\d+)\]\[(?P<correlation>[^\]]*)\]\[(?P<method>[A-Z]+)\]"
+        r"\[(?P<path>[^\]]+)\] received request from \[(?P<channel>.*)\]")
     SENT = re.compile(
-        r"\[(?P<identifier>\d+)\]\[(?P<status>\d{3})\]\[[^\]]*\]\[(?P<length>\d+)\]"
-        r"\s*sent response to \[(?P<channel>.*?)\]")
+        r"\[(?P<identifier>\d+)\]\[(?P<correlation>[^\]]*)\]\[(?P<status>[A-Z0-9_]+)\]"
+        r"\[(?P<type>[^\]]*)\]\[(?P<length>\d+)\] sent response to \[(?P<channel>.*?)\]")
     ADDRESS = re.compile(r"remoteAddress=/?(?P<host>[0-9a-fA-F:.]+):(?P<port>\d+)")
+
+    # The outcome names the cluster writes, and what each of them is on the wire. A name
+    # this table does not hold resolves to nothing rather than to a guess: an outcome
+    # nobody recognises must not be read as a successful answer.
+    STATUS_CODES = {
+        "CONTINUE": 100, "SWITCHING_PROTOCOLS": 101,
+        "OK": 200, "CREATED": 201, "ACCEPTED": 202, "NON_AUTHORITATIVE_INFORMATION": 203,
+        "NO_CONTENT": 204, "RESET_CONTENT": 205, "PARTIAL_CONTENT": 206,
+        "MULTI_STATUS": 207,
+        "MULTIPLE_CHOICES": 300, "MOVED_PERMANENTLY": 301, "FOUND": 302,
+        "SEE_OTHER": 303, "NOT_MODIFIED": 304, "USE_PROXY": 305,
+        "TEMPORARY_REDIRECT": 307,
+        "BAD_REQUEST": 400, "UNAUTHORIZED": 401, "PAYMENT_REQUIRED": 402,
+        "FORBIDDEN": 403, "NOT_FOUND": 404, "METHOD_NOT_ALLOWED": 405,
+        "NOT_ACCEPTABLE": 406, "PROXY_AUTHENTICATION": 407, "REQUEST_TIMEOUT": 408,
+        "CONFLICT": 409, "GONE": 410, "LENGTH_REQUIRED": 411,
+        "PRECONDITION_FAILED": 412, "REQUEST_ENTITY_TOO_LARGE": 413,
+        "REQUEST_URI_TOO_LONG": 414, "UNSUPPORTED_MEDIA_TYPE": 415,
+        "REQUESTED_RANGE_NOT_SATISFIED": 416, "EXPECTATION_FAILED": 417,
+        "UNPROCESSABLE_ENTITY": 422, "LOCKED": 423, "FAILED_DEPENDENCY": 424,
+        "TOO_MANY_REQUESTS": 429,
+        "INTERNAL_SERVER_ERROR": 500, "NOT_IMPLEMENTED": 501, "BAD_GATEWAY": 502,
+        "SERVICE_UNAVAILABLE": 503, "GATEWAY_TIMEOUT": 504,
+        "HTTP_VERSION_NOT_SUPPORTED": 505, "INSUFFICIENT_STORAGE": 507,
+    }
+
+    @classmethod
+    def status_code(cls, written: str) -> int:
+        if written.isdigit():
+            return int(written)
+        return cls.STATUS_CODES.get(written, 0)
 
     TEMPLATES = (
         (re.compile(r"^/_cat/(?P<what>[a-z]+)"), "/_cat/:what"),
@@ -366,20 +407,21 @@ class SearchTap(threading.Thread):
         method, path, peer, _when = entry
         self.matched += 1
         route = self.route_for(path)
+        status = self.status_code(sent.group("status"))
         if self.budget > 0 and route.strip("/"):
             self.budget -= 1
             emit.record_request(
                 method=method,
                 route=route,
                 path=path,
-                status=int(sent.group("status")),
+                status=status,
                 peer=peer,
             )
         self.counters.search_response(
             peer=peer,
             method=method,
             path=path,
-            status=int(sent.group("status")),
+            status=status,
             length=int(sent.group("length")),
             route=route,
             when=time.time(),
