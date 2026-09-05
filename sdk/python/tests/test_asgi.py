@@ -10,7 +10,8 @@ from starlette.responses import JSONResponse, PlainTextResponse
 from starlette.routing import Mount, Route, WebSocketRoute
 from starlette.testclient import TestClient
 
-from ptaas_bench_sdk import BenchASGIMiddleware
+from conftest import ORGANIC_PEER, SYNTHETIC_PEER
+from telemetry_agent import TelemetryASGIMiddleware
 
 
 async def ok(request):
@@ -23,17 +24,29 @@ async def echo(request):
 
 
 async def sink(request):
-    from ptaas_bench_sdk import get_bench
+    from telemetry_agent import get_telemetry
 
-    get_bench().trigger("BENCH-SHOP-0001", oracle_kind="sink", payload="x' UNION SELECT")
+    get_telemetry().signal(
+        "shop.catalog.query.plan_anomaly", {"payload": "x' UNION SELECT"}
+    )
     return JSONResponse({"ok": True})
 
 
-async def graphql_view(request):
-    from ptaas_bench_sdk import get_bench
+async def importer(request):
+    from telemetry_agent import get_telemetry
 
     document = await request.json()
-    get_bench().graphql(
+    get_telemetry().outbound(
+        document["source_url"], signal="shop.imports.fetch.external", param="source_url"
+    )
+    return JSONResponse({"status": "accepted"})
+
+
+async def graphql_view(request):
+    from telemetry_agent import get_telemetry
+
+    document = await request.json()
+    get_telemetry().graphql(
         document.get("query"),
         variables=document.get("variables"),
         operation_name=document.get("operationName"),
@@ -43,11 +56,11 @@ async def graphql_view(request):
 
 
 async def ws_view(websocket):
-    from ptaas_bench_sdk import get_bench
+    from telemetry_agent import get_telemetry
 
     await websocket.accept()
     payload = await websocket.receive_text()
-    get_bench().websocket(payload, route="/ws")
+    get_telemetry().websocket(payload, route="/ws")
     await websocket.send_text("ack")
     await websocket.close()
 
@@ -58,6 +71,7 @@ ROUTES = [
     Route("/api/orders/{id}", ok, methods=["GET", "POST"]),
     Route("/api/echo", echo, methods=["POST"]),
     Route("/api/sink", sink, methods=["GET"]),
+    Route("/api/admin/imports", importer, methods=["POST"]),
     Route("/graphql", graphql_view, methods=["POST"]),
     WebSocketRoute("/ws", ws_view),
     Mount("/sub", app=SUB),
@@ -65,14 +79,14 @@ ROUTES = [
 
 
 @pytest.fixture()
-def client(bench):
-    app = BenchASGIMiddleware(Starlette(routes=ROUTES), bench=bench)
+def client(telemetry):
+    app = TelemetryASGIMiddleware(Starlette(routes=ROUTES), telemetry=telemetry)
     with TestClient(app) as test_client:
         yield test_client
 
 
-def one_request(bench, collector, count=1):
-    bench.flush()
+def one_request(telemetry, collector, count=1):
+    telemetry.flush()
     events = [e for e in collector.wait_for(count) if e["type"] == "http_request"]
     assert events, "no http_request event was emitted"
     return events[-1]
@@ -86,9 +100,9 @@ def params_of(event, location=None):
     }
 
 
-def test_route_template_not_concrete_url(client, bench, collector):
+def test_route_template_not_concrete_url(client, telemetry, collector):
     client.get("/api/orders/42")
-    event = one_request(bench, collector)
+    event = one_request(telemetry, collector)
     assert event["route"] == "/api/orders/{id}"
     assert event["path"] == "/api/orders/42"
     assert event["method"] == "GET"
@@ -96,31 +110,31 @@ def test_route_template_not_concrete_url(client, bench, collector):
     assert params_of(event, "path") == {"id": "42"}
 
 
-def test_mounted_sub_app_reports_the_full_template(client, bench, collector):
+def test_mounted_sub_app_reports_the_full_template(client, telemetry, collector):
     client.get("/sub/items/7")
-    event = one_request(bench, collector)
+    event = one_request(telemetry, collector)
     assert event["route"] == "/sub/items/{item_id}"
     assert event["path"] == "/sub/items/7"
     assert params_of(event, "path") == {"item_id": "7"}
 
 
-def test_unmatched_route_keeps_the_real_path(client, bench, collector):
+def test_unmatched_route_keeps_the_real_path(client, telemetry, collector):
     client.get("/nope/deep/path?x=1")
-    event = one_request(bench, collector)
+    event = one_request(telemetry, collector)
     assert event["route"] == "<unmatched>"
     assert event["path"] == "/nope/deep/path"
     assert event["status"] == 404
     assert params_of(event, "query") == {"x": "1"}
 
 
-def test_method_mismatch_still_credits_the_endpoint(client, bench, collector):
+def test_method_mismatch_still_credits_the_endpoint(client, telemetry, collector):
     client.post("/api/products")
-    event = one_request(bench, collector)
+    event = one_request(telemetry, collector)
     assert event["route"] == "/api/products"
     assert event["status"] == 405
 
 
-def test_enumerates_every_input_location(client, bench, collector):
+def test_enumerates_every_input_location(client, telemetry, collector):
     client.post(
         "/api/orders/1001?q=laptop&q=laptop&debug=",
         json={"note": "hi", "filter": {"tags": ["a", "b"]}},
@@ -133,7 +147,7 @@ def test_enumerates_every_input_location(client, bench, collector):
         },
         cookies={"session": "abc"},
     )
-    event = one_request(bench, collector)
+    event = one_request(telemetry, collector)
     assert params_of(event, "query") == {"q": "laptop", "debug": ""}
     assert params_of(event, "path") == {"id": "1001"}
     assert params_of(event, "json") == {"note": "hi", "filter.tags.0": "a", "filter.tags.1": "b"}
@@ -147,73 +161,95 @@ def test_enumerates_every_input_location(client, bench, collector):
     assert "accept-encoding" not in headers  # not a plausible injection point
 
 
-def test_form_and_multipart_bodies(client, bench, collector):
+def test_form_and_multipart_bodies(client, telemetry, collector):
     client.post("/api/orders/1", data={"user": "admin", "pw": "' OR 1"})
-    event = one_request(bench, collector)
+    event = one_request(telemetry, collector)
     assert params_of(event, "body") == {"user": "admin", "pw": "' OR 1"}
 
     collector.events.clear()
     client.post("/api/orders/1", files={"doc": ("../../etc/passwd", b"PAYLOAD")}, data={"note": "hello"})
-    event = one_request(bench, collector)
+    event = one_request(telemetry, collector)
     multipart = params_of(event, "multipart")
     assert multipart["note"] == "hello"
     assert multipart["doc"] == "PAYLOAD"
     assert multipart["doc.filename"] == "../../etc/passwd"
 
 
-def test_body_is_still_delivered_to_the_application(client, bench, collector):
+def test_body_is_still_delivered_to_the_application(client, telemetry, collector):
     payload = json.dumps({"deep": {"value": "x" * 3000}})
     response = client.post("/api/echo", content=payload, headers={"content-type": "application/json"})
     assert response.text == payload  # the app read exactly what the client sent
-    event = one_request(bench, collector)
+    event = one_request(telemetry, collector)
     assert params_of(event, "json")["deep.value"] == "x" * 256
 
 
-def test_large_body_streams_through_untouched(bench, collector):
-    bench.config = bench.config.with_overrides(max_body_bytes=64)
-    app = BenchASGIMiddleware(Starlette(routes=ROUTES), bench=bench)
+def test_large_body_streams_through_untouched(telemetry, collector):
+    telemetry.config = telemetry.config.with_overrides(max_body_bytes=64)
+    app = TelemetryASGIMiddleware(Starlette(routes=ROUTES), telemetry=telemetry)
     with TestClient(app) as test_client:
         payload = "z" * 5000
         response = test_client.post("/api/echo", content=payload, headers={"content-type": "text/plain"})
     assert response.text == payload
-    event = one_request(bench, collector)
+    event = one_request(telemetry, collector)
     raw = [p for p in event["params"] if p["in"] == "raw"][0]
     assert raw["value_len"] == 64  # only the buffered prefix is reported
 
 
-def test_selftest_header_and_seeder_agent_mark_events_synthetic(client, bench, collector):
-    client.get("/api/sink", headers={"X-Bench-Selftest": "1"})
-    bench.flush()
+def test_traffic_from_a_configured_peer_is_marked_synthetic(telemetry, collector):
+    """Identification is by source address only.
+
+    A marker header would leak through any reflection, verbose error or
+    header-injection flaw and hand the tool the shape of the grader; a peer address
+    cannot be reflected out of the target, and the collector re-checks it anyway.
+    """
+    app = TelemetryASGIMiddleware(Starlette(routes=ROUTES), telemetry=telemetry)
+    with TestClient(app, client=(SYNTHETIC_PEER, 51000)) as platform_client:
+        platform_client.get("/api/sink")
+    telemetry.flush()
     events = collector.wait_for(2)
-    assert all(e["synthetic"] is True for e in events)
-    # The trigger fired by the planted sink inherits the flag, otherwise the platform
+    assert events and all(e["synthetic"] is True for e in events)
+    # The signal raised during that request inherits the marker, otherwise the platform
     # would credit itself with its own seeding traffic.
-    assert any(e["type"] == "trigger" and e["synthetic"] for e in events)
+    assert any(e["type"] == "signal" and e["synthetic"] for e in events)
 
     collector.events.clear()
-    client.get("/api/products", headers={"user-agent": "ptaas-bench-seeder/1.0"})
-    assert one_request(bench, collector)["synthetic"] is True
+    with TestClient(app, client=(ORGANIC_PEER, 51000)) as tool_client:
+        tool_client.get("/api/sink", headers={"x-selftest": "1", "user-agent": "seeder/1.0"})
+    telemetry.flush()
+    events = collector.wait_for(2)
+    # No header and no user-agent can flip it: only the peer address decides.
+    assert events and all(e["synthetic"] is False for e in events)
 
-    collector.events.clear()
-    client.get("/api/products")
-    assert one_request(bench, collector)["synthetic"] is False
 
-
-def test_trigger_is_correlated_with_its_request(client, bench, collector):
+def test_signal_is_correlated_with_its_request(client, telemetry, collector):
     client.get("/api/sink")
-    bench.flush()
+    telemetry.flush()
     events = collector.wait_for(2)
     request = next(e for e in events if e["type"] == "http_request")
-    trigger = next(e for e in events if e["type"] == "trigger")
-    assert trigger["evidence"]["request_id"] == request["request_id"]
+    signal = next(e for e in events if e["type"] == "signal")
+    assert signal["attributes"]["request_id"] == request["request_id"]
 
 
-def test_graphql_helper_merges_into_the_single_request_event(client, bench, collector):
+def test_outbound_registration_carries_the_route_of_its_request(client, telemetry, collector):
+    client.post("/api/admin/imports", json={"source_url": "http://7f3a.oob.attacker.example/x"})
+    telemetry.flush()
+    correlation = collector.wait_for_correlations()[-1]
+    assert correlation["destination_host"] == "7f3a.oob.attacker.example"
+    assert correlation["signal"] == "shop.imports.fetch.external"
+    assert correlation["param"] == "source_url"
+    # Route and request id come from the in-flight request, so a sink only has to name
+    # the destination it is about to fetch.
+    assert correlation["route"] == "/api/admin/imports"
+    request = next(e for e in collector.events if e["type"] == "http_request")
+    assert correlation["request_id"] == request["request_id"]
+
+
+def test_graphql_helper_merges_into_the_single_request_event(client, telemetry, collector):
     client.post(
         "/graphql",
         json={"query": "query Me($id:ID!){user(id:$id){email}}", "variables": {"id": "7"}, "operationName": "Me"},
     )
-    bench.flush()
+    telemetry.flush()
     requests = collector.of_type("http_request")
     assert len(requests) == 1  # one request stays one event
     graphql = params_of(requests[0], "graphql")
@@ -222,11 +258,11 @@ def test_graphql_helper_merges_into_the_single_request_event(client, bench, coll
     assert graphql["query"].startswith("query Me(")
 
 
-def test_websocket_route_and_helper(client, bench, collector):
+def test_websocket_route_and_helper(client, telemetry, collector):
     with client.websocket_connect("/ws?token=abc") as socket:
         socket.send_text(json.dumps({"op": "subscribe", "channel": "orders"}))
         assert socket.receive_text() == "ack"
-    bench.flush()
+    telemetry.flush()
     event = collector.of_type("http_request")[-1]
     assert event["route"] == "/ws"
     assert event["method"] == "WEBSOCKET"
@@ -234,38 +270,42 @@ def test_websocket_route_and_helper(client, bench, collector):
     assert params_of(event, "websocket") == {"message.op": "subscribe", "message.channel": "orders"}
 
 
-def test_auth_subject_can_be_declared_by_the_app(bench, collector):
+def test_auth_subject_can_be_declared_by_the_app(telemetry, collector):
     async def whoami(request):
-        from ptaas_bench_sdk import get_bench
+        from telemetry_agent import get_telemetry
 
-        get_bench().set_auth_subject("customer:1001")
+        get_telemetry().set_auth_subject("customer:1001")
         return JSONResponse({"ok": True})
 
-    app = BenchASGIMiddleware(Starlette(routes=[Route("/me", whoami)]), bench=bench)
+    app = TelemetryASGIMiddleware(Starlette(routes=[Route("/me", whoami)]), telemetry=telemetry)
     with TestClient(app) as test_client:
         test_client.get("/me")
-    assert one_request(bench, collector)["auth_subject"] == "customer:1001"
+    assert one_request(telemetry, collector)["auth_subject"] == "customer:1001"
 
 
-def test_response_is_untouched_and_carries_no_marker(client, bench, collector):
+def test_response_is_untouched_and_carries_no_marker(client, telemetry, collector):
     response = client.get("/api/products")
     assert response.json() == {"ok": True}
-    leaked = [name for name in response.headers if "bench" in name.lower()]
+    leaked = [
+        name
+        for name in response.headers
+        if any(word in name.lower() for word in ("telemetry", "trace", "otel", "request-id"))
+    ]
     assert leaked == []
-    assert "bench" not in response.text.lower()
+    assert "telemetry" not in response.text.lower()
 
 
-def test_add_middleware_wiring_still_finds_the_router(bench, collector):
+def test_add_middleware_wiring_still_finds_the_router(telemetry, collector):
     # add_middleware hands the middleware the *inner* ASGI app, not the application,
     # so the router has to be discovered through the wrapper chain.
     app = Starlette(routes=ROUTES)
-    app.add_middleware(BenchASGIMiddleware, bench=bench)
+    app.add_middleware(TelemetryASGIMiddleware, telemetry=telemetry)
     with TestClient(app) as test_client:
         test_client.get("/api/orders/9")
-    assert one_request(bench, collector)["route"] == "/api/orders/{id}"
+    assert one_request(telemetry, collector)["route"] == "/api/orders/{id}"
 
 
-def test_fastapi_route_templates(bench, collector):
+def test_fastapi_route_templates(telemetry, collector):
     fastapi = pytest.importorskip("fastapi")
     api = fastapi.FastAPI()
 
@@ -273,9 +313,45 @@ def test_fastapi_route_templates(bench, collector):
     def read(id: int):  # noqa: A002 - mirrors a target's handler signature
         return {"id": id}
 
-    api.add_middleware(BenchASGIMiddleware, framework_app=api, bench=bench)
+    api.add_middleware(TelemetryASGIMiddleware, framework_app=api, telemetry=telemetry)
     with TestClient(api) as test_client:
         assert test_client.get("/api/orders/42").json() == {"id": 42}
-    event = one_request(bench, collector)
+    event = one_request(telemetry, collector)
     assert event["route"] == "/api/orders/{id}"
     assert params_of(event, "path") == {"id": "42"}
+
+
+def test_a_forwarded_header_cannot_buy_a_synthetic_marking(telemetry, collector):
+    """Regression: the platform's own traffic is identified by socket peer only.
+
+    If a forwarded header could decide it, a tool would send
+    ``X-Forwarded-For: <platform range>`` once and erase its whole run from scoring.
+    """
+    app = TelemetryASGIMiddleware(Starlette(routes=ROUTES), telemetry=telemetry)
+    with TestClient(app, client=(ORGANIC_PEER, 51000)) as tool_client:
+        for headers in (
+            {"x-forwarded-for": SYNTHETIC_PEER},
+            {"x-forwarded-for": f"{SYNTHETIC_PEER}, 10.99.0.8"},
+            {"x-real-ip": SYNTHETIC_PEER},
+            {"forwarded": f"for={SYNTHETIC_PEER};proto=http"},
+            {"true-client-ip": SYNTHETIC_PEER, "client-ip": SYNTHETIC_PEER},
+        ):
+            tool_client.get("/api/sink", headers=headers)
+    telemetry.flush()
+    events = collector.wait_for(10)
+    assert len(events) == 10
+    assert all(event["synthetic"] is False for event in events)
+
+
+def test_a_rewritten_peer_that_the_caller_announced_is_not_trusted(telemetry, collector):
+    """Defence in depth for a deployment that resolves proxy headers upstream.
+
+    Some servers replace scope["client"] with the forwarded value before the
+    application sees it. When the address we are handed is one the caller itself
+    announced, it is the caller's claim, not the socket's, so it cannot classify.
+    """
+    app = TelemetryASGIMiddleware(Starlette(routes=ROUTES), telemetry=telemetry)
+    with TestClient(app, client=(SYNTHETIC_PEER, 51000)) as spoofer:
+        spoofer.get("/api/products", headers={"x-forwarded-for": SYNTHETIC_PEER})
+    telemetry.flush()
+    assert one_request(telemetry, collector)["synthetic"] is False

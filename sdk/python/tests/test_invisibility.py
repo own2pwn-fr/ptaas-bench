@@ -16,7 +16,7 @@ from starlette.responses import JSONResponse
 from starlette.routing import Route
 from starlette.testclient import TestClient
 
-from ptaas_bench_sdk import BenchASGIMiddleware, BenchClient, BenchWSGIMiddleware, config_from_env
+from telemetry_agent import TelemetryASGIMiddleware, TelemetryClient, TelemetryWSGIMiddleware, config_from_env
 
 
 async def handler(request):
@@ -45,9 +45,9 @@ def test_a_hung_collector_adds_no_measurable_latency(blackhole_url):
     request; queued instrumentation must not move the numbers at all.
     """
     bare = TestClient(Starlette(routes=ROUTES))
-    client = BenchClient(config_from_env(app="t", collector_url=blackhole_url, enabled=True, timeout=30.0))
+    client = TelemetryClient(config_from_env(service="t", endpoint=blackhole_url, enabled=True, timeout=30.0))
     try:
-        instrumented = TestClient(BenchASGIMiddleware(Starlette(routes=ROUTES), bench=client))
+        instrumented = TestClient(TelemetryASGIMiddleware(Starlette(routes=ROUTES), telemetry=client))
         baseline = _durations(bare, 200)
         measured = _durations(instrumented, 200)
 
@@ -69,9 +69,9 @@ def test_timing_oracle_shape_is_preserved(blackhole_url):
         time.sleep(0.06)
         return JSONResponse({"ok": True})
 
-    client = BenchClient(config_from_env(app="t", collector_url=blackhole_url, enabled=True, timeout=30.0))
+    client = TelemetryClient(config_from_env(service="t", endpoint=blackhole_url, enabled=True, timeout=30.0))
     try:
-        app = BenchASGIMiddleware(Starlette(routes=[Route("/slow", slow)]), bench=client)
+        app = TelemetryASGIMiddleware(Starlette(routes=[Route("/slow", slow)]), telemetry=client)
         with TestClient(app) as test_client:
             samples = []
             for _ in range(10):
@@ -86,9 +86,9 @@ def test_timing_oracle_shape_is_preserved(blackhole_url):
 def test_a_refused_collector_changes_nothing_on_the_response():
     bare = TestClient(Starlette(routes=ROUTES))
     # Port 1 on loopback: connections are refused immediately.
-    client = BenchClient(config_from_env(app="t", collector_url="http://127.0.0.1:1", enabled=True))
+    client = TelemetryClient(config_from_env(service="t", endpoint="http://127.0.0.1:1", enabled=True))
     try:
-        instrumented = TestClient(BenchASGIMiddleware(Starlette(routes=ROUTES), bench=client))
+        instrumented = TestClient(TelemetryASGIMiddleware(Starlette(routes=ROUTES), telemetry=client))
         expected = bare.get("/api/orders/1")
         actual = instrumented.get("/api/orders/1")
         assert actual.status_code == expected.status_code
@@ -101,19 +101,19 @@ def test_a_refused_collector_changes_nothing_on_the_response():
         client.close(0.5)
 
 
-def test_an_exception_inside_the_asgi_instrumentation_never_reaches_the_app(bench, monkeypatch):
+def test_an_exception_inside_the_asgi_instrumentation_never_reaches_the_app(telemetry, monkeypatch):
     def explode(*args, **kwargs):
         raise RuntimeError("instrumentation is broken")
 
-    monkeypatch.setattr(bench, "new_param_collector", explode)
-    app = BenchASGIMiddleware(Starlette(routes=ROUTES), bench=bench)
+    monkeypatch.setattr(telemetry, "new_param_collector", explode)
+    app = TelemetryASGIMiddleware(Starlette(routes=ROUTES), telemetry=telemetry)
     with TestClient(app) as client:
         response = client.get("/api/orders/1")
     assert response.status_code == 200
     assert response.json() == {"ok": True}
 
 
-def test_an_exception_inside_the_wsgi_instrumentation_never_reaches_the_app(bench, monkeypatch):
+def test_an_exception_inside_the_wsgi_instrumentation_never_reaches_the_app(telemetry, monkeypatch):
     flask_app = Flask(__name__)
 
     @flask_app.get("/api/products")
@@ -123,28 +123,29 @@ def test_an_exception_inside_the_wsgi_instrumentation_never_reaches_the_app(benc
     def explode(*args, **kwargs):
         raise RuntimeError("instrumentation is broken")
 
-    monkeypatch.setattr(bench, "new_param_collector", explode)
-    flask_app.wsgi_app = BenchWSGIMiddleware(flask_app.wsgi_app, bench=bench)
+    monkeypatch.setattr(telemetry, "new_param_collector", explode)
+    flask_app.wsgi_app = TelemetryWSGIMiddleware(flask_app.wsgi_app, telemetry=telemetry)
     response = flask_app.test_client().get("/api/products")
     assert response.status_code == 200
     assert response.get_json() == {"ok": True}
 
 
-def test_application_errors_are_reported_unchanged(bench):
+def test_application_errors_are_reported_unchanged(telemetry):
     async def boom(request):
         raise RuntimeError("kaboom")
 
-    app = BenchASGIMiddleware(Starlette(routes=[Route("/boom", boom)]), bench=bench)
+    app = TelemetryASGIMiddleware(Starlette(routes=[Route("/boom", boom)]), telemetry=telemetry)
     with TestClient(app, raise_server_exceptions=False) as client:
         response = client.get("/boom")
     assert response.status_code == 500
     # The SDK must not smuggle anything into an error body a scanner will read.
-    assert b"bench" not in response.content.lower()
-    bench.flush()
+    assert b"telemetry" not in response.content.lower()
+    assert b"otel" not in response.content.lower()
+    telemetry.flush()
 
 
-def test_no_extra_routes_are_exposed(bench):
-    app = BenchASGIMiddleware(Starlette(routes=ROUTES), bench=bench)
+def test_no_extra_routes_are_exposed(telemetry):
+    app = TelemetryASGIMiddleware(Starlette(routes=ROUTES), telemetry=telemetry)
     with TestClient(app) as client:
-        for path in ("/__bench", "/bench", "/_bench/events", "/healthz/bench"):
+        for path in ("/telemetry", "/__telemetry", "/v1/traces", "/metrics", "/healthz/telemetry"):
             assert client.get(path).status_code == 404

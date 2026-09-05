@@ -7,12 +7,12 @@ import threading
 
 import pytest
 
-from ptaas_bench_sdk import BenchClient, config_from_env
+from telemetry_agent import TelemetryClient, config_from_env
 
 
 def test_concurrent_threads_lose_nothing(collector):
-    config = config_from_env(app="testapp", collector_url=collector.url, enabled=True, flush_interval=0.02)
-    client = BenchClient(config)
+    config = config_from_env(service="testapp", endpoint=collector.url, enabled=True, flush_interval=0.02)
+    client = TelemetryClient(config)
     try:
         def worker(index: int) -> None:
             for step in range(50):
@@ -43,9 +43,9 @@ def test_each_forked_worker_flushes_independently(collector):
     parent had queued at fork time -- duplicated events would double-count in scoring.
     """
     config = config_from_env(
-        app="testapp", collector_url=collector.url, enabled=True, flush_interval=30.0
+        service="testapp", endpoint=collector.url, enabled=True, flush_interval=30.0
     )
-    client = BenchClient(config)
+    client = TelemetryClient(config)
     try:
         client.note("queued-before-fork")  # still in the parent's queue when we fork
 

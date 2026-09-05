@@ -1,8 +1,9 @@
 """In-process fake collector plus the fixtures every test builds on.
 
 It is a real HTTP server on a real socket rather than a stubbed sender, so the tests
-exercise the same code path a target does in compose: httpx, connection reuse, batch
-serialisation, and the failure handling when that server misbehaves.
+exercise the same path a deployed target does: httpx, connection reuse, batch
+serialisation, and the failure handling when that server misbehaves. It answers both
+collector paths: /v1/traces (records) and /v1/correlations (outbound registrations).
 """
 
 from __future__ import annotations
@@ -15,8 +16,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 
-from ptaas_bench_sdk import BenchClient, config_from_env
-from ptaas_bench_sdk._client import _reset_for_tests
+from telemetry_agent import TelemetryClient, config_from_env
+from telemetry_agent._client import _reset_active
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -34,12 +35,19 @@ class _Handler(BaseHTTPRequestHandler):
             self.end_headers()
             return
         try:
-            batch = json.loads(raw)["events"]
+            body = json.loads(raw)
         except Exception:  # noqa: BLE001
-            batch = []
+            body = {}
         with collector.lock:
-            collector.batches.append(batch)
-            collector.events.extend(batch)
+            collector.paths.append(self.path)
+            if self.path.rstrip("/").endswith("correlations"):
+                # One dependency link per request, sent as the bare record: it is
+                # dispatched the moment it is registered, so there is nothing to batch.
+                collector.correlations.append(body)
+            else:
+                batch = body.get("events", [])
+                collector.batches.append(batch)
+                collector.events.extend(batch)
         self.send_response(202)
         self.send_header("content-length", "0")
         self.end_headers()
@@ -52,7 +60,9 @@ class FakeCollector:
     def __init__(self) -> None:
         self.lock = threading.Lock()
         self.events: list[dict] = []
+        self.correlations: list[dict] = []
         self.batches: list[list[dict]] = []
+        self.paths: list[str] = []
         self.delay = 0.0
         self.status = 202
         self._server = ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
@@ -65,6 +75,16 @@ class FakeCollector:
     def url(self) -> str:
         host, port = self._server.server_address[:2]
         return f"http://{host}:{port}"
+
+    def wait_for_correlations(self, count: int = 1, timeout: float = 5.0) -> list[dict]:
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            with self.lock:
+                if len(self.correlations) >= count:
+                    return list(self.correlations)
+            time.sleep(0.005)
+        with self.lock:
+            return list(self.correlations)
 
     def wait_for(self, count: int, timeout: float = 5.0) -> list[dict]:
         deadline = time.monotonic() + timeout
@@ -94,21 +114,33 @@ def collector() -> FakeCollector:
 
 @pytest.fixture(autouse=True)
 def _clean_singleton():
-    _reset_for_tests()
+    _reset_active()
     yield
-    _reset_for_tests()
+    _reset_active()
+
+
+# The platform's own traffic (seeding, self-test, health checks) comes from this range;
+# targets get it in TELEMETRY_SYNTHETIC_CIDRS. Requests from it are marked synthetic and
+# are never scored, so the platform cannot credit a tool with its own traffic.
+SYNTHETIC_CIDRS = ("10.99.0.0/16",)
+SYNTHETIC_PEER = "10.99.0.7"
+ORGANIC_PEER = "203.0.113.9"
 
 
 @pytest.fixture()
-def bench(collector: FakeCollector) -> BenchClient:
-    """A client wired to the fake collector, flushing fast enough for tests."""
-    from ptaas_bench_sdk import _client as client_module
+def telemetry(collector: FakeCollector) -> TelemetryClient:
+    """A client wired to the fake collector, exporting fast enough for tests."""
+    from telemetry_agent import _client as client_module
 
     config = config_from_env(
-        app="testapp", collector_url=collector.url, enabled=True, flush_interval=0.02
+        service="testapp",
+        endpoint=collector.url,
+        enabled=True,
+        flush_interval=0.02,
+        synthetic_cidrs=SYNTHETIC_CIDRS,
     )
-    instance = BenchClient(config)
-    client_module._ACTIVE = instance  # so bench.trigger()/get_bench() resolve to it
+    instance = TelemetryClient(config)
+    client_module._ACTIVE = instance  # so get_telemetry() resolves to it
     yield instance
     instance.close(1.0)
 
@@ -118,8 +150,7 @@ def blackhole_url() -> str:
     """A listening socket that accepts connections and then answers nothing.
 
     Models the nastiest realistic collector failure: reachable, so no fast connection
-    error, but never replying. If instrumentation were synchronous this would freeze
-    the target.
+    error, but never replying. Synchronous instrumentation would freeze the target.
     """
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)

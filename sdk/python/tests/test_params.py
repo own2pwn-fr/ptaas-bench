@@ -4,13 +4,13 @@ from __future__ import annotations
 
 import hashlib
 
-from ptaas_bench_sdk._params import (
+from telemetry_agent._params import (
     ParamCollector,
     collect_body,
     collect_headers,
     describe_param,
     flatten_json,
-    is_injectable_header,
+    is_described_header,
     iter_multipart,
     parse_cookie_header,
 )
@@ -81,8 +81,8 @@ def test_collector_is_bounded():
 
 def test_header_allowlist_covers_x_prefixed_and_named_headers():
     for name in ("host", "referer", "user-agent", "origin", "content-type", "x-forwarded-for", "x-tenant"):
-        assert is_injectable_header(name)
-    assert not is_injectable_header("accept-encoding")
+        assert is_described_header(name)
+    assert not is_described_header("accept-encoding")
 
 
 def test_collect_headers_splits_cookies():

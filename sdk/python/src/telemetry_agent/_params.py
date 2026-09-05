@@ -1,14 +1,15 @@
-"""Input enumeration: turn a raw request into the ``params`` array of an ``http_request`` event.
+"""Request attribute extraction: turn a raw request into the ``params`` array of a record.
 
-The scorer decides "reached" from the route and "exercised" from these entries, so an
-input the SDK fails to enumerate is a vulnerability the tool can never be credited for
-finding. Enumeration is therefore deliberately exhaustive and never trusts the app to
-have parsed anything: every location is parsed from the raw bytes on the wire.
+An error or latency record is only actionable if it says which inputs the handler saw,
+so every location is described: query string, body (JSON, form, multipart), path
+variables, cookies and the headers a handler may key behaviour off. Everything is
+parsed from the raw bytes rather than from the framework's parsed view, because the
+framework only exposes what the handler asked for, and the interesting requests are
+usually the ones where the handler asked for the wrong thing.
 
-Values are reported as ``(sha256, length, 256-char sample)`` rather than verbatim. The
-sha256 is what lets the scorer compare an observed value against the catalog's
-``default_value`` and tell "the tool merely visited this parameter" from "the tool
-actually fuzzed it"; the sample exists so a human can audit that verdict.
+Values are described as ``(sha256, length, 256-character sample)`` rather than stored
+verbatim: the hash makes it possible to group requests that carried the same value, and
+to tell a default value from an unusual one, without keeping user data in the pipeline.
 """
 
 from __future__ import annotations
@@ -21,15 +22,15 @@ from urllib.parse import parse_qsl
 
 SAMPLE_MAX = 256
 
-# Nesting/size guards. A scanner will happily post a 5 MB deeply nested JSON blob;
-# enumeration runs on the request path, so it must be bounded by construction.
+# Nesting and volume guards. Documents of a few megabytes with deep nesting do arrive;
+# extraction runs on the request path, so its cost is bounded by construction.
 JSON_DEPTH_MAX = 16
 DEFAULT_MAX_PARAMS = 1024
 
-# Headers a scanner plausibly injects into. Everything ``x-*`` is included because
-# custom headers are exactly where header-driven sinks (tenant ids, feature flags,
-# debug switches) live in the planted apps.
-INJECTABLE_HEADERS = frozenset(
+# Headers worth describing: the ones a handler, a proxy or a cache may key behaviour
+# off. Everything ``x-*`` is included because custom headers are where per-tenant and
+# feature-toggle routing lives.
+DESCRIBED_HEADERS = frozenset(
     {
         "host",
         "referer",
@@ -44,15 +45,15 @@ INJECTABLE_HEADERS = frozenset(
 )
 
 
-def is_injectable_header(name: str) -> bool:
+def is_described_header(name: str) -> bool:
     lowered = name.lower()
-    return lowered in INJECTABLE_HEADERS or lowered.startswith("x-")
+    return lowered in DESCRIBED_HEADERS or lowered.startswith("x-")
 
 
 def sha256_of(value: str | bytes) -> str:
     if isinstance(value, str):
-        # surrogatepass keeps lone surrogates (from percent-decoded junk) hashable
-        # instead of raising on the request path.
+        # surrogatepass keeps lone surrogates (which percent-decoding can produce)
+        # hashable instead of raising on the request path.
         value = value.encode("utf-8", "surrogatepass")
     return hashlib.sha256(value).hexdigest()
 
@@ -64,7 +65,7 @@ def _to_text(value: str | bytes) -> str:
 
 
 def describe_param(name: str, location: str, value: str | bytes) -> dict[str, Any]:
-    """Build one ``params`` entry. ``value_len`` counts bytes for binary values."""
+    """Describe one input. ``value_len`` counts bytes for binary values."""
     text = _to_text(value)
     return {
         "name": name,
@@ -78,9 +79,10 @@ def describe_param(name: str, location: str, value: str | bytes) -> dict[str, An
 def json_scalar_to_text(value: Any) -> str:
     """Render a JSON leaf the way it looked on the wire.
 
-    ``"laptop"`` must hash to sha256(b"laptop") so it matches a catalog
-    ``default_value``; a number must hash like its textual form. Hence: strings raw,
-    everything else via json.dumps (``true`` / ``null`` / ``1001``).
+    ``"laptop"`` must hash to sha256(b"laptop"), and a number must hash like its
+    textual form, so that the same value carried as JSON, as a form field or as a query
+    parameter groups together. Hence: strings raw, everything else via json.dumps
+    (``true`` / ``null`` / ``1001``).
     """
     if isinstance(value, str):
         return value
@@ -98,7 +100,7 @@ def flatten_json(value: Any, prefix: str = "", depth: int = 0) -> Iterator[tuple
     """Yield ``(dotted_path, text_value)`` for every leaf of a decoded JSON document.
 
     ``{"filter": {"tags": ["a"]}}`` yields ``filter.tags.0``. Empty containers are
-    yielded as leaves so their *name* still shows up as an observable input.
+    yielded as leaves so their *name* still appears as an observed input.
     """
     if depth > JSON_DEPTH_MAX:
         return
@@ -137,10 +139,11 @@ def _multipart_boundary(content_type: str) -> bytes | None:
 def iter_multipart(body: bytes, content_type: str) -> Iterator[tuple[str, str | bytes]]:
     """Yield ``(field_name, value)`` for a multipart body, parsed from raw bytes.
 
-    Written by hand rather than with ``python-multipart``/``cgi`` because the parser
-    must survive a fuzzer's deliberately malformed parts (missing terminator, bogus
-    headers) without raising: a crash here would cost the whole event.
-    File parts additionally yield ``<field>.filename``, itself a classic sink input.
+    Written by hand rather than with a full parser because this one must survive the
+    malformed bodies that show up in production (missing terminator, truncated upload,
+    bogus part headers) without raising: an exception here would cost the whole record,
+    and malformed uploads are exactly the requests someone will want to look at.
+    File parts additionally yield ``<field>.filename``.
     """
     boundary = _multipart_boundary(content_type)
     if not boundary:
@@ -165,8 +168,9 @@ def iter_multipart(body: bytes, content_type: str) -> Iterator[tuple[str, str | 
 def parse_cookie_header(raw: str) -> Iterator[tuple[str, str]]:
     """Split a Cookie header by hand.
 
-    ``http.cookies.SimpleCookie`` silently discards pairs it considers illegal, which
-    is precisely the shape of an injected cookie payload, so it cannot be used here.
+    ``http.cookies.SimpleCookie`` silently discards pairs it considers illegal, and a
+    malformed cookie is usually the reason the request is being looked at in the first
+    place, so it cannot be used here.
     """
     for chunk in raw.split(";"):
         chunk = chunk.strip()
@@ -179,12 +183,12 @@ def parse_cookie_header(raw: str) -> Iterator[tuple[str, str]]:
 
 
 def graphql_params(query: Any, variables: Any, operation_name: Any) -> Iterator[tuple[str, str]]:
-    """Yield ``in="graphql"`` entries for one GraphQL operation.
+    """Yield ``in="graphql"`` attributes for one GraphQL operation.
 
-    Variables keep a ``variables.`` prefix so a catalog entry can name a specific
-    argument (``param: variables.id``) with no ambiguity against ``query`` itself.
-    The document is reported verbatim, not parsed: introspection of the selection set
-    is interpretation, and interpretation belongs to the scorer.
+    Variables keep a ``variables.`` prefix so a dashboard can name one argument
+    (``variables.id``) with no ambiguity against ``query`` itself. The document is
+    reported verbatim rather than parsed: turning a document into a selection set is
+    interpretation, and interpretation belongs downstream, not on the request path.
     """
     if isinstance(query, str) and query:
         yield ("query", query)
@@ -197,13 +201,12 @@ def graphql_params(query: Any, variables: Any, operation_name: Any) -> Iterator[
 
 
 class ParamCollector:
-    """Ordered, de-duplicated, bounded accumulator of ``params`` entries.
+    """Ordered, de-duplicated, bounded accumulator of described inputs.
 
-    De-duplication is on (location, name, value hash) rather than (location, name):
-    a repeated parameter with a *different* value is an HTTP-parameter-pollution
-    payload, and collapsing it to one entry would hide the very thing being scored.
-    Identical repeats do collapse, which is what the "one entry per name" wording in
-    the OpenAPI contract is about.
+    De-duplication is on (location, name, value hash) rather than (location, name): a
+    repeated parameter carrying a *different* value is the interesting case -- it is
+    what makes two identical-looking requests behave differently -- and collapsing it
+    to a single entry would hide it. Identical repeats do collapse.
     """
 
     __slots__ = ("_entries", "_seen", "_max", "truncated")
@@ -230,7 +233,7 @@ class ParamCollector:
             self.add(name, location, value)
 
     def extend_entries(self, entries) -> None:
-        """Merge pre-built entries (from bench.graphql/bench.websocket helpers)."""
+        """Merge already-described inputs (from the graphql/websocket helpers)."""
         for entry in entries:
             key = (entry.get("in", ""), entry.get("name", ""), entry.get("value_sha256", ""))
             if key in self._seen or len(self._entries) >= self._max:
@@ -263,12 +266,12 @@ def collect_headers(collector: ParamCollector, headers) -> None:
         if lowered == "cookie":
             collector.add_many(parse_cookie_header(value), "cookie")
             continue
-        if is_injectable_header(lowered):
+        if is_described_header(lowered):
             collector.add(lowered, "header", value)
 
 
 def collect_body(collector: ParamCollector, body: bytes, content_type: str) -> None:
-    """Parse the body by content type, with a JSON sniff for content-type-less fuzzing."""
+    """Describe the body by content type, sniffing JSON when the type is missing."""
     if not body:
         return
     base = (content_type or "").split(";")[0].strip().lower()
@@ -280,8 +283,8 @@ def collect_body(collector: ParamCollector, body: bytes, content_type: str) -> N
             return
         collector.add_many(flatten_json(decoded), "json")
         if isinstance(decoded, dict) and isinstance(decoded.get("query"), str):
-            # A GraphQL POST is JSON on the wire; report it under both locations so a
-            # catalog entry can be written against either view of the same request.
+            # A GraphQL call is JSON on the wire; describing it under both locations
+            # lets a dashboard be written against either view of the same request.
             collector.add_many(
                 graphql_params(decoded.get("query"), decoded.get("variables"), decoded.get("operationName")),
                 "graphql",
