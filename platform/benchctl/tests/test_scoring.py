@@ -611,3 +611,60 @@ def test_client_ip_is_descriptive_and_never_excludes_traffic(make_catalog):
                         client_ip="10.99.0.1", user_agent="bench-selftest/1.0")
     out = outcome(entry, [forged], root)
     assert out.reach is True and out.exercise is True
+
+
+def _infra_chain(make_catalog):
+    """The shape `infra` ships: a dated archive only findable once the directory
+    listing above it has been enumerated (BENCH-INFR-0012 requires 0001)."""
+    listing = vuln_entry(
+        id="BENCH-INFR-0001", app="infra", **{"class": "dir_listing"}, severity="medium",
+        entrypoint={"method": "GET", "path": "/media/", "param": None, "default_value": None},
+        discovery={"render": "static-html", "difficulty": 1},
+        oracle={"kind": "artifact",
+                "condition": "The index page listed the directory's real entries to the caller."},
+    )
+    archive = vuln_entry(
+        id="BENCH-INFR-0012", app="infra", **{"class": "backup_file"}, severity="high",
+        entrypoint={"method": "GET", "path": "/media/wwwroot-preflight-20260712.tar.gz",
+                    "param": None, "default_value": None},
+        discovery={"render": "static-html", "difficulty": 3},
+        oracle={"kind": "artifact",
+                "condition": "The archive body was served to the caller in full."},
+        requires_prereq=["BENCH-INFR-0001"],
+    )
+    return load_catalog(make_catalog([listing, archive]))
+
+
+def test_a_single_link_chain_is_measured(make_catalog):
+    catalog = _infra_chain(make_catalog)
+    doc = score_run(catalog, events_from_iterable([
+        http_event(app="infra", route="/media/"),
+        trigger_event("BENCH-INFR-0001", app="infra"),
+        http_event(app="infra", route="/media/wwwroot-preflight-20260712.tar.gz"),
+        trigger_event("BENCH-INFR-0012", app="infra"),
+    ]))
+    chains = doc["chains"]
+    assert chains["max_depth"] == 1
+    assert chains["depth_histogram"] == {"0": 1, "1": 1}
+    assert chains["chained_vulns"] == 1
+    assert chains["chains_completed"] == 1
+    assert chains["chains_broken"] == []
+    assert chains["by_depth"]["1"]["trigger"]["recall"] == 1.0
+
+
+def test_the_tail_of_a_chain_without_its_head_is_reported_as_an_anomaly(make_catalog):
+    # A tool credited with the archive but not the listing either got there by a
+    # word list rather than by enumeration, or an oracle failed to fire. Either way
+    # it is worth seeing, and it is never silently repaired.
+    catalog = _infra_chain(make_catalog)
+    doc = score_run(catalog, events_from_iterable([
+        http_event(app="infra", route="/media/wwwroot-preflight-20260712.tar.gz"),
+        trigger_event("BENCH-INFR-0012", app="infra"),
+    ]))
+    chains = doc["chains"]
+    assert chains["chains_completed"] == 0
+    assert chains["chains_broken"] == [
+        {"vuln_id": "BENCH-INFR-0012", "missing_prereqs": ["BENCH-INFR-0001"]}
+    ]
+    assert chains["by_depth"]["0"]["trigger"]["recall"] == 0.0
+    assert chains["by_depth"]["1"]["trigger"]["recall"] == 1.0

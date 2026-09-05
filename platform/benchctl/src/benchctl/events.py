@@ -99,6 +99,10 @@ class Event:
 class HttpRequestEvent(Event):
     method: str = "GET"
     route: str = "/"
+    # Optional: the vhost that served the request. Today's SDKs do not report it,
+    # so crawl coverage collapses the host and says so; when they do, coverage of a
+    # multi-vhost target becomes exact without any further change here.
+    host: str | None = None
     path: str | None = None
     status: int | None = None
     auth_subject: str | None = None
@@ -355,6 +359,7 @@ def event_from_dict(d: Mapping[str, Any]) -> Event:
         return HttpRequestEvent(
             method=str(d.get("method", "GET")).upper(),
             route=str(d.get("route", d.get("path", "/"))),
+            host=(d.get("host") or d.get("vhost") or None),
             path=d.get("path"),
             status=d.get("status"),
             auth_subject=d.get("auth_subject"),

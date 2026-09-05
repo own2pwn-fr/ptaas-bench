@@ -27,7 +27,15 @@ MATCHING RULES, in order:
        method is accepted against any method;
    (c) the finding's URL path is an instance of the entrypoint route template
        (:func:`benchctl.routes.route_matches_path`, so ``/api/orders/1002``
-       matches ``/api/orders/:id``).
+       matches ``/api/orders/:id``);
+   (d) the host agrees, when the host can discriminate. A finding always carries a
+       host (it carries a URL), and where a target serves several vhosts the route
+       inventory says which one hosts the planted flaw. ``/.git/config`` exposed on
+       ``www`` and correctly refused on ``static`` is then two different verdicts
+       rather than one collapsed row. When the target declares a single host, or
+       the finding's host designates no declared vhost, matching falls back to
+       host-agnostic and every row says so in ``host_match`` -- an assumption that
+       changes a verdict has to be visible.
    No location match against any vulnerability => ``false-positive``. This is the
    only verdict that is unambiguously the tool's fault: it reported a hole where
    the ground truth says there is none.
@@ -90,7 +98,7 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
 from .catalog import Catalog, Vuln
-from .inventory import STATUS_SAFE, RouteInventory
+from .inventory import STATUS_SAFE, RouteInventory, normalize_host
 from .routes import path_from_url, route_matches_path
 
 __all__ = [
@@ -143,6 +151,11 @@ class Finding:
     @property
     def path(self) -> str:
         return path_from_url(self.url)
+
+    @property
+    def host(self) -> str | None:
+        """Hostname the finding was reported against, port stripped."""
+        return normalize_host(self.authority)
 
     @property
     def authority(self) -> str | None:
@@ -255,13 +268,30 @@ def _fp_basis(
         else list(inventories.values()) if not app else []
     )
     for inv in candidates:
-        entry = inv.match_path(f.method, f.path)
+        entry = inv.match_path(f.method, f.path, host=f.host)
         if entry is None:
             continue
         if entry.status == STATUS_SAFE:
             return "inventory-safe-route", entry.status
         return "inventory-known-route", entry.status
     return "unknown-route", None
+
+
+def _host_agrees(
+    v: Vuln, inv: RouteInventory | None, resolved_host: str | None
+) -> bool:
+    """Is this vulnerability planted on the vhost the finding names?
+
+    Only decides when it can: no inventory, no resolved host, or an entrypoint the
+    inventory does not scope to a host all mean "no opinion", and the finding is
+    matched host-agnostically.
+    """
+    if inv is None or resolved_host is None:
+        return True
+    planted_hosts = inv.planted_hosts(v.entrypoint.method, v.entrypoint.path)
+    if not planted_hosts:
+        return True
+    return resolved_host in planted_hosts
 
 
 def classify_findings(
@@ -287,11 +317,24 @@ def classify_findings(
 
     for f in findings:
         app = _resolve_app(f, app_map)
+        inv = (inventories or {}).get(app) if app else None
+        resolved_host = inv.resolve_host(f.host) if inv else None
+        if inv is None:
+            host_match = "no-inventory"
+        elif inv.single_host:
+            # One vhost: the host carries no information, and saying so is honest.
+            host_match = "agnostic-single-host"
+        elif resolved_host:
+            host_match = "exact"
+        else:
+            host_match = "agnostic-host-unresolved"
+
         candidates = [
             v for v in in_scope
             if (not app or not v.app or v.app == app)
             and (f.method is None or f.method == v.entrypoint.method)
             and route_matches_path(v.entrypoint.path, f.path)
+            and _host_agrees(v, inv, resolved_host if host_match == "exact" else None)
         ]
 
         best: tuple[int, str, str, Vuln | None] = (_RANK[VERDICT_FP], VERDICT_FP,
@@ -329,6 +372,8 @@ def classify_findings(
             "severity": f.severity,
             "confidence": f.confidence,
             "app": app,
+            "host": f.host,
+            "host_match": host_match,
             "verdict": verdict,
             "matched_vuln": matched.id if matched is not None else None,
             "reason": reason,

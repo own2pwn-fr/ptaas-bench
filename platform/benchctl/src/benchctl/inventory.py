@@ -24,6 +24,22 @@ calls ``planted`` with no catalog entry is a flaw nobody can ever be credited fo
 A route wrongly marked ``safe`` while hosting a planted flaw is worse still: real
 detections there would be published as false positives.
 
+VIRTUAL HOSTS. The route key carries a host, because one container can serve several
+vhosts and the same path can be exposed on one and correctly refused on the others
+(``infra`` serves ``www``, ``static`` and ``docs``; ``/.git/config`` is exposed on the
+first and 403 on the other two). Without a host in the key those rows collapse, and
+declaring the hardened ones ``safe`` would publish a tool that correctly reports the
+exposed one as having raised a false positive -- the exact opposite of what the
+target is built to measure.
+
+``host: www`` or ``hosts: [www, static]`` on a row is optional; a row without one
+inherits the inventory's canonical host (``host:``/``canonical_host:``, else the
+authority of ``base_url:``), so every single-host inventory keeps working unchanged
+and is matched host-agnostically. A row listing several hosts expands to one entry
+per host. ``refused_equivalents:`` -- the section a target had to invent while the
+key ignored the host -- is read as ``safe`` rows on its declared host, so those
+hardened paths count for coverage and for precision again instead of being invisible.
+
 An app with no ``routes.yaml`` at all is not an error here -- targets are written
 after the catalog. It degrades to a warning, and only when some other target has
 already published one (otherwise the feature is simply not deployed yet and there
@@ -44,12 +60,42 @@ from .routes import normalize_route, route_matches_path, routes_equal
 __all__ = [
     "RouteEntry",
     "RouteInventory",
+    "host_matches",
+    "normalize_host",
     "load_inventories",
     "crosscheck_inventory",
 ]
 
 STATUS_SAFE = "safe"
 STATUS_PLANTED = "planted"
+
+
+def normalize_host(host: str | None) -> str | None:
+    """Lower-case, strip the port and any trailing dot. None stays None."""
+    if not host:
+        return None
+    value = str(host).strip().rstrip(".").lower()
+    if value.startswith("[") and "]" in value:  # IPv6 literal with a port
+        value = value[1:value.index("]")]
+    elif value.count(":") == 1:
+        value = value.split(":", 1)[0]
+    return value or None
+
+
+def host_matches(row_host: str | None, host: str | None) -> bool:
+    """Does an observed host designate the vhost a row was written for?
+
+    Inventories name vhosts by their short label (``www``) while a finding carries a
+    fully-qualified name (``www.northlakefab.com``) or the harness alias, so the
+    first DNS label is compared as well as the whole name. An unknown host matches
+    nothing here; callers decide whether to fall back to host-agnostic matching.
+    """
+    a, b = normalize_host(row_host), normalize_host(host)
+    if a is None or b is None:
+        return True  # nothing declared on one side: not a discriminator
+    if a == b:
+        return True
+    return a.split(".")[0] == b.split(".")[0]
 
 
 @dataclass(frozen=True)
@@ -62,13 +108,24 @@ class RouteEntry:
     params: tuple[str, ...] = ()
     status: str = STATUS_SAFE
     notes: str | None = None
+    host: str | None = None
+    # "routes" or "refused_equivalents": where the row was declared, kept so a
+    # reader can tell a first-class route from a hardened equivalent.
+    origin: str = "routes"
+    expect_status: int | None = None
 
     @property
     def route_key(self) -> str:
         return normalize_route(self.path)
 
     @property
-    def key(self) -> tuple[str, str, str]:
+    def key(self) -> tuple[str, str, str, str]:
+        return (self.app, normalize_host(self.host) or "", self.method.upper(),
+                self.route_key)
+
+    @property
+    def route_only_key(self) -> tuple[str, str, str]:
+        """Host-collapsed key, used where the observation carries no host."""
         return (self.app, self.method.upper(), self.route_key)
 
 
@@ -77,14 +134,34 @@ class RouteInventory:
     app: str
     routes: tuple[RouteEntry, ...]
     source: str | None = None
+    canonical_host: str | None = None
 
-    by_key: dict[tuple[str, str, str], RouteEntry] = field(init=False, repr=False)
+    by_key: dict[tuple[str, str, str, str], RouteEntry] = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
-        # Later duplicates lose; duplicate keys are reported by crosscheck_inventory.
+        # Later duplicates lose; ambiguous rows are reported by load_inventories.
         self.by_key = {}
         for entry in self.routes:
             self.by_key.setdefault(entry.key, entry)
+
+    @property
+    def hosts(self) -> tuple[str, ...]:
+        return tuple(sorted({normalize_host(r.host) for r in self.routes if r.host}))
+
+    @property
+    def single_host(self) -> bool:
+        """True when the target serves one vhost, so a host cannot discriminate."""
+        return len(self.hosts) <= 1
+
+    def resolve_host(self, host: str | None) -> str | None:
+        """The declared vhost an observed host designates, or None if unknown."""
+        value = normalize_host(host)
+        if value is None:
+            return None
+        for declared in self.hosts:
+            if host_matches(declared, value):
+                return declared
+        return None
 
     def __len__(self) -> int:
         return len(self.routes)
@@ -97,24 +174,29 @@ class RouteInventory:
     def safe(self) -> tuple[RouteEntry, ...]:
         return tuple(r for r in self.routes if r.status == STATUS_SAFE)
 
-    def match_template(self, method: str, route: str) -> RouteEntry | None:
+    def match_template(
+        self, method: str, route: str, host: str | None = None
+    ) -> RouteEntry | None:
         """Strict template lookup, the comparison used for crawl coverage."""
-        for entry in self.routes:
-            if entry.method.upper() == method.upper() and routes_equal(entry.path, route):
+        for entry in self._candidates(method, host):
+            if routes_equal(entry.path, route):
                 return entry
         return None
 
-    def match_path(self, method: str | None, path: str) -> RouteEntry | None:
+    def match_path(
+        self, method: str | None, path: str, host: str | None = None
+    ) -> RouteEntry | None:
         """Lenient lookup of a concrete URL path, used to judge a finding.
 
         A literal route wins over a parameterised one: ``/api/orders/export`` must
-        resolve to itself rather than to ``/api/orders/{id}``.
+        resolve to itself rather than to ``/api/orders/{id}``. When ``host`` names a
+        vhost this target declares, only that vhost's rows are considered -- that is
+        what makes a hardened ``/.git/config`` on one host a confirmed false
+        positive while the exposed one on another host stays a true positive.
         """
         best: RouteEntry | None = None
         best_score = -1
-        for entry in self.routes:
-            if method is not None and entry.method.upper() != method.upper():
-                continue
+        for entry in self._candidates(method, host):
             if not route_matches_path(entry.path, path):
                 continue
             score = 1 if "{" not in entry.route_key else 0
@@ -122,18 +204,67 @@ class RouteInventory:
                 best, best_score = entry, score
         return best
 
+    def _candidates(self, method: str | None, host: str | None) -> list[RouteEntry]:
+        resolved = self.resolve_host(host)
+        return [
+            entry for entry in self.routes
+            if (method is None or entry.method.upper() == str(method).upper())
+            # An unrecognised host is no filter at all: the caller is told the match
+            # was host-agnostic rather than being handed a silent miss.
+            and (resolved is None or host_matches(entry.host, resolved))
+        ]
 
-def _entry_from_dict(app: str, d: Mapping[str, Any]) -> RouteEntry:
-    return RouteEntry(
-        app=app,
-        path=str(d.get("path", "/")),
-        method=str(d.get("method", "GET")).upper(),
-        auth=str(d.get("auth", "none")),
-        render=d.get("render"),
-        params=tuple(str(p) for p in (d.get("params") or ())),
-        status=str(d.get("status", STATUS_SAFE)),
-        notes=d.get("notes"),
-    )
+    def planted_hosts(self, method: str, route: str) -> tuple[str, ...]:
+        """Which vhosts the inventory says host a planted flaw at this location."""
+        return tuple(sorted({
+            normalize_host(entry.host)
+            for entry in self.routes
+            if entry.status == STATUS_PLANTED
+            and entry.method.upper() == str(method).upper()
+            and routes_equal(entry.path, route)
+            and entry.host
+        }))
+
+
+def _row_hosts(d: Mapping[str, Any], canonical: str | None) -> tuple[str | None, ...]:
+    """Hosts a row applies to: `hosts: [...]`, `host: x`, else the canonical one."""
+    hosts = d.get("hosts")
+    if isinstance(hosts, (list, tuple)) and hosts:
+        return tuple(normalize_host(h) for h in hosts)
+    if d.get("host"):
+        return (normalize_host(d["host"]),)
+    return (normalize_host(canonical),)
+
+
+def _entries_from_dict(
+    app: str, d: Mapping[str, Any], canonical: str | None, origin: str = "routes"
+) -> list[RouteEntry]:
+    """One entry per host: a row listing three vhosts is three keys, not one."""
+    base = {
+        "app": app,
+        "path": str(d.get("path", "/")),
+        "method": str(d.get("method", "GET")).upper(),
+        "auth": str(d.get("auth", "none")),
+        "render": d.get("render"),
+        "params": tuple(str(p) for p in (d.get("params") or ())),
+        "status": str(d.get("status", STATUS_SAFE)),
+        "notes": d.get("note") or d.get("notes"),
+        "origin": origin,
+        "expect_status": d.get("expect"),
+    }
+    return [RouteEntry(host=host, **base) for host in _row_hosts(d, canonical)]
+
+
+def _canonical_host(data: Mapping[str, Any]) -> str | None:
+    """The host a row inherits when it declares none."""
+    for key in ("host", "canonical_host", "default_host"):
+        if data.get(key):
+            return normalize_host(data[key])
+    base_url = data.get("base_url")
+    if base_url:
+        authority = str(base_url).split("://", 1)[-1].split("/", 1)[0]
+        return normalize_host(authority)
+    return None
 
 
 def load_inventories(
@@ -167,11 +298,27 @@ def load_inventories(
                       f"declares app {data['app']!r} but lives in targets/{dir_app}/",
                       source=source)
             )
-        entries = [
-            _entry_from_dict(app, r)
-            for r in (data.get("routes") or [])
-            if isinstance(r, Mapping)
-        ]
+        canonical = _canonical_host(data)
+        entries: list[RouteEntry] = []
+        for row in data.get("routes") or []:
+            if isinstance(row, Mapping):
+                entries.extend(_entries_from_dict(app, row, canonical))
+
+        # `refused_equivalents` is the section a target had to invent while the route
+        # key ignored the host: hardened paths that answer 403 on another vhost. Now
+        # that the host is part of the key they are ordinary safe rows, and reading
+        # them here puts them back into coverage and precision without waiting for
+        # the file to be rewritten. Rows already declared under `routes` win.
+        declared = {e.key for e in entries}
+        for row in data.get("refused_equivalents") or []:
+            if not isinstance(row, Mapping):
+                continue
+            for entry in _entries_from_dict(
+                app, {**row, "status": STATUS_SAFE}, canonical, origin="refused_equivalents"
+            ):
+                if entry.key not in declared:
+                    entries.append(entry)
+                    declared.add(entry.key)
         for entry in entries:
             if entry.status not in {STATUS_SAFE, STATUS_PLANTED}:
                 sink.append(
@@ -179,14 +326,24 @@ def load_inventories(
                           f"{entry.method} {entry.path}: status {entry.status!r} is neither "
                           f"{STATUS_SAFE!r} nor {STATUS_PLANTED!r}", source=source)
                 )
-        seen: set[tuple[str, str, str]] = set()
+        # Two rows for one (method, route) with nothing to tell them apart would be
+        # resolved by whichever row happened to be read last, which is exactly the
+        # ambiguity the host field exists to remove.
+        by_route: dict[tuple[str, str], list[RouteEntry]] = {}
         for entry in entries:
-            if entry.key in seen:
-                sink.append(
-                    Issue("warning", "inventory-duplicate-route",
-                          f"{entry.method} {entry.route_key} listed more than once", source=source)
-                )
-            seen.add(entry.key)
+            by_route.setdefault((entry.method.upper(), entry.route_key), []).append(entry)
+        for (method, route), rows in sorted(by_route.items()):
+            if len(rows) < 2:
+                continue
+            hosts = [normalize_host(r.host) for r in rows]
+            if len(set(hosts)) == len(hosts) and None not in hosts:
+                continue  # distinct hosts: unambiguous
+            sink.append(
+                Issue("warning", "inventory-ambiguous-route",
+                      f"{method} {route} is listed {len(rows)} times with no host to tell "
+                      "the rows apart; whichever was read last would decide their status",
+                      source=source)
+            )
 
         if app in out:
             sink.append(
@@ -194,7 +351,8 @@ def load_inventories(
                       f"app {app!r} already loaded from {out[app].source}", source=source)
             )
             continue
-        out[app] = RouteInventory(app=app, routes=tuple(entries), source=source)
+        out[app] = RouteInventory(app=app, routes=tuple(entries), source=source,
+                                  canonical_host=canonical)
     return out
 
 

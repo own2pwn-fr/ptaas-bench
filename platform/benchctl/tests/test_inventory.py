@@ -218,3 +218,165 @@ def test_score_document_with_crawl_and_weak_attribution_matches_the_schema(make_
     assert doc["schema_version"] == "1.1.0"
     assert doc["low_confidence_triggers"]["count"] == 1
     assert len(doc["low_confidence_triggers"]["unattributed_callbacks"]) == 1
+
+
+# --------------------------------------------------------------------------- #
+# virtual hosts
+# --------------------------------------------------------------------------- #
+
+VHOST_SURFACE = [
+    # One container, three vhosts. /.git/config is exposed on www (the deployment
+    # that went wrong) and correctly refused on the two hardened ones.
+    {"path": "/.git/config", "method": "GET", "hosts": ["www"], "render": "static-html",
+     "status": "planted"},
+    {"path": "/.git/config", "method": "GET", "hosts": ["static", "docs"],
+     "render": "static-html", "status": "safe"},
+    {"path": "/index.html", "method": "GET", "hosts": ["www", "static", "docs"],
+     "render": "static-html", "status": "safe"},
+]
+
+
+def vhost_catalog(make_catalog):
+    entry = vuln_entry(
+        id="BENCH-INFR-0001", app="infra", **{"class": "exposed_vcs"}, severity="high",
+        entrypoint={"method": "GET", "path": "/.git/config", "param": None,
+                    "default_value": None},
+        discovery={"render": "static-html", "difficulty": 1},
+        oracle={"kind": "artifact",
+                "condition": "The repository object store was read by the caller."},
+    )
+    root = make_catalog([entry])
+    routes_inventory(root, "infra", VHOST_SURFACE)
+    return root
+
+
+def test_a_row_listing_several_hosts_becomes_several_keys(make_catalog):
+    inv = load_inventories(vhost_catalog(make_catalog))["infra"]
+    assert inv.hosts == ("docs", "static", "www")
+    assert inv.single_host is False
+    assert len(inv.routes) == 6  # 1 + 2 + 3 host-expanded rows
+    assert inv.match_path("GET", "/.git/config", host="www").status == "planted"
+    assert inv.match_path("GET", "/.git/config", host="static").status == "safe"
+    assert inv.planted_hosts("GET", "/.git/config") == ("www",)
+
+
+def test_hosts_match_short_labels_and_fully_qualified_names(make_catalog):
+    inv = load_inventories(vhost_catalog(make_catalog))["infra"]
+    assert inv.resolve_host("www.northlakefab.com") == "www"
+    assert inv.resolve_host("static.northlakefab.com:8080") == "static"
+    assert inv.resolve_host("infra-web") is None  # the harness alias names no vhost
+
+
+def test_the_exposed_vhost_is_a_true_positive_and_the_hardened_one_is_not(make_catalog):
+    root = vhost_catalog(make_catalog)
+    catalog = load_catalog(root)
+    inventories = load_inventories(root)
+    findings = [
+        finding_from_dict({"tool": "zap", "url": "http://www.northlakefab.com/.git/config",
+                           "method": "GET", "cwe": 527, "name": "Exposed .git"}),
+        finding_from_dict({"tool": "zap", "url": "http://static.northlakefab.com/.git/config",
+                           "method": "GET", "cwe": 527, "name": "Exposed .git"}),
+    ]
+    report = classify_findings(catalog, findings, inventories=inventories,
+                               app_map={"www.northlakefab.com": "infra",
+                                        "static.northlakefab.com": "infra"})
+    exposed, hardened = report["findings"]
+    assert exposed["verdict"] == "true-positive"
+    assert exposed["host"] == "www.northlakefab.com" and exposed["host_match"] == "exact"
+    # The hardened twin is a confirmed false positive, not a second true positive:
+    # this is the distinction the target exists to test.
+    assert hardened["verdict"] == "false-positive"
+    assert hardened["fp_basis"] == "inventory-safe-route"
+    assert report["precision"] == 0.5
+    assert report["false_positives_confirmed"] == 1
+
+
+def test_an_unresolvable_host_falls_back_and_says_so(make_catalog):
+    root = vhost_catalog(make_catalog)
+    report = classify_findings(
+        load_catalog(root),
+        [finding_from_dict({"tool": "zap", "url": "http://infra-web/.git/config",
+                            "method": "GET", "cwe": 527, "name": "Exposed .git"})],
+        inventories=load_inventories(root), app_map={"infra-web": "infra"},
+    )
+    row = report["findings"][0]
+    assert row["verdict"] == "true-positive"
+    assert row["host_match"] == "agnostic-host-unresolved"
+
+
+def test_a_single_host_target_is_matched_host_agnostically(make_catalog):
+    root = build(make_catalog)  # SURFACE declares no hosts
+    report = classify_findings(
+        load_catalog(root),
+        [finding_from_dict({"tool": "zap", "url": "http://shopfront:8080/api/products?q=1",
+                            "method": "GET", "param": "q", "cwe": 89, "name": "SQLi"})],
+        inventories=load_inventories(root), app_map={"shopfront": "shopfront"},
+    )
+    assert report["findings"][0]["verdict"] == "true-positive"
+    assert report["findings"][0]["host_match"] == "agnostic-single-host"
+
+
+def test_two_rows_with_no_host_to_tell_them_apart_warn(make_catalog):
+    root = make_catalog([vuln_entry()])
+    routes_inventory(root, "shopfront", [
+        {"path": "/api/products", "method": "GET", "status": "planted"},
+        {"path": "/api/products", "method": "GET", "status": "safe"},
+    ])
+    issues: list = []
+    load_inventories(root, issues=issues)
+    ambiguous = [i for i in issues if i.code == "inventory-ambiguous-route"]
+    assert ambiguous and "read last" in ambiguous[0].message
+
+
+def test_distinct_hosts_are_not_ambiguous(make_catalog):
+    issues: list = []
+    load_inventories(vhost_catalog(make_catalog), issues=issues)
+    assert [i for i in issues if i.code == "inventory-ambiguous-route"] == []
+
+
+def test_refused_equivalents_are_read_as_safe_rows(make_catalog):
+    root = make_catalog([vuln_entry(
+        id="BENCH-INFR-0001", app="infra", **{"class": "exposed_vcs"}, severity="high",
+        entrypoint={"method": "GET", "path": "/.git/config", "param": None,
+                    "default_value": None},
+        oracle={"kind": "artifact", "condition": "The repository object store was read."})])
+    (root / "targets" / "infra").mkdir(parents=True, exist_ok=True)
+    (root / "targets" / "infra" / "routes.yaml").write_text(
+        "app: infra\n"
+        "routes:\n"
+        "  - {path: /.git/config, method: GET, hosts: [www], status: planted}\n"
+        "refused_equivalents:\n"
+        "  - {host: static, path: /.git/config, expect: 403, note: denied by the host}\n",
+        encoding="utf-8")
+    inv = load_inventories(root)["infra"]
+    # The section a target had to invent while the key ignored the host now counts
+    # for coverage and precision instead of being invisible.
+    hardened = inv.match_path("GET", "/.git/config", host="static")
+    assert hardened.status == "safe"
+    assert hardened.origin == "refused_equivalents"
+    assert hardened.expect_status == 403
+
+
+def test_coverage_says_when_it_cannot_tell_vhosts_apart(make_catalog):
+    root = vhost_catalog(make_catalog)
+    doc = score_run(load_catalog(root),
+                    events_from_iterable([http_event(app="infra", route="/.git/config")]),
+                    inventories=load_inventories(root))
+    crawl = doc["metrics"]["crawl"]
+    # Requests carry no vhost today, so one visit credits all three rows; the
+    # inflation is reported rather than hidden.
+    assert crawl["host_resolution"] == "collapsed"
+    # Both /.git/config (3 rows) and /index.html (3 rows) collapse.
+    assert crawl["rows_sharing_a_route_across_hosts"] == 6
+    assert crawl["hosts"] == ["docs", "static", "www"]
+    assert crawl["surface"]["covered"] == 3
+
+    # When an SDK does report the vhost, only that host's row is credited.
+    exact = score_run(load_catalog(root),
+                      events_from_iterable([http_event(app="infra", route="/.git/config",
+                                                       host="www.northlakefab.com")]),
+                      inventories=load_inventories(root))
+    assert exact["metrics"]["crawl"]["host_resolution"] == "host-aware"
+    assert exact["metrics"]["crawl"]["surface"]["covered"] == 1
+    assert exact["metrics"]["crawl"]["by_host"]["www"]["covered"] == 1
+    assert exact["metrics"]["crawl"]["by_host"]["static"]["covered"] == 0

@@ -903,6 +903,27 @@
             "string",
             "null"
           ]
+        },
+        "host": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Host the finding was reported against, taken from its URL."
+        },
+        "host_match": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "exact",
+            "agnostic-single-host",
+            "agnostic-host-unresolved",
+            "no-inventory",
+            null
+          ],
+          "description": "How the host took part in the match. `exact` means the finding's host designates a declared vhost and the verdict distinguishes an exposed path from its hardened twin on another vhost. The `agnostic-*` values record that the host could not discriminate, so the verdict rests on (app, method, route) alone \u2014 an assumption that can change a verdict has to be visible."
         }
       }
     },
@@ -1089,9 +1110,40 @@
               },
               "auth": {
                 "type": "string"
+              },
+              "host": {
+                "type": [
+                  "string",
+                  "null"
+                ]
               }
             }
           }
+        },
+        "host_resolution": {
+          "type": "string",
+          "enum": [
+            "host-aware",
+            "collapsed"
+          ],
+          "description": "`collapsed` means the http_request events carried no vhost, so a request credits every inventory row sharing that (method, route) whatever host it was written for. Coverage of a multi-vhost target is then an upper bound; `rows_sharing_a_route_across_hosts` says how many rows are affected."
+        },
+        "hosts": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Virtual hosts declared by the inventories in scope."
+        },
+        "rows_sharing_a_route_across_hosts": {
+          "type": "integer"
+        },
+        "by_host": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/coverageBlock"
+          },
+          "description": "Coverage per declared vhost."
         }
       }
     }

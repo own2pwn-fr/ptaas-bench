@@ -100,7 +100,7 @@ from .events import (
     address_index,
     normalize_run_record,
 )
-from .inventory import RouteInventory
+from .inventory import RouteInventory, normalize_host
 from .routes import normalize_route, routes_equal
 
 __all__ = [
@@ -569,8 +569,31 @@ def _group_multi(
     return {k: _metric(buckets[k], outcomes) for k in sorted(buckets)}
 
 
-def _coverage_block(entries: Sequence[Any], observed: set[tuple[str, str, str]]) -> dict[str, Any]:
-    covered = sum(1 for e in entries if e.key in observed)
+def _is_covered(entry: Any, observed: "_Observed") -> bool:
+    """Was this inventory row walked?
+
+    Rows are keyed by (app, host, method, route) but today's http_request events
+    carry no host, so a request matches the row's host-collapsed key. When an SDK
+    does report the vhost, the exact key is used and a request to one vhost stops
+    crediting its hardened twins.
+    """
+    return entry.key in observed.with_host or entry.route_only_key in observed.routes
+
+
+@dataclass
+class _Observed:
+    """Request keys actually seen, with and without a vhost."""
+
+    # Host-less observations, which credit every row sharing that (method, route).
+    routes: set[tuple[str, str, str]]
+    # Observations that named a vhost; these credit only that vhost's row.
+    with_host: set[tuple[str, str, str, str]]
+    # Every observation, host or not, used to count traffic off the inventory.
+    any_route: set[tuple[str, str, str]] = field(default_factory=set)
+
+
+def _coverage_block(entries: Sequence[Any], observed: "_Observed") -> dict[str, Any]:
+    covered = sum(1 for e in entries if _is_covered(e, observed))
     total = len(entries)
     return {
         "routes": total,
@@ -597,13 +620,28 @@ def _crawl_coverage(
     reader never has to reconcile two tables to compare them.
     """
     selected = {a: inv for a, inv in inventories.items() if not apps or a in set(apps)}
-    observed: set[tuple[str, str, str]] = set()
-    off_inventory = 0
+    observed = _Observed(set(), set())
+    hosts_reported = False
     for ev in stream.requests:
-        observed.add((ev.app or "", ev.method.upper(), normalize_route(ev.route)))
+        route = normalize_route(ev.route)
+        key = (ev.app or "", ev.method.upper(), route)
+        observed.any_route.add(key)
+        # The wire carries a hostname; the inventory names vhosts by their short
+        # label. Resolve through the target's own inventory, and fall back to the
+        # host-less behaviour when the name designates no declared vhost.
+        inv = selected.get(ev.app or "")
+        vhost = inv.resolve_host(ev.host) if (inv and ev.host) else None
+        if vhost:
+            hosts_reported = True
+            observed.with_host.add((ev.app or "", vhost, ev.method.upper(), route))
+        else:
+            # No vhost on the wire: the visit cannot be attributed to one row, so it
+            # credits them all. That inflation is reported by host_resolution.
+            observed.routes.add(key)
+    off_inventory = 0
     if selected:
-        known = {e.key for inv in selected.values() for e in inv.routes}
-        off_inventory = sum(1 for k in observed if k not in known)
+        known = {e.route_only_key for inv in selected.values() for e in inv.routes}
+        off_inventory = sum(1 for k in observed.any_route if k not in known)
 
     routes = [e for inv in selected.values() for e in inv.routes]
     planted = [e for e in routes if e.status == "planted"]
@@ -615,23 +653,36 @@ def _crawl_coverage(
             buckets.setdefault(str(key(entry) if key(entry) is not None else "unspecified"), []).append(entry)
         return {k: _coverage_block(buckets[k], observed) for k in sorted(buckets)}
 
+    # Rows that share a (method, route) with a row on another vhost cannot be told
+    # apart while requests carry no host: one visit credits all of them. Reported,
+    # not hidden, because it inflates coverage for exactly the targets that serve
+    # the same path from a hardened and an unhardened vhost.
+    collapsed: dict[tuple[str, str, str], int] = {}
+    for entry in routes:
+        collapsed[entry.route_only_key] = collapsed.get(entry.route_only_key, 0) + 1
+    ambiguous = sum(n for n in collapsed.values() if n > 1)
+
     return {
         "inventory_available": bool(selected),
         "apps": sorted(selected),
+        "host_resolution": "host-aware" if hosts_reported else "collapsed",
+        "hosts": sorted({h for inv in selected.values() for h in inv.hosts}),
+        "rows_sharing_a_route_across_hosts": ambiguous,
         "surface": _coverage_block(routes, observed),
         "planted_routes": _coverage_block(planted, observed),
         "safe_routes": _coverage_block(safe, observed),
         "by_app": group(lambda e: e.app),
+        "by_host": group(lambda e: e.host),
         "by_render": group(lambda e: e.render),
         "by_auth": group(lambda e: e.auth),
         # The biased denominator, kept side by side on purpose.
         "planted_vuln_reach": dict(planted_reach),
         "requests_off_inventory": off_inventory,
         "unvisited_routes": [
-            {"app": e.app, "method": e.method, "path": e.path, "route": e.route_key,
-             "status": e.status, "render": e.render, "auth": e.auth}
+            {"app": e.app, "host": e.host, "method": e.method, "path": e.path,
+             "route": e.route_key, "status": e.status, "render": e.render, "auth": e.auth}
             for e in sorted(routes, key=lambda x: (x.app, x.route_key, x.method))
-            if e.key not in observed
+            if not _is_covered(e, observed)
         ],
     }
 

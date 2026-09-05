@@ -346,11 +346,22 @@ def _sections(docs: Sequence[Mapping[str, Any]]) -> list[tuple[str, str, list[st
     out.append(("family", "By family — reach / exercise / trigger", *_family_rows(docs)))
     out.append(("render", "By rendering mode — where SPA crawling collapses", *_render_rows(docs)))
     if _has_crawl(docs):
-        out.append(("crawl",
-                    "Crawl coverage — whole published surface\n"
-                    "Planted-only reach counts just the pages we made attractive; surface "
-                    "coverage counts every route the target declares, safe ones included. "
-                    "Both are shown; neither replaces the other.",
+        note = ("Planted-only reach counts just the pages we made attractive; surface "
+                "coverage counts every route the target declares, safe ones included. "
+                "Both are shown; neither replaces the other.")
+        collapsed = max(
+            (_node(doc, "metrics", "crawl", "rows_sharing_a_route_across_hosts") or 0)
+            for doc in docs
+        )
+        if collapsed and any(
+            _node(doc, "metrics", "crawl", "host_resolution") == "collapsed" for doc in docs
+        ):
+            # Say it in the table's own legend: on a multi-vhost target one visit
+            # credits every row sharing that route, so surface coverage is an upper
+            # bound rather than a measurement.
+            note += (f" Requests carry no virtual host, and {collapsed} inventory rows share "
+                     "a route across hosts, so surface coverage is an upper bound for them.")
+        out.append(("crawl", "Crawl coverage — whole published surface\n" + note,
                     *_crawl_rows(docs)))
     if _has_weak(docs):
         out.append(("weak",
