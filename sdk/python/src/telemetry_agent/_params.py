@@ -165,6 +165,26 @@ def iter_multipart(body: bytes, content_type: str) -> Iterator[tuple[str, str | 
         yield (name, payload)
 
 
+def normalise_host(value: str | None) -> str:
+    """Lower-cased authority with the port removed, or "" when there is nothing to read.
+
+    A service answering for several names needs its records keyed by the name that was
+    asked for, and ``shop.example``, ``Shop.Example`` and ``shop.example:8080`` are the
+    same one. IPv6 literals lose their brackets so that one host reads the same here as
+    it does in a dependency link's ``destination_host``.
+
+    Returns "" rather than a default when the header is missing: a record that says
+    nothing about the host is honest, one that says the wrong host is not.
+    """
+    text = (value or "").strip().lower()
+    if not text:
+        return ""
+    if text.startswith("["):  # [2001:db8::1]:8080
+        closing = text.find("]")
+        return text[1:closing] if closing > 0 else text.lstrip("[")
+    return text.split(":", 1)[0]
+
+
 def parse_cookie_header(raw: str) -> Iterator[tuple[str, str]]:
     """Split a Cookie header by hand.
 

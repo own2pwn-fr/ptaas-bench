@@ -252,6 +252,7 @@ class TelemetryClient:
         method: str,
         route: str,
         path: str | None = None,
+        host: str | None = None,
         status: int | None = None,
         params: Iterable[dict[str, Any]] = (),
         auth_subject: str | None = None,
@@ -267,6 +268,11 @@ class TelemetryClient:
             record["peer_ip"] = peer_ip
         record["method"] = method
         record["route"] = route
+        # Only when the request actually named a host: the same path can be served by
+        # several names with different behaviour, and an absent host is better reported
+        # as absent than guessed from the listening socket.
+        if host:
+            record["host"] = host
         if path is not None:
             record["path"] = path
         if status is not None:

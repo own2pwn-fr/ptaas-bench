@@ -24,7 +24,7 @@ from typing import Any, Callable, Iterable
 
 from . import _context
 from ._client import TelemetryClient, get_telemetry, peer_matches_forwarded_claim
-from ._params import collect_body, collect_headers, collect_query
+from ._params import collect_body, collect_headers, collect_query, normalise_host
 
 UNMATCHED = "<unmatched>"
 
@@ -237,6 +237,7 @@ class TelemetryWSGIMiddleware:
         telemetry.record_request(
             method=environ.get("REQUEST_METHOD", "GET"),
             route=ctx.route or template,
+            host=normalise_host(header_map.get("host")),
             path=f"{script_name}{environ.get('PATH_INFO', '')}",
             status=status,
             params=collector.entries,

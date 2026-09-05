@@ -143,3 +143,14 @@ def test_multipart_yields_field_names_and_filenames():
 def test_multipart_survives_a_truncated_body():
     body = b"--BB\r\nContent-Disposition: form-data; name=\"a\"\r\n\r\nvalue"
     assert dict(iter_multipart(body, "multipart/form-data; boundary=BB")) == {"a": b"value"}
+
+
+def test_normalise_host_drops_the_port_and_the_case():
+    from telemetry_agent._params import normalise_host
+
+    assert normalise_host("Shop.Example:8443") == "shop.example"
+    assert normalise_host("  SHOP.example  ") == "shop.example"
+    # Brackets are dropped so one host reads the same here as in a dependency link.
+    assert normalise_host("[2001:db8::1]:8080") == "2001:db8::1"
+    assert normalise_host("[2001:db8::1]") == "2001:db8::1"
+    assert normalise_host("") == "" and normalise_host(None) == ""

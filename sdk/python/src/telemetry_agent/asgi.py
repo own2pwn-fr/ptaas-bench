@@ -25,7 +25,7 @@ from typing import Any, Callable, Iterable, Sequence
 
 from . import _context
 from ._client import TelemetryClient, get_telemetry, peer_matches_forwarded_claim
-from ._params import collect_body, collect_headers, collect_query
+from ._params import collect_body, collect_headers, collect_query, normalise_host
 
 UNMATCHED = "<unmatched>"
 
@@ -249,9 +249,12 @@ class TelemetryASGIMiddleware:
                 auth_subject = None
 
         method = scope_snapshot.get("method") or ("WEBSOCKET" if scope_snapshot.get("type") == "websocket" else "GET")
+        # HTTP/2 and HTTP/3 carry the authority as a pseudo-header instead of Host.
+        host = normalise_host(header_map.get(":authority") or header_map.get("host"))
         telemetry.record_request(
             method=method,
             route=ctx.route or template,
+            host=host,
             path=scope_snapshot.get("path", ""),
             status=status,
             params=collector.entries,

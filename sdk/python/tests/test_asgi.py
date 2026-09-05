@@ -374,3 +374,69 @@ def test_a_rewritten_peer_that_the_caller_announced_is_not_trusted(telemetry, co
     # handed a claim dressed up as an observation.
     assert event["peer_ip"] == ""
     assert event["client_ip"] == SYNTHETIC_PEER  # description only
+
+
+def test_host_is_reported_and_still_enumerated(client, telemetry, collector):
+    """The scorer keys routes by host: the same path can be exposed on one virtual host
+    and hardened on another, so a visit has to say which one it reached."""
+    client.get("/api/products", headers={"host": "Shop.Example:8443"})
+    event = one_request(telemetry, collector)
+    assert event["host"] == "shop.example"  # lower-cased, port stripped
+    # Still described as an input as well: Host is one, and a sink can key off it.
+    assert params_of(event, "header")["host"] == "Shop.Example:8443"
+
+
+def test_http2_authority_is_used_when_there_is_no_host_header(telemetry, collector):
+    import asyncio
+
+    app = TelemetryASGIMiddleware(Starlette(routes=ROUTES), telemetry=telemetry)
+    scope = {
+        "type": "http",
+        "http_version": "2",
+        "method": "GET",
+        "path": "/api/products",
+        "raw_path": b"/api/products",
+        "query_string": b"",
+        "root_path": "",
+        "client": (ORGANIC_PEER, 4444),
+        "headers": [(b":authority", b"Shop.Example:8443"), (b"user-agent", b"h2")],
+    }
+
+    async def receive():
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    async def send(message):
+        return None
+
+    asyncio.run(app(scope, receive, send))
+    telemetry.flush()
+    assert one_request(telemetry, collector)["host"] == "shop.example"
+
+
+def test_a_request_without_a_host_reports_none(telemetry, collector):
+    import asyncio
+
+    app = TelemetryASGIMiddleware(Starlette(routes=ROUTES), telemetry=telemetry)
+    scope = {
+        "type": "http",
+        "http_version": "1.0",  # a Host header is not mandatory in HTTP/1.0
+        "method": "GET",
+        "path": "/api/products",
+        "raw_path": b"/api/products",
+        "query_string": b"",
+        "root_path": "",
+        "client": (ORGANIC_PEER, 4444),
+        "headers": [],
+    }
+
+    async def receive():
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    async def send(message):
+        return None
+
+    asyncio.run(app(scope, receive, send))
+    telemetry.flush()
+    # Absent rather than defaulted: the scorer reports an unresolved host as unresolved,
+    # which beats a wrong one resolving silently against the inventory.
+    assert "host" not in one_request(telemetry, collector)

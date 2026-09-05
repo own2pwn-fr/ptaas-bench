@@ -269,3 +269,23 @@ def test_proxyfix_cannot_launder_a_claimed_address(telemetry, collector):
     # the rewritten one, descriptive only and never a decision at either end.
     assert event["peer_ip"] == ORGANIC_PEER
     assert event["client_ip"] == SYNTHETIC_PEER
+
+
+def test_host_is_reported_and_still_enumerated(client, telemetry, collector):
+    client.get("/api/products", headers={"Host": "Shop.Example:8443"})
+    event = one_request(telemetry, collector)
+    assert event["host"] == "shop.example"
+    assert params_of(event, "header")["host"] == "Shop.Example:8443"
+
+
+def test_a_request_without_a_host_reports_none(telemetry, collector):
+    from werkzeug.test import EnvironBuilder
+
+    app = build_app()
+    app.wsgi_app = TelemetryWSGIMiddleware(app.wsgi_app, telemetry=telemetry)
+    environ = EnvironBuilder(path="/api/products").get_environ()
+    environ.pop("HTTP_HOST", None)  # HTTP/1.0 clients may send none
+    body = app.wsgi_app(environ, lambda status, headers, exc_info=None: None)
+    list(body)
+    telemetry.flush()
+    assert "host" not in one_request(telemetry, collector)
