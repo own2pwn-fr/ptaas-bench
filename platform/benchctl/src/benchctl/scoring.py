@@ -93,7 +93,13 @@ from datetime import datetime, timezone
 from typing import Any, Callable, Iterable, Mapping, Sequence
 
 from .catalog import Catalog, Vuln
-from .events import EventStream, HttpRequestEvent, OobEvent
+from .events import (
+    EventStream,
+    HttpRequestEvent,
+    OobEvent,
+    address_index,
+    normalize_run_record,
+)
 from .inventory import RouteInventory
 from .routes import normalize_route, routes_equal
 
@@ -151,6 +157,7 @@ class Attribution:
     vuln_id: str | None
     kind: str  # token | signal-correlation | declared-id | container-window | unattributed
     confidence: str  # "high" | "low"
+    app: str | None = None  # resolved from the run's container/address map
     channel: str | None = None
     destination_host: str | None = None
     request_id: str | None = None
@@ -166,6 +173,7 @@ class Attribution:
             "vuln_id": self.vuln_id,
             "kind": self.kind,
             "confidence": self.confidence,
+            "app": self.app,
             "channel": self.channel,
             "destination_host": self.destination_host,
             "request_id": self.request_id,
@@ -277,10 +285,38 @@ def _signal_for_host(host: str | None, by_host: Mapping[str, str]) -> str | None
     return None
 
 
+def _resolve_source_app(
+    ev: OobEvent, catalog: Catalog, addresses: Mapping[str, str] | None
+) -> str | None:
+    """Which target made this callback, resolved deterministically or not at all.
+
+    The orchestrator captures every container's addresses on every network at run
+    open, so a source address maps to an app by lookup. That is the only address
+    reasoning allowed here: targets are dual-homed and the two addresses of one
+    container have no numeric relationship, so inferring an app from an address
+    range (or from an octet) is wrong for every target we ship.
+
+    Without a map, only an explicit, exact app or container name carried by the
+    event itself is honoured -- that is the platform stating a fact, not us
+    inferring one.
+    """
+    if addresses:
+        for key in (ev.source_ip, ev.container, ev.app):
+            if key and key in addresses:
+                return addresses[key]
+        return None
+    known_apps = {v.app for v in catalog.vulns}
+    for key in (ev.container, ev.app):
+        if key and key in known_apps:
+            return key
+    return None
+
+
 def attribute_oob(
     ev: OobEvent,
     catalog: Catalog,
     correlations: tuple[Mapping[str, str], Mapping[str, str]] | None = None,
+    addresses: Mapping[str, str] | None = None,
 ) -> Attribution:
     """Tie one callback to a vulnerability, and say how strong the tie is.
 
@@ -293,7 +329,9 @@ def attribute_oob(
     us it is not sure, and this scorer never overrules it upwards.
     """
     weak = _is_weak(ev)
+    source_app = _resolve_source_app(ev, catalog, addresses)
     common = {
+        "app": source_app,
         "channel": ev.channel,
         "destination_host": ev.destination_host,
         "request_id": ev.request_id,
@@ -320,14 +358,16 @@ def attribute_oob(
         return Attribution(catalog.by_signal[signal].id, "signal-correlation",
                            "low" if weak else "high", **common)
 
-    # Last resort: the sinkhole saw a callback from a container serving a known
-    # route and nothing else. Only usable when exactly one out-of-band oracle sits
-    # on that route -- otherwise the guess would pick a vulnerability at random.
-    if ev.route or ev.app:
+    # Last resort: the sinkhole saw a callback and could tie it to a container and a
+    # time window, nothing more. With the run's address map the container -> app step
+    # is exact, so the only remaining weakness is the window -- which is why this
+    # tier stays low confidence and out of the headline recall. Still requires
+    # exactly one candidate: otherwise the guess would pick a flaw at random.
+    if source_app or ev.route:
         candidates = [
             v for v in catalog.vulns
             if v.oracle.kind == "oob"
-            and (not ev.app or v.app == ev.app or ev.container == v.app)
+            and (not source_app or v.app == source_app)
             and (not ev.route or routes_equal(v.entrypoint.path, ev.route))
             and (not ev.method or v.entrypoint.method == ev.method)
         ]
@@ -337,14 +377,16 @@ def attribute_oob(
 
 
 def attribute_oob_events(
-    stream: EventStream, catalog: Catalog
+    stream: EventStream,
+    catalog: Catalog,
+    addresses: Mapping[str, str] | None = None,
 ) -> tuple[dict[str, list[Attribution]], list[Attribution]]:
     """Attribute every callback once; returns (by vuln id, unattributed)."""
     by_vuln: dict[str, list[Attribution]] = {}
     orphans: list[Attribution] = []
     correlations = correlation_index(stream)
     for ev in stream.oob:
-        att = attribute_oob(ev, catalog, correlations)
+        att = attribute_oob(ev, catalog, correlations, addresses)
         if att.vuln_id is None:
             orphans.append(att)
         else:
@@ -631,7 +673,11 @@ def score_run(
     """
     scored_stream = stream.scored()
     in_scope = [v for v in catalog.vulns if not apps or v.app in set(apps)]
-    oob_by_vuln, orphan_callbacks = attribute_oob_events(scored_stream, catalog)
+    record = normalize_run_record(run)
+    addresses = address_index(record["containers"])
+    oob_by_vuln, orphan_callbacks = attribute_oob_events(
+        scored_stream, catalog, addresses=addresses
+    )
     outcomes = {
         v.id: score_vuln(v, scored_stream, oob=oob_by_vuln.get(v.id, ()))
         for v in in_scope
@@ -697,6 +743,47 @@ def score_run(
                 "without updating oracle.signal. Nobody can be credited for it."
             ),
         })
+    if not record["container_map_available"]:
+        warnings.append({
+            "code": "missing-container-map",
+            "vuln_id": None,
+            "message": (
+                "the run export carries no container/address map, so a callback's "
+                "source address cannot be resolved to a target. Nothing was inferred "
+                "from address ranges (targets are dual-homed and their addresses have "
+                "no numeric relationship); out-of-band callbacks that name no signal, "
+                "token or app therefore stay unattributed."
+            ),
+        })
+    for app, digests in sorted(record["reset_digests"].items()):
+        if digests["match"] is False:
+            warnings.append({
+                "code": "reset-digest-mismatch",
+                "vuln_id": None,
+                "message": (
+                    f"{app}: the seeded-state digest read before the run "
+                    f"({digests['before']}) differs from the one read after "
+                    f"({digests['after']}). The target did not return to its seeded "
+                    "state, so whatever ran next was measured against a different "
+                    "application and is not comparable with this run."
+                ),
+            })
+    missing_record = [
+        name for name, present in (
+            ("image digests", bool(record["images"])),
+            ("reset state digests", bool(record["reset_digests"])),
+        ) if not present
+    ]
+    if missing_record:
+        warnings.append({
+            "code": "incomplete-run-record",
+            "vuln_id": None,
+            "message": (
+                "the run record carries no " + " and no ".join(missing_record)
+                + "; this score cannot be re-run from its own record"
+            ),
+        })
+
     for att in orphan_callbacks:
         warnings.append({
             "code": "unattributed-oob",
@@ -774,6 +861,14 @@ def score_run(
             "started_at": (run or {}).get("started_at"),
             "closed_at": (run or {}).get("closed_at"),
             "notes": (run or {}).get("notes"),
+            # Provenance: a published number has to be re-runnable from its own
+            # record, so the image actually running and the seeded-state digests
+            # travel with the score rather than in someone's terminal history.
+            "container_map_available": record["container_map_available"],
+            "containers": record["containers"],
+            "images": record["images"],
+            "reset_digests": record["reset_digests"],
+            "reset_consistent": record["reset_consistent"],
         },
         "catalog": {
             "vulns_total": len(catalog.vulns),

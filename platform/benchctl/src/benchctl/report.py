@@ -286,6 +286,41 @@ def _weak_rows(docs: Sequence[Mapping[str, Any]]) -> tuple[list[str], list[list[
     return header, rows
 
 
+def _provenance_rows(docs: Sequence[Mapping[str, Any]]) -> tuple[list[str], list[list[str]]]:
+    """What a third party needs to re-run this number and trust the comparison."""
+    header = ["tool", "run", "images", "state reset", "container map"]
+    rows = []
+    for doc in docs:
+        run = doc.get("run") or {}
+        images = run.get("images") or {}
+        resets = run.get("reset_digests") or {}
+        consistent = run.get("reset_consistent")
+        if consistent is None:
+            reset_text = _DASH
+        elif consistent:
+            reset_text = f"clean ({len(resets)})"
+        else:
+            dirty = sorted(a for a, r in resets.items() if r.get("match") is False)
+            reset_text = "DIRTY: " + ", ".join(dirty)
+        rows.append([
+            tool_name(doc),
+            str(run.get("run_id") or _DASH),
+            ", ".join(f"{app}@{digest[:19]}" for app, digest in sorted(images.items())) or _DASH,
+            reset_text,
+            "yes" if run.get("container_map_available") else "no",
+        ])
+    return header, rows
+
+
+def _has_provenance(docs: Sequence[Mapping[str, Any]]) -> bool:
+    return any(
+        (doc.get("run") or {}).get("images")
+        or (doc.get("run") or {}).get("reset_digests")
+        or (doc.get("run") or {}).get("container_map_available")
+        for doc in docs
+    )
+
+
 def _has_crawl(docs: Sequence[Mapping[str, Any]]) -> bool:
     return any(_node(doc, "metrics", "crawl", "inventory_available") for doc in docs)
 
@@ -331,6 +366,13 @@ def _sections(docs: Sequence[Mapping[str, Any]]) -> list[tuple[str, str, list[st
                 *_axis_rows(docs, "by_difficulty", "reach")))
     out.append(("requires", "By required capability — reach recall",
                 *_axis_rows(docs, "by_requires", "reach")))
+    if _has_provenance(docs):
+        out.append(("provenance",
+                    "Run provenance\n"
+                    "The image digest actually running and the seeded-state digest read before "
+                    "and after the run. A run whose state reset is DIRTY did not come back to "
+                    "its seeded state, so the next run measured a different application.",
+                    *_provenance_rows(docs)))
     return out
 
 

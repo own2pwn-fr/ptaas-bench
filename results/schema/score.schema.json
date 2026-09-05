@@ -28,7 +28,7 @@
     },
     "run": {
       "type": "object",
-      "description": "Run metadata as recorded by the collector, copied verbatim so the score is self-describing.",
+      "description": "Run metadata as recorded by the collector, copied verbatim so the score is self-describing, plus the provenance the orchestrator captured at run open. A published number must be re-runnable from its own record: the image digest actually running for each target and the seeded-state digests read before and after the run live here, not in someone's terminal history.",
       "required": [
         "tool"
       ],
@@ -77,6 +77,96 @@
             "string",
             "null"
           ]
+        },
+        "container_map_available": {
+          "type": "boolean",
+          "description": "False when the export carries no container/address map. Attribution then never resolves a callback's source address to a target, and a `missing-container-map` warning says so rather than falling back to inference."
+        },
+        "containers": {
+          "type": "object",
+          "description": "app -> {service, container_id, addresses, image_digest} captured at run open. Addresses are resolved to apps by lookup only: every target is dual-homed (a correlation hint registered over bench-internal carries a 10.77.0.x address while the callback it explains leaves over bench-public as 10.88.0.x, same container, no octet relationship), and the map is true for exactly one run because addresses are reassigned between runs.",
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "service": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "container_id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "addresses": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "image_digest": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "reset_digest_before": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "reset_digest_after": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            }
+          }
+        },
+        "images": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "app -> image digest actually running during this run."
+        },
+        "reset_digests": {
+          "type": "object",
+          "description": "app (or '*' when reported globally) -> the state digest read before and after the run. `match` is null when one side is missing: unknown is not a mismatch.",
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "before": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "after": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "match": {
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              }
+            }
+          }
+        },
+        "reset_consistent": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "False when any target failed to come back to its seeded state, which invalidates the comparability of whatever ran next. Null when no digest was reported."
         }
       }
     },
@@ -291,7 +381,10 @@
               "low-confidence-trigger",
               "unknown-trigger-id",
               "unknown-signal",
-              "unattributed-oob"
+              "unattributed-oob",
+              "missing-container-map",
+              "reset-digest-mismatch",
+              "incomplete-run-record"
             ]
           },
           "vuln_id": {
@@ -871,6 +964,13 @@
             "number",
             "null"
           ]
+        },
+        "app": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Target resolved from the run's container/address map, never inferred from the address itself."
         }
       }
     },

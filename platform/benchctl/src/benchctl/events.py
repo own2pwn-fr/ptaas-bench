@@ -21,6 +21,11 @@ observation it explains, because SDKs dispatch correlations immediately over a
 separate connection. Everything downstream joins on content (signal, token,
 destination host, request id), never on arrival order or event index.
 
+The run record is parsed here too (:func:`normalize_run_record`). It carries the
+container/address map captured by the orchestrator at run open, the image digest
+actually running for each target, and the reset state digest read before and after
+the run -- everything needed to re-run a published number from its own record.
+
 ``synthetic`` is decided by the SDK from the socket peer address alone. Any
 ``client_ip`` in an event is descriptive and untrusted -- it can be forged through a
 forwarded header, and a tool able to mark its own traffic synthetic would erase
@@ -53,6 +58,8 @@ from typing import Any, Iterable, Mapping
 
 __all__ = [
     "SIGNAL_EVENT_TYPES",
+    "normalize_run_record",
+    "address_index",
     "Param",
     "Event",
     "HttpRequestEvent",
@@ -186,6 +193,125 @@ class EventStream:
         out["synthetic"] = sum(1 for e in self.events if e.synthetic)
         out["total"] = len(self.events)
         return dict(sorted(out.items()))
+
+
+
+# Where the orchestrator's container map may live on the run record. Several
+# spellings are accepted because the collector and the orchestrator ship
+# separately; a scorer that breaks when one of them is upgraded first is useless.
+_CONTAINER_MAP_KEYS = ("containers", "container_map", "target_containers", "targets_map")
+_IMAGE_MAP_KEYS = ("images", "image_digests")
+_RESET_MAP_KEYS = ("reset", "reset_digests", "state_digests")
+
+
+def _as_str(value: Any) -> str | None:
+    return str(value) if value not in (None, "") else None
+
+
+def normalize_run_record(meta: Mapping[str, Any] | None) -> dict[str, Any]:
+    """Normalise the run record into the shape the score document publishes.
+
+    Three things matter downstream, and all three come from the orchestrator rather
+    than from any target, so a compromised target cannot forge them:
+
+    * ``containers`` -- ``{app: {service, container_id, addresses: [...]}}`` captured
+      at run open. Every target is dual-homed (a correlation hint is registered over
+      bench-internal and carries a 10.77.0.x address, while the callback it explains
+      leaves over bench-public as 10.88.0.x -- same container, no octet relationship),
+      so an address is only ever resolved to an app by lookup in this map, never by
+      arithmetic on the address. The map is true for one run only, because container
+      addresses are reassigned between runs.
+    * ``images`` -- the image digest actually running for each target.
+    * ``reset`` -- the state digest read before and after the run. They must be equal:
+      a run that did not put the target back to its seeded state means whatever ran
+      next was measured against a different application.
+    """
+    meta = meta or {}
+    containers: dict[str, dict[str, Any]] = {}
+    raw_map: Mapping[str, Any] = {}
+    for key in _CONTAINER_MAP_KEYS:
+        candidate = meta.get(key)
+        if isinstance(candidate, Mapping) and candidate:
+            raw_map = candidate
+            break
+
+    for app, entry in raw_map.items():
+        if not isinstance(entry, Mapping):
+            continue
+        addresses = entry.get("addresses") or entry.get("ips") or []
+        containers[str(app)] = {
+            "service": _as_str(entry.get("service")),
+            "container_id": _as_str(entry.get("container_id") or entry.get("id")),
+            "addresses": [str(a) for a in addresses],
+            "image_digest": _as_str(entry.get("image_digest") or entry.get("image")),
+            "reset_digest_before": _as_str(entry.get("reset_digest_before")),
+            "reset_digest_after": _as_str(entry.get("reset_digest_after")),
+        }
+
+    images: dict[str, str] = {}
+    for key in _IMAGE_MAP_KEYS:
+        candidate = meta.get(key)
+        if isinstance(candidate, Mapping):
+            images.update({str(k): str(v) for k, v in candidate.items() if v})
+    for app, entry in containers.items():
+        if entry["image_digest"]:
+            images.setdefault(app, entry["image_digest"])
+
+    reset: dict[str, dict[str, Any]] = {}
+
+    def _record(app: str, before: Any, after: Any) -> None:
+        before, after = _as_str(before), _as_str(after)
+        if before is None and after is None:
+            return
+        reset[app] = {
+            "before": before,
+            "after": after,
+            # None, not False, when one side is missing: unknown is not a mismatch.
+            "match": (before == after) if (before and after) else None,
+        }
+
+    for key in _RESET_MAP_KEYS:
+        candidate = meta.get(key)
+        if not isinstance(candidate, Mapping):
+            continue
+        if any(k in candidate for k in ("before", "after")):
+            _record("*", candidate.get("before"), candidate.get("after"))
+        else:
+            for app, entry in candidate.items():
+                if isinstance(entry, Mapping):
+                    _record(str(app), entry.get("before"), entry.get("after"))
+    _record("*", meta.get("reset_digest_before"), meta.get("reset_digest_after"))
+    for app, entry in containers.items():
+        _record(app, entry["reset_digest_before"], entry["reset_digest_after"])
+
+    matches = [r["match"] for r in reset.values() if r["match"] is not None]
+    return {
+        "containers": containers,
+        "container_map_available": bool(containers),
+        "images": dict(sorted(images.items())),
+        "reset_digests": dict(sorted(reset.items())),
+        "reset_consistent": (all(matches) if matches else None),
+    }
+
+
+def address_index(containers: Mapping[str, Mapping[str, Any]]) -> dict[str, str]:
+    """Every address / container id / service name of a target -> its app key.
+
+    Deterministic lookup, one entry per address on every network the container is
+    attached to. Nothing here parses or compares address octets: two addresses of
+    the same dual-homed container have no numeric relationship, so any arithmetic
+    would be wrong for every target we ship.
+    """
+    index: dict[str, str] = {}
+    for app, entry in containers.items():
+        for address in entry.get("addresses") or ():
+            index[str(address)] = app
+        for key in ("container_id", "service"):
+            value = entry.get(key)
+            if value:
+                index[str(value)] = app
+        index.setdefault(app, app)
+    return index
 
 
 def _as_bool(value: Any) -> bool:

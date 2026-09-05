@@ -21,7 +21,13 @@ from typing import Any, Sequence
 
 from . import __version__
 from .catalog import Catalog, Issue, coverage_stats, find_repo_root, load_catalog
-from .events import EventStream, fetch_events, load_events
+from .events import (
+    EventStream,
+    address_index,
+    fetch_events,
+    load_events,
+    normalize_run_record,
+)
 from .findings import classify_findings, load_findings
 from .inventory import coverage_summary, crosscheck_inventory, load_inventories
 from .report import load_score, write_report
@@ -129,7 +135,13 @@ def cmd_score(args: argparse.Namespace) -> int:
 
     findings_block = None
     if args.findings:
-        app_map = json.loads(Path(args.app_map).read_text(encoding="utf-8")) if args.app_map else None
+        # The run's container map already says which address and service name belong
+        # to which app, so findings that cite a container IP resolve without anyone
+        # writing a mapping by hand. An explicit --app-map still wins.
+        record = normalize_run_record(meta)
+        app_map = dict(address_index(record["containers"]))
+        if args.app_map:
+            app_map.update(json.loads(Path(args.app_map).read_text(encoding="utf-8")))
         preliminary = score_run(catalog, stream, run=meta, apps=apps,
                                 inventories=inventories)
         findings_block = classify_findings(
@@ -174,6 +186,9 @@ def cmd_score(args: argparse.Namespace) -> int:
                 f" of which {findings_block['false_positives_confirmed']} confirmed by the "
                 f"inventory, ambiguous {findings_block['ambiguous']})"
             )
+        if doc["run"]["reset_consistent"] is False:
+            print("  ! state reset DIRTY: the target did not return to its seeded "
+                  "state, later runs are not comparable", file=sys.stderr)
         for warning in doc["warnings"]:
             print(f"  ! {warning['code']} {warning['vuln_id'] or ''}", file=sys.stderr)
     return 0
