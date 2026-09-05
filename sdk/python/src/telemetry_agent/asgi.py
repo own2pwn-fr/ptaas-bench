@@ -160,12 +160,13 @@ class TelemetryASGIMiddleware:
             header_map = {name: value for name, value in headers}
             # ASGI's scope["client"] is the socket peer. No forwarded header is ever
             # consulted here: a caller that could set its own classification could
-            # remove its traffic from every dashboard it appears in.
+            # remove its traffic from every dashboard it appears in. An address the
+            # caller also announced in a forwarded header is a claim, not a socket, so
+            # it neither classifies here nor travels on the record as peer_ip.
             client = scope.get("client") or ()
             client_ip = client[0] if client else ""
-            synthetic = self.telemetry.is_synthetic_peer(client_ip) and not peer_matches_forwarded_claim(
-                client_ip, header_map
-            )
+            peer_ip = "" if peer_matches_forwarded_claim(client_ip, header_map) else client_ip
+            synthetic = self.telemetry.is_synthetic_peer(peer_ip)
             # The route is resolved up front so handlers can name it while they run.
             # Matching sees a snapshot: the router rewrites root_path and path_params
             # in place, and the record must describe the request as it arrived.
@@ -174,6 +175,8 @@ class TelemetryASGIMiddleware:
             ctx = _context.RequestContext(
                 request_id=uuid.uuid4().hex,
                 synthetic=synthetic,
+                peer_ip=peer_ip,
+                client_ip=client_ip,
                 route=template,
             )
             token = _context.push(ctx)
@@ -257,6 +260,7 @@ class TelemetryASGIMiddleware:
             user_agent=header_map.get("user-agent", ""),
             request_id=ctx.request_id,
             synthetic=ctx.synthetic,
+            peer_ip=ctx.peer_ip,
         )
 
 

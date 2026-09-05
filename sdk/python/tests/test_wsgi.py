@@ -177,6 +177,7 @@ def test_traffic_from_a_configured_peer_is_marked_synthetic(client, telemetry, c
     telemetry.flush()
     events = collector.wait_for(2)
     assert events and all(e["synthetic"] is True for e in events)
+    assert all(e["peer_ip"] == SYNTHETIC_PEER for e in events)
 
     collector.events.clear()
     # A header claiming to be the platform changes nothing: only the peer address does.
@@ -242,6 +243,7 @@ def test_a_forwarded_header_cannot_buy_a_synthetic_marking(client, telemetry, co
     events = collector.wait_for(3)
     assert len(events) == 3
     assert all(event["synthetic"] is False for event in events)
+    assert all(event["peer_ip"] == ORGANIC_PEER for event in events)
 
 
 def test_proxyfix_cannot_launder_a_claimed_address(telemetry, collector):
@@ -263,4 +265,7 @@ def test_proxyfix_cannot_launder_a_claimed_address(telemetry, collector):
     telemetry.flush()
     event = one_request(telemetry, collector)
     assert event["synthetic"] is False
-    assert event["client_ip"] == SYNTHETIC_PEER  # descriptive only, never a decision
+    # peer_ip is the address the socket saw, dug out from under ProxyFix; client_ip is
+    # the rewritten one, descriptive only and never a decision at either end.
+    assert event["peer_ip"] == ORGANIC_PEER
+    assert event["client_ip"] == SYNTHETIC_PEER

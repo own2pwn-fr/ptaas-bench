@@ -18,6 +18,7 @@ outage into an application outage. Consequences, all intentional:
 from __future__ import annotations
 
 import atexit
+import functools
 import ipaddress
 import os
 import re
@@ -112,12 +113,21 @@ class TelemetryClient:
         ctx = _context.current()
         return bool(ctx.synthetic) if ctx else False
 
+    def _peer_ip(self) -> str:
+        ctx = _context.current()
+        return ctx.peer_ip if ctx else ""
+
     def _base(self, record_type: str, synthetic: bool | None) -> dict[str, Any]:
         return {
             "type": record_type,
             "app": self.config.service,
             "ts": time.time(),
             "synthetic": self._synthetic(synthetic),
+            # The address the socket reported, and only that. The receiving end
+            # classifies traffic on it, and the only place it can be observed is here:
+            # by the time a record reaches the collector, the peer *it* sees is this
+            # container. Empty when the address we were handed was a forwarded claim.
+            "peer_ip": self._peer_ip(),
         }
 
     def signal(
@@ -210,8 +220,11 @@ class TelemetryClient:
                 "app": self.config.service,
                 "ts": time.time(),
                 "synthetic": self._synthetic(synthetic),
+                "peer_ip": self._peer_ip(),
                 "destination_host": _hostname(destination),
             }
+            if ctx is not None and ctx.client_ip:
+                record["client_ip"] = ctx.client_ip
             if signal:
                 if SIGNAL_NAME.match(signal):
                     record["signal"] = signal
@@ -244,9 +257,12 @@ class TelemetryClient:
         user_agent: str | None = None,
         request_id: str | None = None,
         synthetic: bool = False,
+        peer_ip: str | None = None,
     ) -> None:
         """Export one request record. Used by the middlewares and by the helpers."""
         record = self._base("http_request", synthetic)
+        if peer_ip is not None:
+            record["peer_ip"] = peer_ip
         record["method"] = method
         record["route"] = route
         if path is not None:
@@ -348,6 +364,35 @@ class TelemetryClient:
         ctx = _context.current()
         if ctx is not None:
             ctx.auth_subject = subject
+
+    def bind(self, func: Callable) -> Callable:
+        """Carry the in-flight request context into a callable that runs elsewhere.
+
+        The context follows ``await``, ``asyncio.to_thread`` and the framework thread
+        pools (anyio copies it into its worker), so an ordinary handler needs nothing.
+        A bare ``ThreadPoolExecutor`` or ``loop.run_in_executor`` does not copy it: work
+        handed to one reports as though no request were in flight, losing the request
+        id, the peer and the classification of the traffic that asked for it. Wrap the
+        callable and it keeps them::
+
+            pool.submit(telemetry.bind(rebuild_index), tenant_id)
+
+        The wrapper re-enters the same context object rather than a copy, so one bound
+        callable can safely run on several workers at once.
+        """
+        ctx = _context.current()
+
+        @functools.wraps(func)
+        def runner(*args: Any, **kwargs: Any) -> Any:
+            if ctx is None:
+                return func(*args, **kwargs)
+            token = _context.push(ctx)
+            try:
+                return func(*args, **kwargs)
+            finally:
+                _context.pop(token)
+
+        return runner
 
     def current_request_id(self) -> str | None:
         ctx = _context.current()

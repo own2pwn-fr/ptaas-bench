@@ -65,6 +65,7 @@ def test_outbound_registers_a_correlation_on_its_own_path(telemetry, collector):
             "app": "testapp",
             "ts": correlations[0]["ts"],
             "synthetic": False,
+            "peer_ip": "",  # registered outside a request: no socket to report
             "destination_host": "a1b2c3.oob.attacker.example",
             "signal": "shop.imports.fetch.external",
             "param": "source_url",
@@ -98,6 +99,18 @@ def test_outbound_does_not_wait_for_the_export_tick(collector):
         assert client.stats()["links_sent"] == 1
     finally:
         client.close(1.0)
+
+
+def test_every_record_carries_the_observed_peer(telemetry, collector):
+    """The collector cannot see the original client -- the peer *it* sees is the
+    target container -- so its independent synthetic check only works on what the
+    middleware observed and reported here."""
+    telemetry.signal("shop.catalog.query.plan_anomaly", {"payload": "x"})
+    telemetry.note("hello")
+    telemetry.flush()
+    events = collector.wait_for(2)
+    assert events and all("peer_ip" in event for event in events)
+    assert all(event["peer_ip"] == "" for event in events)  # no request in flight
 
 
 def test_signal_names_must_be_metric_shaped(telemetry, collector):

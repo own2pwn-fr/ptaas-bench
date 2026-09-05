@@ -119,11 +119,14 @@ class TelemetryWSGIMiddleware:
             headers = environ_headers(environ)
             header_map = dict(headers)
             client_ip = environ.get("REMOTE_ADDR", "")
-            synthetic = self._is_synthetic(environ, header_map)
+            peer_ip = self._peer_ip(environ, header_map)
+            synthetic = self.telemetry.is_synthetic_peer(peer_ip)
             template, path_params = self._template(environ)
             ctx = _context.RequestContext(
                 request_id=uuid.uuid4().hex,
                 synthetic=synthetic,
+                peer_ip=peer_ip,
+                client_ip=client_ip,
                 route=template,
             )
             token = _context.push(ctx)
@@ -157,14 +160,15 @@ class TelemetryWSGIMiddleware:
                 pass
             _context.pop(token)
 
-    def _is_synthetic(self, environ: dict[str, Any], header_map: dict[str, str]) -> bool:
-        """Classify on the socket peer only.
+    def _peer_ip(self, environ: dict[str, Any], header_map: dict[str, str]) -> str:
+        """The socket peer, or an empty string when what we have is a caller's claim.
 
-        ProxyFix and friends overwrite REMOTE_ADDR with a header value in place, and
+        ProxyFix and friends overwrite REMOTE_ADDR with a header value in place and
         keep the original under ``werkzeug.proxy_fix.orig``; the original is what the
-        socket saw, so it is what decides. Neither ``request.remote_addr`` nor any
+        socket saw, so it is what counts. Neither ``request.remote_addr`` nor any
         forwarded header is consulted, and an address the caller also announced in a
-        forwarded header is refused outright.
+        forwarded header is refused: it classifies nothing here and is not reported as
+        a peer to anything downstream either.
         """
         original = environ.get("werkzeug.proxy_fix.orig")
         peer = ""
@@ -172,8 +176,8 @@ class TelemetryWSGIMiddleware:
             peer = original.get("REMOTE_ADDR") or ""
         peer = peer or environ.get("werkzeug.proxy_fix.orig_remote_addr") or environ.get("REMOTE_ADDR", "")
         if peer_matches_forwarded_claim(peer, header_map):
-            return False
-        return self.telemetry.is_synthetic_peer(peer)
+            return ""
+        return peer
 
     def _capture_body(self, environ: dict[str, Any]) -> bytes:
         """Read the body for attribute extraction and put an equivalent stream back.
@@ -241,6 +245,7 @@ class TelemetryWSGIMiddleware:
             user_agent=header_map.get("user-agent", ""),
             request_id=ctx.request_id,
             synthetic=ctx.synthetic,
+            peer_ip=ctx.peer_ip,
         )
 
 

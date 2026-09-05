@@ -2,8 +2,8 @@
 
 Application code calls ``telemetry.signal(...)`` deep inside a code path that has no
 access to the request object, and threading one through every helper would make the
-call site unreadable. A ContextVar carries the request id, the resolved route and the
-synthetic marker down to that call.
+call site unreadable. A ContextVar carries the request id, the resolved route, the observed
+peer and the synthetic marker down to that call.
 
 ContextVars are per-thread *and* per-task, which is the isolation both WSGI (a thread
 per request) and ASGI (a task per request) need.
@@ -20,6 +20,12 @@ from typing import Any
 class RequestContext:
     request_id: str
     synthetic: bool = False
+    # The socket peer as observed by the middleware, empty when what we were handed
+    # turned out to be a caller's claim rather than a socket address.
+    peer_ip: str = ""
+    # Whatever the framework calls the client address, forwarded values included.
+    # Description only: it is never compared against anything.
+    client_ip: str = ""
     route: str | None = None
     auth_subject: str | None = None
     # Attributes contributed by telemetry.graphql()/telemetry.websocket() while the

@@ -162,4 +162,10 @@ selftest:
       address, and is therefore never scored.
     - Asserts exactly one signal per PoC. Two usually means the sink fires on the payload
       rather than on the effect.
+    - Asserts every replayed PoC's signal came back carrying a peer address. A sink that
+      hands work to a raw thread pool loses the request context, and its signal then
+      arrives with no peer and no synthetic marker — indistinguishable from a genuine
+      background job, so no SDK can fail safe on it. Asserting the peer here turns that
+      leak into a red self-test rather than the platform's own replay being credited to
+      whichever tool happens to be running.
     - Runs against a freshly reset target and leaves it reset.

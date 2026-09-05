@@ -29,6 +29,12 @@ egress seen by the network can be tied back to the request that caused it::
 
     telemetry.outbound(url, signal="shop.imports.fetch.external", param="source_url")
 
+Both are callable from anywhere in the request's call stack, however deep: the request
+id, the observed peer and the classification of the traffic ride a ContextVar, which
+follows ``await``, ``asyncio.to_thread`` and the framework thread pools. Work handed to
+a bare ``ThreadPoolExecutor`` is the one exception, and ``telemetry.bind(fn)`` carries
+the context into it.
+
 Three properties this agent must not lose:
 
 1. **No added latency, no failure propagation.** Recording appends to a bounded
@@ -37,7 +43,11 @@ Three properties this agent must not lose:
 2. **Nothing on the response path.** No response header, no extra route, no marker in
    an error body, no log line on the happy path. Clients, caches and captures of this
    service look the same whether the agent is loaded or not.
-3. **Route templates, not URLs.** ``/api/orders/{id}`` on Starlette,
+3. **The peer is what the socket said.** Every record carries ``peer_ip``, the address
+   the middleware observed on the connection, and it is the only address anything
+   downstream classifies traffic on. ``client_ip`` and the forwarded headers travel as
+   description; an address a caller announced about itself never becomes ``peer_ip``.
+4. **Route templates, not URLs.** ``/api/orders/{id}`` on Starlette,
    ``/api/orders/<int:id>`` on Flask, ``<unmatched>`` when nothing matched, with the
    concrete path kept alongside.
 

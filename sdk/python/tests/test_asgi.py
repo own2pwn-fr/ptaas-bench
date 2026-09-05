@@ -211,6 +211,9 @@ def test_traffic_from_a_configured_peer_is_marked_synthetic(telemetry, collector
     # The signal raised during that request inherits the marker, otherwise the platform
     # would credit itself with its own seeding traffic.
     assert any(e["type"] == "signal" and e["synthetic"] for e in events)
+    # And every record reports the address the socket gave, so the collector can reach
+    # the same verdict on its own.
+    assert all(e["peer_ip"] == SYNTHETIC_PEER for e in events)
 
     collector.events.clear()
     with TestClient(app, client=(ORGANIC_PEER, 51000)) as tool_client:
@@ -219,6 +222,7 @@ def test_traffic_from_a_configured_peer_is_marked_synthetic(telemetry, collector
     events = collector.wait_for(2)
     # No header and no user-agent can flip it: only the peer address decides.
     assert events and all(e["synthetic"] is False for e in events)
+    assert all(e["peer_ip"] == ORGANIC_PEER for e in events)
 
 
 def test_signal_is_correlated_with_its_request(client, telemetry, collector):
@@ -242,6 +246,11 @@ def test_outbound_registration_carries_the_route_of_its_request(client, telemetr
     assert correlation["route"] == "/api/admin/imports"
     request = next(e for e in collector.events if e["type"] == "http_request")
     assert correlation["request_id"] == request["request_id"]
+    # The sinkhole sees only a hostname; the peer travels with the hint so the callback
+    # can be attributed to the traffic that caused it, and classified the same way.
+    assert correlation["peer_ip"] == request["peer_ip"]
+    assert correlation["client_ip"] == request["client_ip"]
+    assert correlation["synthetic"] is False
 
 
 def test_graphql_helper_merges_into_the_single_request_event(client, telemetry, collector):
@@ -341,6 +350,11 @@ def test_a_forwarded_header_cannot_buy_a_synthetic_marking(telemetry, collector)
     events = collector.wait_for(10)
     assert len(events) == 10
     assert all(event["synthetic"] is False for event in events)
+    # The socket peer is reported, never the announced one, so the collector's own
+    # check cannot be fooled by the same header either.
+    assert all(event["peer_ip"] == ORGANIC_PEER for event in events)
+    requests = [event for event in events if event["type"] == "http_request"]
+    assert all(event["client_ip"] == ORGANIC_PEER for event in requests)
 
 
 def test_a_rewritten_peer_that_the_caller_announced_is_not_trusted(telemetry, collector):
@@ -354,4 +368,9 @@ def test_a_rewritten_peer_that_the_caller_announced_is_not_trusted(telemetry, co
     with TestClient(app, client=(SYNTHETIC_PEER, 51000)) as spoofer:
         spoofer.get("/api/products", headers={"x-forwarded-for": SYNTHETIC_PEER})
     telemetry.flush()
-    assert one_request(telemetry, collector)["synthetic"] is False
+    event = one_request(telemetry, collector)
+    assert event["synthetic"] is False
+    # Reported as nothing rather than as a socket address: the collector must not be
+    # handed a claim dressed up as an observation.
+    assert event["peer_ip"] == ""
+    assert event["client_ip"] == SYNTHETIC_PEER  # description only
