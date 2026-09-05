@@ -1,0 +1,41 @@
+id: BENCH-SHOP-0023
+title: Prototype pollution through GraphQL variable defaults
+app: shopfront
+component: api
+class: prototype_pollution
+severity: high
+entrypoint:
+  method: POST
+  path: /graphql
+  auth: none
+  param: variables
+  param_in: graphql
+  default_value: '{"first":12,"filter":{"tag":"outdoor"}}'
+  content_type: application/json
+discovery:
+  render: spa-react
+  reachable_from:
+  - /
+  - /catalog
+  requires:
+  - js-execution
+  - graphql-introspection
+  difficulty: 4
+oracle:
+  kind: sink
+  condition: 'Second instance of the class, on the unauthenticated GraphQL transport: persisted operations
+    carry stored default variables and the server merges the caller''s variables over them with the same
+    unfiltered recursive merge. The sink fires on the observed effect -- a key written through a merge
+    showing up on a fresh unrelated object -- and never on the presence of __proto__ in the request body.
+
+    '
+  poc: POST /graphql with the raw body {"query":"query ProductGrid($first:Int){products(first:$first){id}}","operationName":"ProductGrid","variables":{"first":6,"__proto__":{"<a
+    key not already on the prototype>":true}}}
+  signal: shop.graph.variables.prototype_write
+tags:
+- graphql
+- integrity
+- variant
+introduced: '2026-09-05'
+decoy_note: Persisted operations were introduced to shrink the mobile payload, and merging stored defaults
+  with request variables is exactly what the persisted-query recipes show.

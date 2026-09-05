@@ -1,0 +1,8 @@
+# The repository root ignores bin/ and dist/ because they are build output everywhere
+# else. This service keeps an operator command under bin/, and that one has to travel
+# with the source: the image copies it and the compose fragment runs it at start-up.
+!bin/
+!bin/state-reset
+
+node_modules/
+web/dist/

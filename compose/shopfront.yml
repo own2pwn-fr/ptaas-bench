@@ -1,0 +1,102 @@
+# The `shopfront` target: a consumer storefront, React 19 client on a Node 22 / Express 5
+# API with PostgreSQL behind it and a GraphQL endpoint beside the REST one.
+#
+# Relative paths below are resolved against this file's directory (compose/), per the
+# `include` semantics of the Compose specification. The build context is the repository
+# root because the service depends on the internal telemetry package.
+#
+# WHY THE TAGS ARE EXACT
+# ----------------------
+# Nothing in this target depends on a parser quirk the way the proxy chain does, but a
+# floating tag still moves the Node runtime, and several of the measurements taken
+# against this service are timing sensitive. Pins are exact; the first live bring-up
+# should replace them with `image@sha256:...` recorded from
+# `docker image inspect --format '{{index .RepoDigests 0}}'`.
+
+services:
+
+  shopfront:
+    build:
+      context: ..
+      dockerfile: targets/shopfront/Dockerfile
+    image: shopfront:4.11.2
+    container_name: shopfront
+    # What /etc/hostname says inside the container, and what a stack trace or an error
+    # page would name. An estate of web front ends numbered from one is unremarkable.
+    hostname: storefront-web-01
+    profiles: [targets, shopfront]
+    environment:
+      PORT: "3000"
+      NODE_ENV: production
+      DATABASE_URL: postgresql://storefront:storefront@shopfront-db:5432/storefront
+      PUBLIC_ORIGIN: ${SHOPFRONT_PUBLIC_ORIGIN:-http://shopfront:3000}
+      # Content generation. Set this per estate; two deployments of the same release
+      # must not share a company name, a catalogue or a customer list.
+      DEPLOY_SEED: ${DEPLOY_SEED:-gs-1}
+      # Observability. The service behaves identically with the collector down.
+      TELEMETRY_SERVICE: shopfront
+      TELEMETRY_ENDPOINT: http://otel-collector:8900
+      # Traffic from the platform's own synthetic monitoring, recognised by source
+      # address rather than by a header: a header would be visible through any
+      # reflection in the application and would say more than it should.
+      TELEMETRY_SYNTHETIC_CIDRS: 10.77.0.0/24
+      LOYALTY_KEY_DIR: /var/lib/storefront/keys
+      MEDIA_DIR: /var/lib/storefront/media
+    # Bring the estate up in its published state. The command is idempotent and prints a
+    # one-line digest, so a restart is indistinguishable from a fresh deploy.
+    command: ["sh", "-c", "/usr/local/bin/state-reset && exec node server/index.js"]
+    dns:
+      # The network's resolver. Without this pin the container would fall back to
+      # Docker's embedded resolver, which has no route out from an internal network, and
+      # every outbound name would hang for the resolver timeout instead of resolving.
+      - 10.88.0.5
+    ports:
+      - "8280:3000"
+    networks:
+      bench-public:
+        aliases: [shopfront, storefront-web-01]
+      bench-internal:
+        aliases: [shopfront]
+    depends_on:
+      shopfront-db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/api/status"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 30s
+
+  # The database is on the internal network only. A datastore reachable from the front
+  # network would be a finding in its own right, and not one this target is here to make.
+  shopfront-db:
+    image: postgres:17-alpine
+    container_name: shopfront-db
+    hostname: storefront-db-01
+    profiles: [targets, shopfront]
+    environment:
+      POSTGRES_USER: storefront
+      POSTGRES_PASSWORD: storefront
+      POSTGRES_DB: storefront
+      # Seeding writes tens of thousands of rows on every reset; durability across a
+      # container restart is not something this estate needs.
+      PGDATA: /var/lib/postgresql/data/pgdata
+    tmpfs:
+      - /var/lib/postgresql/data
+    networks:
+      bench-internal:
+        aliases: [shopfront-db, storefront-db-01]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U storefront -d storefront"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+# Mirrors docker-compose.yml exactly so that `include` merges the two definitions instead
+# of conflicting.
+networks:
+  bench-public:
+    name: bench-public
+  bench-internal:
+    name: bench-internal
+    internal: true

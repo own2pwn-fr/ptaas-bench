@@ -1,0 +1,42 @@
+id: BENCH-SHOP-0002
+title: Error-based SQL injection in the catalogue sort expression
+app: shopfront
+component: api
+class: sqli_error
+severity: critical
+entrypoint:
+  method: GET
+  path: /api/products
+  auth: none
+  param: sort
+  param_in: query
+  default_value: price_asc
+discovery:
+  render: spa-react
+  reachable_from:
+  - /
+  - /catalog
+  - /search
+  requires:
+  - js-execution
+  difficulty: 2
+oracle:
+  kind: sink
+  condition: 'The sort parameter is interpolated into the ORDER BY clause after an allowlist check that
+    only inspects the first token, so anything after a comma survives. The sink fires when the database
+    rejects or evaluates a statement whose failing fragment came from this parameter AND the driver''s
+    error text -- SQLSTATE, position and the offending expression -- is serialised into the JSON response
+    the caller receives. A sort value that is rejected by the allowlist, or that produces a well-formed
+    query, is ordinary traffic and never fires.
+
+    '
+  poc: GET /api/products?sort=price_asc,CAST((SELECT version()) AS integer)
+  signal: shop.catalog.sort.expression_fault
+tags:
+- rest
+- json
+- postgres
+- error-based
+introduced: '2026-09-05'
+decoy_note: The allowlist was added during a security review, but it was written as a prefix check so
+  the existing multi-column sorts ("price_asc, rating_desc") kept working.

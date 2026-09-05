@@ -1,0 +1,46 @@
+id: BENCH-SHOP-0027
+title: Quantity update wraps the line total through a 32-bit coercion
+app: shopfront
+component: api
+class: integer_overflow
+severity: high
+entrypoint:
+  method: PATCH
+  path: /api/cart/items/:id
+  auth: user
+  param: quantity
+  param_in: json
+  default_value: '2'
+  content_type: application/json
+discovery:
+  render: spa-react
+  reachable_from:
+  - /cart
+  requires:
+  - js-execution
+  - multi-step-flow
+  - state-change
+  difficulty: 3
+oracle:
+  kind: state
+  condition: 'The line total is coerced with a bitwise operation to guarantee an integer before it is
+    written to an integer column, which silently truncates to 32 bits. A large enough quantity makes the
+    stored line total wrap and can make it negative. The sink fires when a persisted line total differs
+    from the exact product of quantity and unit price computed in arbitrary precision -- an arithmetic
+    effect on the stored order, not a large number in a request.
+
+    '
+  poc: PATCH /api/cart/items/9001 {"quantity":2147483} then POST /api/checkout/confirm
+  signal: shop.checkout.total.numeric_overflow
+tags:
+- rest
+- json
+- authenticated
+- business-logic
+introduced: '2026-09-05'
+notes: The add-to-cart endpoint itself answers a guest, so a crawler reaches it without credentials; the
+  effect this entry is scored on only exists once the basket becomes an order, which needs a signed-in
+  checkout. `auth` records what is needed to prove it, and the route inventory records what is needed
+  to reach it.
+decoy_note: The bitwise or was added to stop a floating point quantity reaching the database after a production
+  incident, and it does exactly that.

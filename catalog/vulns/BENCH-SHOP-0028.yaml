@@ -1,0 +1,43 @@
+id: BENCH-SHOP-0028
+title: Single-use coupon can be applied repeatedly
+app: shopfront
+component: api
+class: coupon_reuse
+severity: medium
+entrypoint:
+  method: POST
+  path: /api/checkout/coupons
+  auth: user
+  param: code
+  param_in: json
+  default_value: SPRING-15
+  content_type: application/json
+discovery:
+  render: spa-react
+  reachable_from:
+  - /cart
+  - /checkout
+  requires:
+  - js-execution
+  - multi-step-flow
+  - state-change
+  difficulty: 3
+oracle:
+  kind: state
+  condition: 'Redemption is counted when an order is placed, but the check that a coupon has redemptions
+    left runs against the coupon row while the discount is stacked on the checkout session, so the same
+    code can be attached several times to one session and, across sessions, past its limit. The sink fires
+    when the number of recorded redemptions for a coupon exceeds its max_redemptions, or when a single
+    order records the same code more than once -- the ledger, not the request.
+
+    '
+  poc: POST /api/checkout/coupons {"code":"WELCOME-ONCE"} x3 on one checkout session then POST /api/checkout/confirm
+  signal: shop.checkout.coupon.redemption_excess
+tags:
+- rest
+- json
+- authenticated
+- business-logic
+introduced: '2026-09-05'
+decoy_note: Stacking was a deliberate feature for the loyalty codes, and the single-use flag was bolted
+  on later for a partner campaign without revisiting where the counter is written.

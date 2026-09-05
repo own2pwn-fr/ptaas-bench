@@ -1,0 +1,44 @@
+id: BENCH-SHOP-0022
+title: Prototype pollution in the guest cart merge
+app: shopfront
+component: api
+class: prototype_pollution
+severity: high
+entrypoint:
+  method: POST
+  path: /api/cart/merge
+  auth: user
+  param: meta
+  param_in: json
+  default_value: '{"source":"guest","device":"web"}'
+  content_type: application/json
+discovery:
+  render: spa-react
+  reachable_from:
+  - /cart
+  - /sign-in
+  requires:
+  - js-execution
+  - multi-step-flow
+  - state-change
+  difficulty: 3
+oracle:
+  kind: sink
+  condition: 'Signing in merges the guest cart into the account cart with a recursive merge that has no
+    key filter, so __proto__ and constructor.prototype are valid destinations. The sink fires when a key
+    written by a merge is subsequently observed on a freshly constructed, unrelated object -- the pollution
+    took effect on the process, which is the difference between sending the string __proto__ and actually
+    corrupting Object.prototype. It is checked after the merge, so a rejected or ineffective payload is
+    exercise.
+
+    '
+  poc: POST /api/cart/merge with the raw body {"meta":{"__proto__":{"<a key not already on the prototype>":true}}}
+  signal: shop.cart.merge.prototype_write
+tags:
+- rest
+- json
+- authenticated
+- integrity
+introduced: '2026-09-05'
+decoy_note: The merge helper is fifteen lines of recursion written to avoid a dependency, and it is the
+  first thing anyone writes when two carts have to become one.

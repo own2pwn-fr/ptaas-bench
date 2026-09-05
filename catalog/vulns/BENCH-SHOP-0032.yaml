@@ -1,0 +1,43 @@
+id: BENCH-SHOP-0032
+title: Blind SSRF in the avatar import available to any customer
+app: shopfront
+component: api
+class: ssrf_blind
+severity: high
+entrypoint:
+  method: POST
+  path: /api/account/avatar/import
+  auth: user
+  param: image_url
+  param_in: json
+  default_value: https://cdn.<an image host>/avatars/9f2.png
+  content_type: application/json
+discovery:
+  render: spa-react
+  reachable_from:
+  - /account
+  - /account/profile
+  requires:
+  - js-execution
+  - multi-step-flow
+  - state-change
+  difficulty: 3
+oracle:
+  kind: oob
+  condition: 'Second instance of the class at a much lower privilege: importing an avatar by URL is open
+    to every signed-in customer, and the scheme check accepts anything http or https without resolving
+    the host first. The response body is only inspected for an image magic number and the error is generic,
+    so there is no oracle in the response. The destination is declared to the egress correlation registry
+    before the fetch and the sinkhole confirms the callback and joins it back to this route and parameter.
+
+    '
+  poc: POST /api/account/avatar/import {"image_url":"http://<any host the tool controls>/a.png"}
+  signal: shop.media.avatar.fetch_external
+tags:
+- rest
+- oob
+- authenticated
+- variant
+introduced: '2026-09-05'
+decoy_note: Importing an avatar from a URL saves the mobile app an upload round-trip, and the only validation
+  anyone asked for was "is it actually an image".

@@ -1,0 +1,41 @@
+id: BENCH-SHOP-0009
+title: DOM XSS in the search page referrer banner
+app: shopfront
+component: web
+class: xss_dom
+severity: medium
+entrypoint:
+  method: GET
+  path: /search
+  auth: none
+  param: ref
+  param_in: query
+  default_value: homepage-hero
+discovery:
+  render: spa-react
+  reachable_from:
+  - /
+  - /catalog
+  requires:
+  - js-execution
+  difficulty: 2
+oracle:
+  kind: sink
+  condition: 'The search view builds the "back to ..." banner by assigning the ref parameter into innerHTML,
+    so the payload never reaches the server as anything but a query string. The application ships a report-only
+    content security policy, and the sink fires when the browser reports a script-src violation whose
+    document URI is this route, from a client that fetched that document within the last five minutes,
+    and whose reported sample corresponds to the ref value in that URI. That report can only exist if
+    script actually ran in a browser: sending the payload without rendering it is exercise, and a forged
+    report with no matching navigation is discarded.
+
+    '
+  poc: GET /search?q=tent&ref=<img src=x onerror=fetch("/api/status")> rendered in a browser
+  signal: shop.web.search.script_execution
+tags:
+- spa
+- dom
+- client-side
+introduced: '2026-09-05'
+decoy_note: The banner was a two-line change to show where a shopper came from; innerHTML was used because
+  the copy legitimately contains an <em> tag from the campaign metadata.

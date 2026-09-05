@@ -1,0 +1,41 @@
+id: BENCH-SHOP-0015
+title: Support ticket detail is scoped by ticket reference only
+app: shopfront
+component: api
+class: bola
+severity: critical
+entrypoint:
+  method: GET
+  path: /api/support/tickets/:id
+  auth: other-user
+  param: id
+  param_in: path
+  default_value: '7001'
+discovery:
+  render: spa-react
+  reachable_from:
+  - /support
+  - /support/tickets/:id
+  requires:
+  - js-execution
+  - multi-step-flow
+  difficulty: 4
+oracle:
+  kind: differential
+  condition: 'Second instance of the class, one flow deeper and with a different scoping mistake: the
+    ticket list is correctly filtered to the session, and so is the message sub-resource, but the detail
+    handler treats the ticket reference as a capability and looks it up on its own. The trigger fires
+    when a ticket whose owning customer differs from the caller''s subject is serialised into a response.
+    Reading your own tickets, and 404s on unknown references, are silent.
+
+    '
+  poc: GET /api/support/tickets/7002 with the session cookie of the customer who owns ticket 7001
+  signal: shop.support.ticket.subject_mismatch
+tags:
+- rest
+- idor
+- authenticated
+- variant
+introduced: '2026-09-05'
+decoy_note: Ticket references are long and random-looking, so they were treated as unguessable secrets
+  and the ownership predicate was dropped from the detail query as a performance fix.

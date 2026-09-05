@@ -1,0 +1,42 @@
+id: BENCH-SHOP-0013
+title: Credentialed CORS allowlist matched by suffix, not by origin
+app: shopfront
+component: api
+class: cors_misconfig
+severity: high
+entrypoint:
+  method: GET
+  path: /api/account/profile
+  auth: user
+  param: Origin
+  param_in: header
+  default_value: <the storefront origin>
+discovery:
+  render: spa-react
+  reachable_from:
+  - /account
+  requires:
+  - js-execution
+  - custom-header
+  difficulty: 2
+oracle:
+  kind: sink
+  condition: 'The partner widget needed cross-origin access, so the check became a substring test: an
+    origin passes if it mentions the corporate domain anywhere, including in a label an attacker controls.
+    The sink fires when a response carrying the authenticated subject''s personal data is served with
+    Access-Control-Allow-Credentials true and an Access-Control-Allow-Origin echoing a caller-supplied
+    origin that is not an exact member of the allowlist. Requests with no Origin, with an allowlisted
+    origin, or without a session never fire it, and neither does a preflight: the trigger needs the credentialed
+    body to have actually gone out.
+
+    '
+  poc: 'GET /api/account/profile with a customer session cookie and Origin: https://<the storefront domain>.attacker.example'
+  signal: shop.web.cors.credentialed_reflection
+tags:
+- rest
+- header
+- authenticated
+- cross-origin
+introduced: '2026-09-05'
+decoy_note: A substring match is the shortest way to allow every environment subdomain (staging, preview,
+  the partner iframe) without maintaining a list, and it passes every functional test.

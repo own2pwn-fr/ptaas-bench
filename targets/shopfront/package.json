@@ -1,0 +1,33 @@
+{
+  "name": "storefront",
+  "version": "4.11.2",
+  "private": true,
+  "type": "module",
+  "description": "Customer-facing storefront: React client and the JSON API behind it.",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "node --watch server/index.js",
+    "build:web": "vite build --config web/vite.config.js",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@internal/telemetry": "file:../../sdk/node",
+    "cookie-parser": "1.4.7",
+    "express": "5.2.1",
+    "graphql": "16.14.2",
+    "multer": "2.3.0",
+    "pg": "8.23.0",
+    "ws": "8.21.3"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "6.1.1",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
+    "react-router-dom": "7.18.3",
+    "vite": "8.2.2",
+    "vitest": "3.2.7"
+  }
+}

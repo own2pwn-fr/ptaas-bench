@@ -1,0 +1,44 @@
+id: BENCH-SHOP-0029
+title: Gift card redemption double-spends under concurrency
+app: shopfront
+component: api
+class: race_condition
+severity: high
+entrypoint:
+  method: POST
+  path: /api/gift-cards/redeem
+  auth: user
+  param: code
+  param_in: json
+  default_value: 4831-2205-7719
+  content_type: application/json
+discovery:
+  render: spa-react
+  reachable_from:
+  - /account/wallet
+  - /checkout
+  requires:
+  - js-execution
+  - multi-step-flow
+  - state-change
+  difficulty: 4
+oracle:
+  kind: state
+  condition: 'The handler reads the card, checks that it has not been redeemed, then writes the wallet
+    credit and marks the card, with no transaction and no row lock between the read and the write. Two
+    requests in flight together both pass the check. The sink fires when the sum of wallet credits recorded
+    against one gift card exceeds that card''s face value -- money that exists twice. A single redemption,
+    however it is retried, never fires it.
+
+    '
+  poc: POST /api/gift-cards/redeem {"code":"4831-2205-7719"} x8 issued concurrently on one session
+  signal: shop.wallet.redemption.double_spend
+tags:
+- rest
+- json
+- authenticated
+- business-logic
+- concurrency
+introduced: '2026-09-05'
+decoy_note: The redeem path was written as read-check-write because it was the first wallet feature and
+  there was nothing to contend with; the transaction was left for "when we add refunds".

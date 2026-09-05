@@ -1,0 +1,40 @@
+id: BENCH-SHOP-0006
+title: GraphQL operation batching turns one request into a gift-card code sweep
+app: shopfront
+component: api
+class: graphql_batching
+severity: medium
+entrypoint:
+  method: POST
+  path: /graphql
+  auth: none
+  param: null
+  param_in: graphql
+  default_value: null
+  content_type: application/json
+discovery:
+  render: spa-react
+  reachable_from:
+  - /gift-cards
+  requires:
+  - js-execution
+  - graphql-introspection
+  difficulty: 3
+oracle:
+  kind: sink
+  condition: 'The endpoint accepts a JSON array of operations and executes every element, so the per-request
+    throttle on giftCardBalance applies once to a request that performs hundreds of lookups. The sink
+    fires when one HTTP request executes at least twenty-five instances of a rate-limited field AND the
+    batch contains at least one hit after a run of misses, which is the amplification actually paying
+    off. A large but uniformly failing batch is exercise.
+
+    '
+  poc: 'POST /graphql as a JSON array of 256 aliased giftCardBalance operations: 255 unissued numbers
+    and one issued card (0000-0000-0001)'
+  signal: shop.graph.batch.amplification
+tags:
+- graphql
+- business-logic
+introduced: '2026-09-05'
+decoy_note: Batching was enabled to cut round-trips on the product grid; nobody revisited the throttle,
+  which counts HTTP requests because that is what the API gateway can see.

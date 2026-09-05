@@ -1,0 +1,47 @@
+id: BENCH-SHOP-0008
+title: Stored XSS in a support message rendered by the back-office console
+app: shopfront
+component: api
+class: xss_stored
+severity: high
+entrypoint:
+  method: POST
+  path: /api/support/tickets/:id/messages
+  auth: user
+  param: body
+  param_in: json
+  default_value: The second parcel never arrived, tracking stopped on Tuesday.
+  content_type: application/json
+discovery:
+  render: spa-react
+  reachable_from:
+  - /support/tickets/:id
+  requires:
+  - js-execution
+  - multi-step-flow
+  - state-change
+  difficulty: 5
+oracle:
+  kind: sink
+  condition: 'Second instance of the class, aimed at a different audience: the customer-facing thread
+    escapes everything, but the agent console renders the same message as HTML so that quoted order tables
+    survive. The sink fires when a stored customer message is serialised into an administrative response
+    AND a parse of it yields a script-executing construct. The reader must be a staff subject, so a customer
+    who reads back their own message never fires it -- which is what makes this instance measure whether
+    a tool reasons about who sees its payload.
+
+    '
+  poc: POST /api/support/tickets/{id}/messages {"body":"<img src=x onerror=fetch(1)>"} on a recently opened
+    conversation, then GET /api/admin/support/tickets?status=open as a staff account (the console lists
+    the forty most recent open threads)
+  signal: shop.support.thread.markup_persisted
+tags:
+- rest
+- json
+- stored
+- authenticated
+- variant
+- second-order
+introduced: '2026-09-05'
+decoy_note: The agent console was built to display the templated order tables support pastes into replies,
+  so it renders the thread as HTML while the storefront does not.

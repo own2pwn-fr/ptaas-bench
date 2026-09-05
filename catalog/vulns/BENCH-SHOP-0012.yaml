@@ -1,0 +1,44 @@
+id: BENCH-SHOP-0012
+title: Customers can drive an order through staff-only fulfilment transitions
+app: shopfront
+component: api
+class: bfla
+severity: critical
+entrypoint:
+  method: POST
+  path: /api/orders/:id/transitions
+  auth: user
+  param: to
+  param_in: json
+  default_value: cancelled
+  content_type: application/json
+discovery:
+  render: spa-react
+  reachable_from:
+  - /account/orders/:id
+  requires:
+  - js-execution
+  - multi-step-flow
+  - state-change
+  difficulty: 3
+oracle:
+  kind: state
+  condition: 'Second instance of the class, on the customer-facing router rather than the admin one, so
+    a tool that only fuzzes /api/admin misses it. The endpoint exists so a shopper can cancel an unshipped
+    order; it validates that the transition is legal for the order''s current state but not that the caller
+    is allowed to make it. The sink fires when an order reaches a state on the staff-only list (refunded,
+    fulfilled, comped) and the actor recorded on the transition is a customer. A customer cancelling their
+    own order is the intended use and is silent.
+
+    '
+  poc: POST /api/orders/1001/transitions {"to":"refunded"} with the owning customer session
+  signal: shop.orders.transition.actor_role_mismatch
+tags:
+- rest
+- json
+- authenticated
+- privilege
+- variant
+introduced: '2026-09-05'
+decoy_note: The state machine was written first and the authorisation matrix "was going to be" a second
+  pass; the customer cancel button shipped on the same endpoint in the meantime.

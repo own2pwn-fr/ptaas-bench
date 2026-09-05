@@ -1,0 +1,44 @@
+id: BENCH-SHOP-0017
+title: JWT kid parameter selects the HMAC key by path
+app: shopfront
+component: api
+class: jwt_kid_traversal
+severity: critical
+entrypoint:
+  method: GET
+  path: /api/account/loyalty
+  auth: none
+  param: kid
+  param_in: header
+  default_value: loyalty-2026-03
+discovery:
+  render: spa-react
+  reachable_from:
+  - /account/loyalty
+  requires:
+  - js-execution
+  - custom-header
+  - wordlist
+  difficulty: 4
+oracle:
+  kind: sink
+  condition: 'Key rotation is implemented by naming the key file in the token header, and the name is
+    joined onto the key directory without normalisation. Pointing it at a file whose contents the attacker
+    knows -- an empty file, or a world-readable one -- lets a token be signed that the service will verify.
+    The sink fires when the resolved key path escapes the key directory AND the resulting signature verification
+    succeeded, so the request was authorised. A traversal that fails to verify is exercise, and so is
+    a kid naming a legitimate key.
+
+    '
+  poc: GET /api/account/loyalty with a token whose header is {"alg":"HS256","kid":"../../../../dev/null"}
+    signed with an empty key
+  signal: shop.auth.token.key_path_escape
+tags:
+- rest
+- jwt
+- header
+- authentication
+- traversal
+introduced: '2026-09-05'
+decoy_note: Naming the key in the token is what every rotation tutorial shows; the directory join was
+  written before the keys moved out of the repository and was never revisited.

@@ -1,0 +1,1184 @@
+# Route inventory for the shopfront target.
+#
+# The denominator for crawl coverage and for precision. Every route the deployed service
+# answers is listed here exactly once, under the template the framework registers rather
+# than under a concrete URL, so that a report can say "reached 42 of 161" and mean it.
+#
+# `status: planted` marks a route that carries at least one catalog entry; the note names
+# the entries and says which input is the one that matters. Everything else is `safe`, and
+# a finding reported against a safe route is a false positive rather than an unmatched
+# one. There are 137 safe routes to 26 planted ones.
+#
+# Two things worth knowing when reading the numbers this file produces:
+#
+#   * Nothing on this target is reachable without executing JavaScript. The document
+#     routes all serve one shell, the API is JSON only and there is no server-rendered
+#     link anywhere. The lowest crawl difficulty in the catalog is therefore 2, not 1;
+#     that is the property this target exists to measure, not an oversight.
+#   * `auth: none` on a document route means the shell is served to anyone. The page
+#     behind it may still refuse to show anything without a session; the guard is in the
+#     client, which is exactly why an authenticated crawl finds a different surface.
+#
+app: shopfront
+base_url: http://shopfront:3000
+routes:
+- path: /
+  method: GET
+  auth: none
+  render: spa-react
+  params: []
+  status: safe
+- path: /catalog
+  method: GET
+  auth: none
+  render: spa-react
+  params: []
+  status: safe
+- path: /catalog/{slug}
+  method: GET
+  auth: none
+  render: spa-react
+  params: []
+  status: safe
+- path: /product/{slug}
+  method: GET
+  auth: none
+  render: spa-react
+  params: []
+  status: safe
+- path: /search
+  method: GET
+  auth: none
+  render: spa-react
+  params:
+  - q
+  - ref
+  - page
+  status: planted
+  note: 'BENCH-SHOP-0009: the ref parameter is written into the DOM as markup by the client.'
+- path: /stores
+  method: GET
+  auth: none
+  render: spa-react
+  params: []
+  status: safe
+- path: /gift-cards
+  method: GET
+  auth: none
+  render: spa-react
+  params: []
+  status: safe
+- path: /pages/{slug}
+  method: GET
+  auth: none
+  render: spa-react
+  params: []
+  status: safe
+- path: /support
+  method: GET
+  auth: none
+  render: spa-react
+  params: []
+  status: safe
+- path: /support/tickets/{id}
+  method: GET
+  auth: none
+  render: spa-react
+  params: []
+  status: safe
+- path: /cart
+  method: GET
+  auth: none
+  render: spa-react
+  params: []
+  status: safe
+- path: /checkout
+  method: GET
+  auth: none
+  render: spa-react
+  params: []
+  status: safe
+- path: /sign-in
+  method: GET
+  auth: none
+  render: spa-react
+  params: []
+  status: safe
+- path: /sign-up
+  method: GET
+  auth: none
+  render: spa-react
+  params: []
+  status: safe
+- path: /account
+  method: GET
+  auth: none
+  render: spa-react
+  params: []
+  status: safe
+- path: /account/orders
+  method: GET
+  auth: none
+  render: spa-react
+  params: []
+  status: safe
+- path: /account/orders/{id}
+  method: GET
+  auth: none
+  render: spa-react
+  params: []
+  status: safe
+- path: /account/addresses
+  method: GET
+  auth: none
+  render: spa-react
+  params: []
+  status: safe
+- path: /account/payment-methods
+  method: GET
+  auth: none
+  render: spa-react
+  params: []
+  status: safe
+- path: /account/preferences
+  method: GET
+  auth: none
+  render: spa-react
+  params: []
+  status: safe
+- path: /account/saved-searches
+  method: GET
+  auth: none
+  render: spa-react
+  params: []
+  status: safe
+- path: /account/wishlist
+  method: GET
+  auth: none
+  render: spa-react
+  params: []
+  status: safe
+- path: /account/wallet
+  method: GET
+  auth: none
+  render: spa-react
+  params: []
+  status: safe
+- path: /account/loyalty
+  method: GET
+  auth: none
+  render: spa-react
+  params: []
+  status: safe
+- path: /account/profile
+  method: GET
+  auth: none
+  render: spa-react
+  params: []
+  status: safe
+- path: /admin
+  method: GET
+  auth: none
+  render: spa-react
+  params: []
+  status: safe
+- path: /admin/orders
+  method: GET
+  auth: none
+  render: spa-react
+  params: []
+  status: safe
+- path: /admin/coupons
+  method: GET
+  auth: none
+  render: spa-react
+  params: []
+  status: safe
+- path: /admin/imports
+  method: GET
+  auth: none
+  render: spa-react
+  params: []
+  status: safe
+- path: /admin/support
+  method: GET
+  auth: none
+  render: spa-react
+  params: []
+  status: safe
+- path: /robots.txt
+  method: GET
+  auth: none
+  render: static-html
+  params: []
+  status: safe
+- path: /sitemap.xml
+  method: GET
+  auth: none
+  render: static-html
+  params: []
+  status: safe
+- path: /favicon.ico
+  method: GET
+  auth: none
+  render: static-html
+  params: []
+  status: safe
+- path: /manifest.webmanifest
+  method: GET
+  auth: none
+  render: static-html
+  params: []
+  status: safe
+- path: /og-card.png
+  method: GET
+  auth: none
+  render: static-html
+  params: []
+  status: safe
+- path: /.well-known/security.txt
+  method: GET
+  auth: none
+  render: static-html
+  params: []
+  status: safe
+- path: /assets/{file}
+  method: GET
+  auth: none
+  render: static-html
+  params: []
+  status: safe
+- path: /api/status
+  method: GET
+  auth: none
+  render: api-only
+  params: []
+  status: safe
+- path: /api/currencies
+  method: GET
+  auth: none
+  render: api-only
+  params: []
+  status: safe
+- path: /api/locales
+  method: GET
+  auth: none
+  render: api-only
+  params: []
+  status: safe
+- path: /api/client-events
+  method: POST
+  auth: none
+  render: api-only
+  params:
+  - events
+  status: safe
+- path: /api/policy-reports
+  method: POST
+  auth: none
+  render: api-only
+  params:
+  - csp-report
+  status: safe
+- path: /api/products
+  method: GET
+  auth: none
+  render: api-only
+  params:
+  - q
+  - sort
+  - category
+  - brand
+  - min_price
+  - max_price
+  - page
+  - limit
+  status: planted
+  note: BENCH-SHOP-0001 on q and BENCH-SHOP-0002 on sort; both are folded into the statement text.
+- path: /api/products/{slug}
+  method: GET
+  auth: none
+  render: api-only
+  params:
+  - slug
+  status: safe
+- path: /api/products/{slug}/variants
+  method: GET
+  auth: none
+  render: api-only
+  params:
+  - slug
+  status: safe
+- path: /api/products/{slug}/media
+  method: GET
+  auth: none
+  render: api-only
+  params:
+  - slug
+  status: safe
+- path: /api/products/{slug}/related
+  method: GET
+  auth: none
+  render: api-only
+  params:
+  - slug
+  status: safe
+- path: /api/products/{slug}/stock
+  method: GET
+  auth: none
+  render: api-only
+  params:
+  - slug
+  status: safe
+- path: /api/products/{id}/reviews
+  method: GET
+  auth: none
+  render: api-only
+  params:
+  - id
+  - page
+  - limit
+  status: safe
+- path: /api/products/{id}/reviews
+  method: POST
+  auth: user
+  render: api-only
+  params:
+  - rating
+  - title
+  - body
+  status: planted
+  note: 'BENCH-SHOP-0007: the stored body keeps script-executing markup and is served to other shoppers.'
+- path: /api/products/{id}/reviews/summary
+  method: GET
+  auth: none
+  render: api-only
+  params:
+  - id
+  status: safe
+- path: /api/reviews/recent
+  method: GET
+  auth: none
+  render: api-only
+  params: []
+  status: safe
+- path: /api/catalog/categories
+  method: GET
+  auth: none
+  render: api-only
+  params: []
+  status: safe
+- path: /api/catalog/categories/{slug}
+  method: GET
+  auth: none
+  render: api-only
+  params:
+  - slug
+  status: safe
+- path: /api/catalog/collections
+  method: GET
+  auth: none
+  render: api-only
+  params: []
+  status: safe
+- path: /api/catalog/collections/{slug}
+  method: GET
+  auth: none
+  render: api-only
+  params:
+  - slug
+  status: safe
+- path: /api/brands
+  method: GET
+  auth: none
+  render: api-only
+  params: []
+  status: safe
+- path: /api/brands/{slug}
+  method: GET
+  auth: none
+  render: api-only
+  params:
+  - slug
+  status: safe
+- path: /api/search/suggestions
+  method: GET
+  auth: none
+  render: api-only
+  params:
+  - q
+  status: safe
+- path: /api/search/facets
+  method: GET
+  auth: none
+  render: api-only
+  params: []
+  status: safe
+- path: /api/content/pages
+  method: GET
+  auth: none
+  render: api-only
+  params: []
+  status: safe
+- path: /api/content/pages/{slug}
+  method: GET
+  auth: none
+  render: api-only
+  params:
+  - slug
+  status: safe
+- path: /api/content/banners
+  method: GET
+  auth: none
+  render: api-only
+  params: []
+  status: safe
+- path: /api/content/faq
+  method: GET
+  auth: none
+  render: api-only
+  params: []
+  status: safe
+- path: /api/stores
+  method: GET
+  auth: none
+  render: api-only
+  params: []
+  status: safe
+- path: /api/stores/{id}
+  method: GET
+  auth: none
+  render: api-only
+  params:
+  - id
+  status: safe
+- path: /api/stores/{id}/hours
+  method: GET
+  auth: none
+  render: api-only
+  params:
+  - id
+  status: safe
+- path: /api/shipping/methods
+  method: GET
+  auth: none
+  render: api-only
+  params: []
+  status: safe
+- path: /api/shipping/estimate
+  method: GET
+  auth: none
+  render: api-only
+  params:
+  - country
+  status: safe
+- path: /api/newsletter/subscriptions
+  method: POST
+  auth: none
+  render: api-only
+  params:
+  - email
+  - locale
+  status: safe
+- path: /api/contact-messages
+  method: POST
+  auth: none
+  render: api-only
+  params:
+  - name
+  - email
+  - body
+  status: safe
+- path: /api/auth/login
+  method: POST
+  auth: none
+  render: api-only
+  params:
+  - email
+  - password
+  status: planted
+  note: 'BENCH-SHOP-0019: no lockout, no delay, no captcha on a credential sweep.'
+- path: /api/auth/logout
+  method: POST
+  auth: user
+  render: api-only
+  params: []
+  status: safe
+- path: /api/auth/session
+  method: GET
+  auth: none
+  render: api-only
+  params: []
+  status: safe
+- path: /api/auth/register
+  method: POST
+  auth: none
+  render: api-only
+  params:
+  - email
+  - password
+  - given_name
+  - family_name
+  status: safe
+- path: /api/auth/password-reset/requests
+  method: POST
+  auth: none
+  render: api-only
+  params:
+  - email
+  status: safe
+- path: /api/auth/password-reset/confirm
+  method: POST
+  auth: none
+  render: api-only
+  params:
+  - token
+  - password
+  status: safe
+- path: /api/auth/step-up/requests
+  method: POST
+  auth: user
+  render: api-only
+  params:
+  - purpose
+  status: safe
+- path: /api/auth/step-up/verify
+  method: POST
+  auth: user
+  render: api-only
+  params:
+  - step_up_id
+  - code
+  status: planted
+  note: 'BENCH-SHOP-0020: the attempt counter is never incremented on a wrong code.'
+- path: /api/auth/step-up/resend
+  method: POST
+  auth: user
+  render: api-only
+  params:
+  - step_up_id
+  status: planted
+  note: 'BENCH-SHOP-0018: resend issues the grant that only verify should issue.'
+- path: /api/auth/step-up/status
+  method: GET
+  auth: user
+  render: api-only
+  params: []
+  status: safe
+- path: /api/account/profile
+  method: GET
+  auth: user
+  render: api-only
+  params:
+  - Origin
+  status: planted
+  note: 'BENCH-SHOP-0013: credentialed cross-origin response for an origin matched by substring.'
+- path: /api/account/profile
+  method: PATCH
+  auth: user
+  render: api-only
+  params:
+  - given_name
+  - family_name
+  - phone
+  - marketing_opt_in
+  status: safe
+- path: /api/account/preferences
+  method: GET
+  auth: user
+  render: api-only
+  params: []
+  status: safe
+- path: /api/account/preferences
+  method: PUT
+  auth: user
+  render: api-only
+  params:
+  - widgets
+  - locale
+  - currency
+  - theme
+  status: planted
+  note: 'BENCH-SHOP-0010: widget titles are stored verbatim and written into the DOM as markup.'
+- path: /api/account/addresses
+  method: GET
+  auth: user
+  render: api-only
+  params: []
+  status: safe
+- path: /api/account/addresses
+  method: POST
+  auth: user
+  render: api-only
+  params:
+  - label
+  - recipient
+  - line1
+  - line2
+  - city
+  - postcode
+  - country
+  status: safe
+- path: /api/account/addresses/{id}
+  method: PATCH
+  auth: user
+  render: api-only
+  params:
+  - id
+  - label
+  - is_default
+  status: safe
+- path: /api/account/addresses/{id}
+  method: DELETE
+  auth: user
+  render: api-only
+  params:
+  - id
+  status: safe
+- path: /api/account/payment-methods
+  method: GET
+  auth: user
+  render: api-only
+  params: []
+  status: safe
+- path: /api/account/payment-methods/{id}
+  method: DELETE
+  auth: user
+  render: api-only
+  params:
+  - id
+  status: safe
+- path: /api/account/orders
+  method: GET
+  auth: user
+  render: api-only
+  params:
+  - page
+  - limit
+  status: safe
+- path: /api/account/wishlist
+  method: GET
+  auth: user
+  render: api-only
+  params: []
+  status: safe
+- path: /api/account/wishlist/items
+  method: POST
+  auth: user
+  render: api-only
+  params:
+  - variant_id
+  status: safe
+- path: /api/account/wishlist/items/{id}
+  method: DELETE
+  auth: user
+  render: api-only
+  params:
+  - id
+  status: safe
+- path: /api/account/saved-searches
+  method: GET
+  auth: user
+  render: api-only
+  params: []
+  status: safe
+- path: /api/account/saved-searches
+  method: POST
+  auth: user
+  render: api-only
+  params:
+  - label
+  - rule
+  status: planted
+  note: 'BENCH-SHOP-0004: the stored rule is compiled into statement text by the results endpoint.'
+- path: /api/account/saved-searches/{id}
+  method: DELETE
+  auth: user
+  render: api-only
+  params:
+  - id
+  status: safe
+- path: /api/account/saved-searches/{id}/results
+  method: GET
+  auth: user
+  render: api-only
+  params:
+  - id
+  status: safe
+- path: /api/account/loyalty
+  method: GET
+  auth: none
+  render: api-only
+  params:
+  - Authorization
+  status: planted
+  note: BENCH-SHOP-0016 (alg none accepted) and BENCH-SHOP-0017 (kid names the key by path).
+- path: /api/account/loyalty/transactions
+  method: GET
+  auth: user
+  render: api-only
+  params: []
+  status: safe
+- path: /api/account/notifications
+  method: GET
+  auth: user
+  render: api-only
+  params: []
+  status: safe
+- path: /api/account/notifications/{id}
+  method: PATCH
+  auth: user
+  render: api-only
+  params:
+  - id
+  status: safe
+- path: /api/account/sessions
+  method: GET
+  auth: user
+  render: api-only
+  params: []
+  status: safe
+- path: /api/account/sessions/{id}
+  method: DELETE
+  auth: user
+  render: api-only
+  params:
+  - id
+  status: safe
+- path: /api/account/avatar
+  method: POST
+  auth: user
+  render: api-only
+  params:
+  - file
+  status: safe
+- path: /api/account/avatar/import
+  method: POST
+  auth: user
+  render: api-only
+  params:
+  - image_url
+  status: planted
+  note: 'BENCH-SHOP-0032: the URL is fetched with no host resolution or allowlist.'
+- path: /api/cart
+  method: POST
+  auth: none
+  render: api-only
+  params: []
+  status: safe
+- path: /api/cart
+  method: GET
+  auth: none
+  render: api-only
+  params: []
+  status: safe
+- path: /api/cart/summary
+  method: GET
+  auth: none
+  render: api-only
+  params: []
+  status: safe
+- path: /api/cart/items
+  method: POST
+  auth: none
+  render: api-only
+  params:
+  - variant_id
+  - quantity
+  - unit_price_cents
+  status: planted
+  note: BENCH-SHOP-0024 on unit_price_cents and BENCH-SHOP-0026 on quantity.
+- path: /api/cart/items/{id}
+  method: PATCH
+  auth: none
+  render: api-only
+  params:
+  - id
+  - quantity
+  status: planted
+  note: 'BENCH-SHOP-0027: the line total is coerced to 32 bits before it is stored.'
+- path: /api/cart/items/{id}
+  method: DELETE
+  auth: none
+  render: api-only
+  params:
+  - id
+  status: safe
+- path: /api/cart/notes
+  method: POST
+  auth: none
+  render: api-only
+  params:
+  - note
+  status: safe
+- path: /api/cart/merge
+  method: POST
+  auth: user
+  render: api-only
+  params:
+  - meta
+  - items
+  status: planted
+  note: 'BENCH-SHOP-0022: the merge has no key filter.'
+- path: /api/cart/restore
+  method: POST
+  auth: none
+  render: api-only
+  params:
+  - state
+  status: planted
+  note: 'BENCH-SHOP-0021: rules inside the blob are compiled and run.'
+- path: /api/checkout/sessions
+  method: POST
+  auth: user
+  render: api-only
+  params:
+  - address_id
+  - payment_method_id
+  status: safe
+- path: /api/checkout/sessions/{id}
+  method: GET
+  auth: user
+  render: api-only
+  params:
+  - id
+  status: safe
+- path: /api/checkout/shipping
+  method: POST
+  auth: user
+  render: api-only
+  params:
+  - method
+  - rate_cents
+  status: planted
+  note: 'BENCH-SHOP-0025: the carrier rate is taken from the caller.'
+- path: /api/checkout/payment-methods
+  method: POST
+  auth: user
+  render: api-only
+  params:
+  - payment_method_id
+  status: safe
+- path: /api/checkout/coupons
+  method: POST
+  auth: user
+  render: api-only
+  params:
+  - code
+  status: planted
+  note: 'BENCH-SHOP-0028: redemptions are counted at confirm, not when the code is attached.'
+- path: /api/checkout/coupons/{code}
+  method: DELETE
+  auth: user
+  render: api-only
+  params:
+  - code
+  status: safe
+- path: /api/checkout/tax-estimate
+  method: GET
+  auth: user
+  render: api-only
+  params: []
+  status: safe
+- path: /api/checkout/confirm
+  method: POST
+  auth: user
+  render: api-only
+  params: []
+  status: safe
+- path: /api/orders
+  method: GET
+  auth: user
+  render: api-only
+  params:
+  - page
+  - limit
+  status: safe
+- path: /api/orders/{id}
+  method: GET
+  auth: user
+  render: api-only
+  params:
+  - id
+  status: planted
+  note: 'BENCH-SHOP-0014: loaded by primary key with no ownership predicate.'
+- path: /api/orders/{id}/items
+  method: GET
+  auth: user
+  render: api-only
+  params:
+  - id
+  status: safe
+- path: /api/orders/{id}/shipments
+  method: GET
+  auth: user
+  render: api-only
+  params:
+  - id
+  status: safe
+- path: /api/orders/{id}/invoice
+  method: GET
+  auth: user
+  render: api-only
+  params:
+  - id
+  status: safe
+- path: /api/orders/{id}/reorder
+  method: POST
+  auth: user
+  render: api-only
+  params:
+  - id
+  status: safe
+- path: /api/orders/{id}/returns
+  method: POST
+  auth: user
+  render: api-only
+  params:
+  - id
+  - reason
+  status: safe
+- path: /api/orders/{id}/transitions
+  method: POST
+  auth: user
+  render: api-only
+  params:
+  - id
+  - to
+  status: planted
+  note: 'BENCH-SHOP-0012: the state machine is enforced, the authorisation matrix is not.'
+- path: /api/support/articles
+  method: GET
+  auth: none
+  render: api-only
+  params: []
+  status: safe
+- path: /api/support/articles/{slug}
+  method: GET
+  auth: none
+  render: api-only
+  params:
+  - slug
+  status: safe
+- path: /api/support/tickets
+  method: GET
+  auth: user
+  render: api-only
+  params:
+  - page
+  - limit
+  status: safe
+- path: /api/support/tickets
+  method: POST
+  auth: user
+  render: api-only
+  params:
+  - subject
+  - body
+  status: safe
+- path: /api/support/tickets/{id}
+  method: GET
+  auth: user
+  render: api-only
+  params:
+  - id
+  status: planted
+  note: 'BENCH-SHOP-0015: the ticket reference is treated as the capability.'
+- path: /api/support/tickets/{id}/messages
+  method: GET
+  auth: user
+  render: api-only
+  params:
+  - id
+  status: safe
+- path: /api/support/tickets/{id}/messages
+  method: POST
+  auth: user
+  render: api-only
+  params:
+  - id
+  - body
+  status: planted
+  note: 'BENCH-SHOP-0008: stored markup is rendered by the staff console.'
+- path: /api/support/tickets/{id}/close
+  method: POST
+  auth: user
+  render: api-only
+  params:
+  - id
+  status: safe
+- path: /api/gift-cards/redeem
+  method: POST
+  auth: user
+  render: api-only
+  params:
+  - code
+  status: planted
+  note: 'BENCH-SHOP-0029: read-check-write with no transaction between the read and the write.'
+- path: /api/gift-cards/{code}/balance
+  method: GET
+  auth: user
+  render: api-only
+  params:
+  - code
+  status: safe
+- path: /api/gift-cards/purchase
+  method: POST
+  auth: user
+  render: api-only
+  params:
+  - amount_cents
+  - recipient
+  status: safe
+- path: /api/wallet
+  method: GET
+  auth: user
+  render: api-only
+  params: []
+  status: safe
+- path: /api/wallet/transactions
+  method: GET
+  auth: user
+  render: api-only
+  params: []
+  status: safe
+- path: /api/admin/orders
+  method: GET
+  auth: admin
+  render: api-only
+  params:
+  - page
+  - limit
+  status: safe
+- path: /api/admin/orders/{id}
+  method: GET
+  auth: admin
+  render: api-only
+  params:
+  - id
+  status: safe
+- path: /api/admin/customers
+  method: GET
+  auth: admin
+  render: api-only
+  params:
+  - page
+  - limit
+  status: safe
+- path: /api/admin/customers/{id}
+  method: GET
+  auth: admin
+  render: api-only
+  params:
+  - id
+  status: safe
+- path: /api/admin/coupons
+  method: GET
+  auth: admin
+  render: api-only
+  params: []
+  status: safe
+- path: /api/admin/coupons
+  method: POST
+  auth: user
+  render: api-only
+  params:
+  - code
+  - description
+  - percent_off
+  - amount_off_cents
+  - max_redemptions
+  status: planted
+  note: 'BENCH-SHOP-0011: mounted without the role guard its siblings inherit.'
+- path: /api/admin/imports
+  method: GET
+  auth: admin
+  render: api-only
+  params: []
+  status: safe
+- path: /api/admin/imports
+  method: POST
+  auth: admin
+  render: api-only
+  params:
+  - source_url
+  status: planted
+  note: 'BENCH-SHOP-0031: any URL is fetched and the body is discarded.'
+- path: /api/admin/imports/{id}
+  method: GET
+  auth: admin
+  render: api-only
+  params:
+  - id
+  status: safe
+- path: /api/admin/support/tickets
+  method: GET
+  auth: admin
+  render: api-only
+  params:
+  - status
+  status: safe
+- path: /api/admin/metrics/daily
+  method: GET
+  auth: admin
+  render: api-only
+  params: []
+  status: safe
+- path: /api/admin/products
+  method: POST
+  auth: admin
+  render: api-only
+  params:
+  - title
+  - slug
+  - price_cents
+  - category_id
+  - brand_id
+  - summary
+  status: safe
+- path: /api/admin/products/{id}
+  method: PATCH
+  auth: admin
+  render: api-only
+  params:
+  - id
+  - price_cents
+  - is_active
+  status: safe
+- path: /api/admin/audit-log
+  method: GET
+  auth: admin
+  render: api-only
+  params: []
+  status: safe
+- path: /graphql
+  method: POST
+  auth: none
+  render: api-only
+  params:
+  - query
+  - variables
+  - operationName
+  status: planted
+  note: BENCH-SHOP-0003 (filter.tag), 0005 (introspection), 0006 (batching), 0023 (variable merge).
+- path: /graphql
+  method: GET
+  auth: none
+  render: api-only
+  params: []
+  status: safe
+- path: /ws/orders
+  method: GET
+  auth: user
+  render: websocket
+  params:
+  - Origin
+  status: planted
+  note: 'BENCH-SHOP-0030: upgraded from the session cookie with no Origin check.'
+- path: /ws/support
+  method: GET
+  auth: admin
+  render: websocket
+  params:
+  - Origin
+  status: safe

@@ -1,0 +1,42 @@
+id: BENCH-SHOP-0003
+title: UNION-based SQL injection through the GraphQL product filter
+app: shopfront
+component: api
+class: sqli_union
+severity: critical
+entrypoint:
+  method: POST
+  path: /graphql
+  auth: none
+  param: filter.tag
+  param_in: graphql
+  default_value: outdoor
+  content_type: application/json
+discovery:
+  render: spa-react
+  reachable_from:
+  - /
+  - /catalog
+  requires:
+  - js-execution
+  - graphql-introspection
+  difficulty: 3
+oracle:
+  kind: sink
+  condition: 'Second instance of the same class on a different transport: the resolver for products(filter:)
+    builds the same WHERE fragment by concatenation, so the injection point is a GraphQL variable rather
+    than a query string. The sink fires on the executed plan -- an injected UNION or tautology in the
+    parsed SQL together with at least one row sourced outside the products table -- and never on the presence
+    of a quote in a variable.
+
+    '
+  poc: POST /graphql {"query":"query($f:ProductFilter){products(filter:$f){id title}}","variables":{"f":{"tag":"x'
+    UNION SELECT id,email,password_hash,1,1 FROM users--"}}}
+  signal: shop.graph.products.plan_anomaly
+tags:
+- graphql
+- postgres
+- variant
+introduced: '2026-09-05'
+decoy_note: The GraphQL layer was added over the existing catalogue service and the resolver reuses the
+  REST layer's hand-built filter string, so the same flaw arrived by copy-paste.

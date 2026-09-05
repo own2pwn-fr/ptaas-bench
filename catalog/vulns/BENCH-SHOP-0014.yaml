@@ -23,8 +23,8 @@ oracle:
   kind: differential
   condition: 'The handler loads the order by primary key without filtering on the session''s customer
     id. A trigger fires when a response is served whose order.customer_id differs from the authenticated
-    caller''s customer id, i.e. the caller actually received another tenant''s data. Anonymous 401s
-    and self-owned reads never fire it.
+    caller''s customer id, i.e. the caller actually received another tenant''s data. Anonymous 401s and
+    self-owned reads never fire it.
 
     '
   poc: GET /api/orders/1002 with the session cookie of the customer who owns order 1001

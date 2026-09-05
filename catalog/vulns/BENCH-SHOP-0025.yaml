@@ -1,0 +1,43 @@
+id: BENCH-SHOP-0025
+title: Checkout accepts a client-supplied shipping rate
+app: shopfront
+component: api
+class: price_manipulation
+severity: critical
+entrypoint:
+  method: POST
+  path: /api/checkout/shipping
+  auth: user
+  param: rate_cents
+  param_in: json
+  default_value: <the quoted rate for the selected method>
+  content_type: application/json
+discovery:
+  render: spa-react
+  reachable_from:
+  - /checkout
+  requires:
+  - js-execution
+  - multi-step-flow
+  - state-change
+  difficulty: 3
+oracle:
+  kind: state
+  condition: 'Second instance of the class on a different line of the order and one step further into
+    the funnel, where a scanner has to have completed a cart to reach it. The shipping quote is fetched
+    from the carrier service by the browser and posted back with the chosen method. The sink fires at
+    order creation when the persisted shipping amount is below the quote the carrier service returns for
+    that method and destination, including the negative case.
+
+    '
+  poc: POST /api/checkout/shipping {"method":"express","rate_cents":-4500} then POST /api/checkout/confirm
+  signal: shop.checkout.shipping.rate_authority
+tags:
+- rest
+- json
+- authenticated
+- business-logic
+- variant
+introduced: '2026-09-05'
+decoy_note: The carrier quote is slow, so it is called from the browser and cached there; re-quoting it
+  server-side at confirm was measured as too expensive during the last peak season.

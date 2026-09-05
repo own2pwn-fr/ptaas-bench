@@ -1,0 +1,42 @@
+id: BENCH-SHOP-0030
+title: Order stream WebSocket authenticates from the cookie and ignores Origin
+app: shopfront
+component: api
+class: websocket_hijack
+severity: high
+entrypoint:
+  method: GET
+  path: /ws/orders
+  auth: user
+  param: Origin
+  param_in: header
+  default_value: <the storefront origin>
+discovery:
+  render: spa-react
+  reachable_from:
+  - /account/orders
+  requires:
+  - js-execution
+  - websocket
+  - multi-step-flow
+  difficulty: 4
+oracle:
+  kind: sink
+  condition: 'The order stream is upgraded with the session cookie alone: there is no subprotocol token
+    and the Origin header is read for logging only. Any page a shopper visits can therefore open the socket
+    in their name and read the stream. The sink fires when a socket whose upgrade carried an Origin outside
+    the allowlist is served a frame containing another site''s worth of order data -- an order payload
+    for the authenticated subject pushed to a cross-origin peer. Opening the socket and receiving only
+    the greeting frame is exercise.
+
+    '
+  poc: 'GET /ws/orders (Upgrade: websocket) with a customer session cookie and Origin: https://attacker.example,
+    then send {"type":"subscribe","scope":"orders"}'
+  signal: shop.stream.orders.cross_origin_session
+tags:
+- websocket
+- authenticated
+- cross-origin
+introduced: '2026-09-05'
+decoy_note: Origin checking on WebSockets is not done for you by the browser and is easy to forget, especially
+  when the socket was added by the team that owns the fulfilment service.

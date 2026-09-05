@@ -1,0 +1,155 @@
+#!/usr/bin/env node
+/**
+ * Rebuild the storefront estate from nothing.
+ *
+ * `schema.sql` drops and recreates the schema before a single row is written, so this is
+ * idempotent by construction: run it twice and the second run prints the same digest as
+ * the first. The two pieces of state that live outside Postgres are handled here too —
+ * the uploads directory is emptied and the loyalty signing keys are rewritten from the
+ * deploy seed, so a rebuilt estate verifies the same points statements it did before.
+ *
+ * Usage:
+ *   bin/state-reset                      rebuild and print one status line
+ *   bin/state-reset --emit-credentials   print the quoted accounts, touch nothing
+ */
+import { createHash } from "node:crypto";
+import { mkdir, rm, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+import process from "node:process";
+
+const CONNECT_TIMEOUT_MS = 60_000;
+const CONNECT_RETRY_MS = 1000;
+const LOYALTY_KEYS = ["loyalty-2026-03", "loyalty-2026-04"];
+
+const args = process.argv.slice(2);
+const wants = (option) => args.includes(option);
+
+function usage() {
+  process.stderr.write(
+    "usage: state-reset [--emit-credentials]\n" +
+      "  --emit-credentials   print the fixed accounts as YAML and exit\n",
+  );
+}
+
+const unknown = args.filter((arg) => !["--emit-credentials", "--help", "-h"].includes(arg));
+if (unknown.length > 0) {
+  process.stderr.write(`state-reset: unrecognised argument: ${unknown[0]}\n`);
+  usage();
+  process.exit(2);
+}
+if (wants("--help") || wants("-h")) {
+  usage();
+  process.exit(0);
+}
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * The accounts other teams quote by number.
+ *
+ * Printed straight from the derivation in the seeder so the two can never drift: if this
+ * prints a passphrase, that passphrase is the one that was hashed into the row.
+ */
+async function emitCredentials() {
+  // Imported lazily: pulling in the seeder alone must not open a connection pool.
+  const [{ credentials }, { default: config }] = await Promise.all([
+    import("../server/seed/seed.js"),
+    import("../server/config.js"),
+  ]);
+  const accounts = credentials(config.deploySeed);
+  const lines = [
+    "app: shopfront",
+    "users:",
+    "  - role: user",
+    `    username: ${accounts.primary.email}`,
+    `    password: ${accounts.primary.password}`,
+    "    subject_id: '1001'",
+    "  - role: other-user",
+    `    username: ${accounts.secondary.email}`,
+    `    password: ${accounts.secondary.password}`,
+    "    subject_id: '1002'",
+    "  - role: admin",
+    `    username: ${accounts.staff.email}`,
+    `    password: ${accounts.staff.password}`,
+    "    subject_id: '1'",
+  ];
+  process.stdout.write(`${lines.join("\n")}\n`);
+}
+
+/** Poll until Postgres answers, or give up after the connect budget. */
+async function waitForDatabase(pool) {
+  const deadline = Date.now() + CONNECT_TIMEOUT_MS;
+  let lastError = null;
+  for (;;) {
+    try {
+      await pool.query("SELECT 1");
+      return;
+    } catch (error) {
+      lastError = error;
+      if (Date.now() + CONNECT_RETRY_MS >= deadline) break;
+      await sleep(CONNECT_RETRY_MS);
+    }
+  }
+  throw new Error(
+    `database did not accept connections within ${CONNECT_TIMEOUT_MS / 1000}s: ${lastError?.message ?? "unknown error"}`,
+  );
+}
+
+/** Uploads are state as much as rows are: an estate rebuild starts with an empty shelf. */
+async function resetMedia(mediaDir) {
+  await rm(mediaDir, { recursive: true, force: true });
+  await mkdir(join(mediaDir, "products"), { recursive: true });
+  await mkdir(join(mediaDir, "avatars"), { recursive: true });
+}
+
+/**
+ * Rewrite the loyalty provider's rotating signing keys.
+ *
+ * The provider hands us one key per month; on a rebuilt estate we derive them from the
+ * deploy seed so that a statement signed before the rebuild still verifies afterwards.
+ */
+async function resetLoyaltyKeys(keyDir, deploySeed) {
+  await rm(keyDir, { recursive: true, force: true });
+  await mkdir(keyDir, { recursive: true });
+  for (const name of LOYALTY_KEYS) {
+    const material = createHash("sha256").update(`${deploySeed}:loyalty-key:${name}`).digest("hex");
+    await writeFile(join(keyDir, name), material, { mode: 0o600 });
+  }
+}
+
+async function rebuild() {
+  const [{ seed }, { default: config }, db] = await Promise.all([
+    import("../server/seed/seed.js"),
+    import("../server/config.js"),
+    import("../server/db.js"),
+  ]);
+
+  // A database that is still coming up can drop an idle connection; without a listener
+  // that surfaces as an unhandled event and takes the whole reset down mid-retry.
+  db.pool.on("error", () => {});
+
+  try {
+    await waitForDatabase(db.pool);
+    const { digest, counts } = await seed({ pool: db.pool, sql: db.sql, log: () => {} });
+    await resetMedia(config.mediaDir);
+    await resetLoyaltyKeys(config.loyaltyKeyDir, config.deploySeed);
+    process.stdout.write(
+      `state ${digest} customers=${counts.customers} products=${counts.products} ` +
+        `orders=${counts.orders} tickets=${counts.support_tickets}\n`,
+    );
+  } finally {
+    await db.close().catch(() => {});
+  }
+}
+
+try {
+  if (wants("--emit-credentials")) {
+    await emitCredentials();
+  } else {
+    await rebuild();
+  }
+  process.exitCode = 0;
+} catch (error) {
+  process.stderr.write(`state-reset failed: ${error?.stack ?? error}\n`);
+  process.exitCode = 1;
+}

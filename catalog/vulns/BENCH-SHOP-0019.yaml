@@ -1,0 +1,42 @@
+id: BENCH-SHOP-0019
+title: Sign-in accepts unlimited credential attempts
+app: shopfront
+component: api
+class: no_rate_limit
+severity: high
+entrypoint:
+  method: POST
+  path: /api/auth/login
+  auth: none
+  param: password
+  param_in: json
+  default_value: <the customer password>
+  content_type: application/json
+discovery:
+  render: spa-react
+  reachable_from:
+  - /
+  - /sign-in
+  requires:
+  - js-execution
+  - form-submit
+  difficulty: 2
+oracle:
+  kind: sink
+  condition: 'There is no lockout, no delay and no captcha: the per-IP throttle in front of the API counts
+    requests across all routes at a limit high enough that a password sweep never reaches it. The sink
+    fires once when a thirtieth failed attempt against a single account identifier inside a sixty second
+    window is answered normally -- that is, the endpoint demonstrably did not throttle a sweep. It is
+    deduplicated per identifier and window so a longer sweep still produces one signal, and a handful
+    of ordinary typos never reaches the threshold.
+
+    '
+  poc: POST /api/auth/login x30 with one identifier and thirty different passwords inside a minute
+  signal: shop.auth.login.credential_sweep
+tags:
+- rest
+- json
+- authentication
+introduced: '2026-09-05'
+decoy_note: Lockout was rejected by the support team because it turns into an account denial-of-service
+  and floods the helpdesk, and the "temporary" gateway throttle was never tuned per route.

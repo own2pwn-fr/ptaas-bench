@@ -4,9 +4,12 @@ __pycache__/
 node_modules/
 dist/
 build/
-bin/
-obj/
-target/
+# Not a bare `bin/`: targets ship an executable state-reset under bin/, and ignoring it
+# silently produces an image whose reset command is missing — a failure that surfaces
+# only at bring-up, as a target that cannot be returned to its seeded state.
+sdk/dotnet/**/obj/
+sdk/dotnet/**/bin/
+sdk/java/target/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/

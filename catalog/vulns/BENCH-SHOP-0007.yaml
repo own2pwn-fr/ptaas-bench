@@ -1,0 +1,45 @@
+id: BENCH-SHOP-0007
+title: Stored XSS in a product review body served to other shoppers
+app: shopfront
+component: api
+class: xss_stored
+severity: high
+entrypoint:
+  method: POST
+  path: /api/products/:id/reviews
+  auth: user
+  param: body
+  param_in: json
+  default_value: Held up well on a wet weekend. Sizing runs small.
+  content_type: application/json
+discovery:
+  render: spa-react
+  reachable_from:
+  - /product/:slug
+  - /account/orders/:id
+  requires:
+  - js-execution
+  - multi-step-flow
+  - state-change
+  difficulty: 3
+oracle:
+  kind: sink
+  condition: 'Review bodies keep a small amount of markup (bold, italics, links) and are rendered as HTML
+    by the product page. The sanitiser is a denylist and misses several script-executing constructs. The
+    sink fires when a stored body is served in a response whose authenticated subject is NOT the review''s
+    author AND a parse of the stored value yields an element or attribute that executes script (script
+    element, on* handler, javascript: URL, srcdoc). Posting a payload and reading it back yourself is
+    exercise: persistence plus delivery to a third party is the effect.
+
+    '
+  poc: POST /api/products/12/reviews {"rating":5,"body":"<img src=x onerror=fetch(1)>"} then GET /api/products/12/reviews
+    as a different customer
+  signal: shop.reviews.body.markup_persisted
+tags:
+- rest
+- json
+- stored
+- authenticated
+introduced: '2026-09-05'
+decoy_note: Reviews allow "a little formatting" because marketing asked for it, and the denylist was written
+  by hand rather than pulling in a sanitiser dependency.

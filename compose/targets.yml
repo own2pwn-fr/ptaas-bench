@@ -2,3 +2,4 @@
 # and is added to the list below; nothing else in the repository changes.
 include:
   - edge.yml
+  - shopfront.yml

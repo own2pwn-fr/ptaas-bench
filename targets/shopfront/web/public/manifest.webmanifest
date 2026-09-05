@@ -1,0 +1,33 @@
+{
+  "name": "Storefront — outdoor and household goods",
+  "short_name": "Storefront",
+  "description": "Hard-wearing outdoor and household goods, made to be repaired rather than replaced.",
+  "id": "/",
+  "start_url": "/?source=pwa",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#f6f4ef",
+  "theme_color": "#1f3d2b",
+  "lang": "en-GB",
+  "dir": "ltr",
+  "categories": ["shopping", "lifestyle"],
+  "icons": [
+    {
+      "src": "/favicon.ico",
+      "sizes": "16x16",
+      "type": "image/vnd.microsoft.icon"
+    },
+    {
+      "src": "/og-card.png",
+      "sizes": "600x315",
+      "type": "image/png",
+      "purpose": "any"
+    }
+  ],
+  "shortcuts": [
+    { "name": "Basket", "url": "/cart" },
+    { "name": "My orders", "url": "/account/orders" },
+    { "name": "Help", "url": "/support" }
+  ]
+}

@@ -10,7 +10,7 @@ entrypoint:
   auth: admin
   param: source_url
   param_in: json
-  default_value: https://suppliers.internal.bench.local/catalog.json
+  default_value: https://feeds.<the storefront domain>/catalogue/2026-01.csv
   content_type: application/json
 discovery:
   render: spa-react
@@ -23,13 +23,15 @@ discovery:
   difficulty: 4
 oracle:
   kind: oob
-  condition: 'The importer fetches any URL supplied by the caller and discards the body, so there
-    is nothing to reflect. The trigger is raised by the canary service when it receives a DNS or HTTP
-    hit carrying this vulnerability''s token, correlated back to the run that was active when the
-    request was made. Submitting a payload without ever causing a callback scores exercise only.
+  condition: 'The importer fetches any URL supplied by the caller and discards the body, so there is nothing
+    to reflect. The sink declares the destination host to the egress correlation registry immediately
+    before the fetch, and the trigger is raised by the sinkhole -- which is the DNS resolver for the whole
+    target network -- when it observes a lookup or a connection to that host, whatever domain the tool
+    chose, joined back to the request that declared it. Submitting a payload without ever causing a callback
+    scores exercise only.
 
     '
-  poc: POST /api/admin/imports {"source_url":"http://<token>.oob.bench.local/x"}
+  poc: POST /api/admin/imports {"source_url":"http://<any host the tool controls>/x"}
   signal: shop.imports.fetch.external
 tags:
 - rest

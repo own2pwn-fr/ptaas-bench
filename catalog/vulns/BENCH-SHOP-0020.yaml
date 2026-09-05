@@ -1,0 +1,44 @@
+id: BENCH-SHOP-0020
+title: Step-up code verification is not rate limited
+app: shopfront
+component: api
+class: no_rate_limit
+severity: high
+entrypoint:
+  method: POST
+  path: /api/auth/step-up/verify
+  auth: user
+  param: code
+  param_in: json
+  default_value: '482915'
+  content_type: application/json
+discovery:
+  render: spa-react
+  reachable_from:
+  - /account/payment-methods
+  - /checkout
+  requires:
+  - js-execution
+  - multi-step-flow
+  - state-change
+  difficulty: 4
+oracle:
+  kind: sink
+  condition: 'Second instance of the class, behind a login and against a six-digit secret rather than
+    a password, which is the case where the missing limit is actually fatal. The attempt counter is incremented
+    in the branch that handles an expired request and not in the branch that handles a wrong code, so
+    the counter never moves. The sink fires once when a thirtieth wrong code for one live step-up is answered
+    normally, deduplicated per step-up.
+
+    '
+  poc: POST /api/auth/step-up/verify x30 against one step_up_id with thirty wrong codes
+  signal: shop.auth.stepup.code_sweep
+tags:
+- rest
+- json
+- authenticated
+- authentication
+- variant
+introduced: '2026-09-05'
+decoy_note: The counter and the check were written in the same commit but in different branches of the
+  same switch, and the tests only covered the expiry path.

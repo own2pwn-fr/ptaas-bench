@@ -1,0 +1,41 @@
+id: BENCH-SHOP-0016
+title: Loyalty API accepts an unsigned JWT with alg none
+app: shopfront
+component: api
+class: jwt_alg_none
+severity: critical
+entrypoint:
+  method: GET
+  path: /api/account/loyalty
+  auth: none
+  param: Authorization
+  param_in: header
+  default_value: Bearer <RS256 token issued by the loyalty provider>
+discovery:
+  render: spa-react
+  reachable_from:
+  - /account/loyalty
+  requires:
+  - js-execution
+  - custom-header
+  difficulty: 3
+oracle:
+  kind: sink
+  condition: 'The loyalty balance is served to the storefront and to the partner mobile app, which authenticates
+    with a bearer token from the loyalty provider instead of the session cookie. The verifier reads the
+    header, and when the algorithm is none it skips signature verification and trusts the claims. The
+    sink fires when a request is authorised from a token whose signature was never checked AND the response
+    carried the balance of the subject named in that token. A malformed or rejected token, and a correctly
+    signed one, are both silent.
+
+    '
+  poc: 'GET /api/account/loyalty with Authorization: Bearer eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJzdWIiOiIxMDAyIn0.'
+  signal: shop.auth.token.unverified_accept
+tags:
+- rest
+- jwt
+- header
+- authentication
+introduced: '2026-09-05'
+decoy_note: The verifier reads the algorithm from the token so that the provider can rotate from HS256
+  to RS256 without a coordinated deploy, which is exactly how alg=none survives.

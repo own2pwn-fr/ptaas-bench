@@ -1,0 +1,43 @@
+id: BENCH-SHOP-0011
+title: Coupon creation in the back office is reachable by any signed-in customer
+app: shopfront
+component: api
+class: bfla
+severity: critical
+entrypoint:
+  method: POST
+  path: /api/admin/coupons
+  auth: user
+  param: code
+  param_in: json
+  default_value: SPRING-15
+  content_type: application/json
+discovery:
+  render: spa-react
+  reachable_from:
+  - /admin
+  - /admin/coupons
+  requires:
+  - js-execution
+  - wordlist
+  - state-change
+  difficulty: 4
+oracle:
+  kind: state
+  condition: 'The admin router mounts a session guard but the role check is applied per handler, and this
+    one was added later without it. The sink fires when a coupon row is created by a subject whose role
+    is not staff -- the state change actually happened and is visible in the coupon table. A 403 from
+    the role-checked siblings, or a staff account creating a coupon, never fires it.
+
+    '
+  poc: POST /api/admin/coupons {"code":"FREE-100","percent_off":100,"max_redemptions":999} with an ordinary
+    customer session cookie
+  signal: shop.admin.coupons.actor_role_mismatch
+tags:
+- rest
+- json
+- authenticated
+- privilege
+introduced: '2026-09-05'
+decoy_note: Every other handler in the admin router inherits the role guard from its parent route; this
+  one was added during a promotion launch and mounted one level up by mistake.

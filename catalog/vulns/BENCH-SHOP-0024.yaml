@@ -1,0 +1,48 @@
+id: BENCH-SHOP-0024
+title: Cart accepts a client-supplied unit price
+app: shopfront
+component: api
+class: price_manipulation
+severity: critical
+entrypoint:
+  method: POST
+  path: /api/cart/items
+  auth: user
+  param: unit_price_cents
+  param_in: json
+  default_value: <the catalogue price of the variant>
+  content_type: application/json
+discovery:
+  render: spa-react
+  reachable_from:
+  - /product/:slug
+  - /cart
+  requires:
+  - js-execution
+  - multi-step-flow
+  - state-change
+  difficulty: 3
+oracle:
+  kind: state
+  condition: 'The add-to-cart payload carries the price the storefront displayed so that a price change
+    mid-session does not silently charge more, and the server stores it instead of treating it as a hint.
+    The sink fires at order creation, not at add-to-cart: it compares each persisted order line against
+    the catalogue price of its variant and reports when the order was actually created below catalogue
+    value. Putting a cheap line in a cart and abandoning it is exercise.
+
+    '
+  poc: POST /api/cart/items {"variant_id":3101,"quantity":1,"unit_price_cents":1} then POST /api/checkout/confirm
+  signal: shop.checkout.line.price_authority
+tags:
+- rest
+- json
+- authenticated
+- business-logic
+- multi-step
+introduced: '2026-09-05'
+notes: The add-to-cart endpoint itself answers a guest, so a crawler reaches it without credentials; the
+  effect this entry is scored on only exists once the basket becomes an order, which needs a signed-in
+  checkout. `auth` records what is needed to prove it, and the route inventory records what is needed
+  to reach it.
+decoy_note: Sending the displayed price back was a deliberate anti-surprise measure after a pricing incident;
+  the server-side reconciliation that was meant to accompany it was cut for time.

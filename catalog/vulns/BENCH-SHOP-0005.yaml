@@ -1,0 +1,39 @@
+id: BENCH-SHOP-0005
+title: GraphQL introspection left enabled on the public endpoint
+app: shopfront
+component: api
+class: graphql_introspection
+severity: low
+entrypoint:
+  method: POST
+  path: /graphql
+  auth: none
+  param: query
+  param_in: graphql
+  default_value: 'query ProductGrid { products(first: 12) { id title } }'
+  content_type: application/json
+discovery:
+  render: spa-react
+  reachable_from:
+  - /
+  - /catalog
+  requires:
+  - js-execution
+  difficulty: 2
+oracle:
+  kind: sink
+  condition: 'The schema is served to anyone who asks for it, including the admin-only mutations and the
+    internal fields the storefront never selects. The sink fires when a single operation resolves the
+    __schema root and walks past the type list into field definitions -- the shape of a schema dump --
+    rather than on the mere presence of the string __schema, which the SPA''s own developer tooling also
+    sends.
+
+    '
+  poc: POST /graphql {"query":"{__schema{types{name fields{name type{name}}}}}"}
+  signal: shop.graph.schema.full_walk
+tags:
+- graphql
+- misconfiguration
+introduced: '2026-09-05'
+decoy_note: Introspection is on by default in every GraphQL server and disabling it breaks the client
+  codegen step in CI, so it survives to production more often than not.

@@ -1,0 +1,46 @@
+id: BENCH-SHOP-0010
+title: DOM XSS in a stored account dashboard widget title
+app: shopfront
+component: web
+class: xss_dom
+severity: medium
+entrypoint:
+  method: PUT
+  path: /api/account/preferences
+  auth: user
+  param: widgets[].title
+  param_in: json
+  default_value: Recent orders
+  content_type: application/json
+discovery:
+  render: spa-react
+  reachable_from:
+  - /account
+  - /account/preferences
+  requires:
+  - js-execution
+  - multi-step-flow
+  - state-change
+  difficulty: 5
+oracle:
+  kind: sink
+  condition: 'Second instance of the class, stored rather than reflected and behind a login. The account
+    dashboard lets a customer rename and reorder its widgets; the title is stored verbatim and written
+    into the DOM with innerHTML on every subsequent visit. The sink fires on a report-only policy violation
+    whose document URI is the account dashboard, raised by a client that loaded that document within the
+    last five minutes, where the stored title for that subject contains the construct the browser reported.
+    Storing the payload is exercise; the trigger needs a rendered session.
+
+    '
+  poc: PUT /api/account/preferences {"widgets":[{"id":"orders","title":"<img src=x onerror=fetch('/api/status')>"}]}
+    then load /account in a browser
+  signal: shop.web.account.script_execution
+tags:
+- spa
+- dom
+- stored
+- authenticated
+- variant
+introduced: '2026-09-05'
+decoy_note: Widget titles are user-owned strings shown only to their owner, so the team reasoned there
+  was nobody to attack and skipped escaping.

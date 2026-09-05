@@ -1,0 +1,45 @@
+id: BENCH-SHOP-0018
+title: Step-up resend endpoint grants the challenge it is supposed to re-send
+app: shopfront
+component: api
+class: otp_bypass
+severity: critical
+entrypoint:
+  method: POST
+  path: /api/auth/step-up/resend
+  auth: user
+  param: step_up_id
+  param_in: json
+  default_value: <the id returned by /api/auth/step-up/requests>
+  content_type: application/json
+discovery:
+  render: spa-react
+  reachable_from:
+  - /account/payment-methods
+  - /checkout
+  requires:
+  - js-execution
+  - multi-step-flow
+  - state-change
+  difficulty: 4
+oracle:
+  kind: state
+  condition: 'Changing a payout destination requires a six-digit code sent out of band. The resend handler
+    was written by copying the tail of the verify handler and the copy kept the line that marks the session
+    as having satisfied the step-up. The sink fires when a session acquires a step-up grant for a request
+    that has no matching correct-code submission, and it fires on the grant, not on the call: asking for
+    the code to be sent again without obtaining a grant is exercise.
+
+    '
+  poc: POST /api/auth/step-up/requests {"purpose":"payout"} then POST /api/auth/step-up/resend {"step_up_id":"<id>"};
+    the session then holds a step-up grant that no correct code ever produced
+  signal: shop.auth.stepup.unverified_grant
+tags:
+- rest
+- json
+- authenticated
+- multi-step
+- authentication
+introduced: '2026-09-05'
+decoy_note: Resend and verify share almost all of their body -- reload the challenge, touch the session,
+  answer the client -- so the copy kept one line too many.

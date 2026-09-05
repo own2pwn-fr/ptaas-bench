@@ -1,0 +1,42 @@
+id: BENCH-SHOP-0021
+title: Cart restore evaluates expressions embedded in the saved state blob
+app: shopfront
+component: api
+class: deser_node
+severity: critical
+entrypoint:
+  method: POST
+  path: /api/cart/restore
+  auth: none
+  param: state
+  param_in: json
+  default_value: <base64 blob written by the storefront when a guest cart is abandoned>
+  content_type: application/json
+discovery:
+  render: spa-react
+  reachable_from:
+  - /cart
+  requires:
+  - js-execution
+  - state-change
+  difficulty: 3
+oracle:
+  kind: sink
+  condition: 'Abandoned guest carts are round-tripped through an in-house compact encoding that supports
+    computed fields: a value of the form {"$expr": "..."} is compiled with the Function constructor so
+    that a promotion can express a total in terms of the other lines. The compiled expression runs with
+    the process''s own globals in scope. The sink fires when a compiled expression resolves an identifier
+    outside the small set the encoder is documented to expose -- process, require, globalThis, constructor
+    -- which is code execution actually reaching the host, not a suspicious looking blob.
+
+    '
+  poc: POST /api/cart/restore {"state":"<base64 of {\"lines\":[],\"total\":{\"$expr\":\"process.mainModule\"}}>"}
+  signal: shop.cart.state.decode_anomaly
+tags:
+- rest
+- json
+- deserialization
+- rce
+introduced: '2026-09-05'
+decoy_note: The encoding predates the current cart service and was kept because the marketing team's promotion
+  rules are authored as expressions; the evaluator was "temporarily" left unsandboxed.

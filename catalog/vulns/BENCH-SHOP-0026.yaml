@@ -1,0 +1,48 @@
+id: BENCH-SHOP-0026
+title: Negative cart quantities credit the order total
+app: shopfront
+component: api
+class: negative_quantity
+severity: high
+entrypoint:
+  method: POST
+  path: /api/cart/items
+  auth: user
+  param: quantity
+  param_in: json
+  default_value: '1'
+  content_type: application/json
+discovery:
+  render: spa-react
+  reachable_from:
+  - /product/:slug
+  - /cart
+  requires:
+  - js-execution
+  - multi-step-flow
+  - state-change
+  difficulty: 3
+oracle:
+  kind: state
+  condition: 'Quantity is validated as an integer and bounded above by the stock level, but never below
+    zero, and the total is a plain sum of quantity times price. The sink fires when an order is created
+    that contains a line with a quantity below one AND whose total is less than the sum of its non-negative
+    lines, which is the credit actually landing on the order. A negative quantity that is rejected, or
+    that leaves the total unchanged, is exercise.
+
+    '
+  poc: POST /api/cart/items {"variant_id":3101,"quantity":1} and {"variant_id":3107,"quantity":-40} then
+    POST /api/checkout/confirm
+  signal: shop.checkout.line.negative_quantity
+tags:
+- rest
+- json
+- authenticated
+- business-logic
+introduced: '2026-09-05'
+notes: The add-to-cart endpoint itself answers a guest, so a crawler reaches it without credentials; the
+  effect this entry is scored on only exists once the basket becomes an order, which needs a signed-in
+  checkout. `auth` records what is needed to prove it, and the route inventory records what is needed
+  to reach it.
+decoy_note: The bound that mattered to the team was the upper one, because that is the one that oversells
+  stock; quantity comes from a spinner in the UI that cannot go below one.
