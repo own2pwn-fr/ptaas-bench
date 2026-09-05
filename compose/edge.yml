@@ -15,10 +15,14 @@
 #   haproxy 2.0.29   targets/edge/haproxy/haproxy.cfg
 #   varnish 6.0.13   targets/edge/varnish/default.vcl
 #
-# Digests are not written here because this fragment was authored offline. At first
-# bring-up, record `docker image inspect --format '{{index .RepoDigests 0}}'` for each
-# of the three and replace the tags with `image@sha256:...`. Until then the tags are
-# exact — never `latest`, never a floating minor.
+# The tags below are exact — never `latest`, never a floating minor. These are the
+# digests they resolved to at first bring-up (2026-09-05), recorded so a later pull
+# that silently moves a tag can be spotted by comparing against `docker image inspect
+# --format '{{index .RepoDigests 0}}'`:
+#
+#   nginx:1.21.6-alpine    sha256:a74534e76ee1121d418fa7394ca930eb67440deda413848bc67c68138535b989
+#   haproxy:2.0.29-alpine  sha256:8564abdd6ba19ed69381a1889b2da33d09541e6f374d4e96b27e55dbf68c737a
+#   varnish:6.0.13         sha256:f1627a662a4bbb9fc4759202d15162c4a09394230001332dc7b07c5819564314
 #
 # NAMES
 # -----

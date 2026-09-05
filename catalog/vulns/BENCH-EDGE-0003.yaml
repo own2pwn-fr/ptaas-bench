@@ -62,12 +62,38 @@ notes: >
   to the origin rather than back through the balancer on purpose: if the balancer
   re-parsed the message it would consume the trailing prefix itself and re-emit it as a
   normal request carrying its own Via, destroying the only test available here.
-  Confidence: LOW — this is the entry most likely to need adjustment at first bring-up.
-  nginx checks the HTTP/2 request body length against the declared content-length and
-  may answer 400 rather than forwarding the mismatch; the pin to 1.21.6 is chosen
-  because it predates later tightening, but that has NOT been confirmed on a running
-  stack. If nginx refuses, move h2c termination to a HAProxy `bind :8081 proto h2`
-  frontend running in HTX mode (`option http-use-htx` is per-proxy in 2.0, so it can
-  coexist with the legacy frontend on :80) and have it set the same Via entry. The
-  counter is indifferent to which hop performs the conversion, as long as that hop
-  stamps its own requests.
+  Confidence: LOW — and the doubt was justified. DOES NOT REPRODUCE on the pinned stack;
+  measured 2026-09-05 and left as it is rather than propped up. Both hops that could
+  perform the downgrade enforce the very equality the entry needs them to skip:
+
+    * nginx 1.21.6, `listen 8081 http2`, `proxy_request_buffering off`. With
+      `content-length: 0` and an 84-byte DATA frame it forwards the request line and
+      headers to the origin (buffering is off, so the head goes out before the body is
+      read), carrying `Content-Length: 0` exactly as configured — and then answers the
+      CLIENT 400 and forwards not one byte of the DATA. The origin sees the POST and
+      nothing after it, so no request ever emerges from the gap. Declaring MORE than is
+      sent (`content-length: 134`, 84 bytes of DATA, END_STREAM) is refused earlier
+      still: 400, and no request reaches the origin at all. Declaring the true length
+      (84) is served 201 and the body arrives intact, so the h2c path itself is healthy
+      and `proxy_set_header Content-Length $http_content_length` does pass the client's
+      value through — nginx simply will not let the value and the DATA disagree.
+    * The fallback named below was tried too, on a throwaway haproxy 2.0.29 with
+      `bind :8081 proto h2` in HTX mode. It is stricter: the h2 mux resets the stream
+      (RST_STREAM) on the content-length/DATA mismatch and logs `be_o/<NOSRV>`, so the
+      request does not reach the origin even as far as its headers. With a truthful
+      content-length it forwards normally.
+
+  So there is no hop in this stack that will convert an HTTP/2 message down to HTTP/1.1
+  while keeping a client-declared length that contradicts the payload, and the H2.CL
+  desync has nowhere to happen. Leaving the counter armed and unfired is deliberate: the
+  only ways to make it fire would be to relax what it requires, which would credit every
+  tool with an exploit none of them performed, or to downgrade a hop to a version that
+  misparses, which would make the corpus claim a stack it is not running. Neither is
+  worth a point. If this entry is ever to be revived it needs a hop that genuinely
+  forwards the mismatch, not a looser test.
+
+  Original guidance, kept for the record: if nginx refuses, move h2c termination to a
+  HAProxy `bind :8081 proto h2` frontend running in HTX mode (`option http-use-htx` is
+  per-proxy in 2.0, so it can coexist with the legacy frontend on :80) and have it set
+  the same Via entry. The counter is indifferent to which hop performs the conversion,
+  as long as that hop stamps its own requests.

@@ -37,7 +37,7 @@ oracle:
     POST /api/cart/items HTTP/1.1
     Host: www.halyardsupply.net
     Content-Length: 96
-    Transfer-Encoding: <VT>chunked
+    Transfer-Encoding : <VT>chunked
 
     0
 
@@ -45,7 +45,14 @@ oracle:
     Host: www.halyardsupply.net
     Accept: application/json
 
-    (<VT> is a literal 0x0b byte immediately after the colon-space.)
+    (<VT> is a literal 0x0b byte immediately after the colon-space. The space BEFORE the
+     colon is the second fallback named in `notes` and is required: under the plain name
+     the balancer answers 400 to a coding it does not recognise, rather than forwarding
+     it. With the space it reads a header name it has no opinion about, forwards the
+     value control byte and all, and frames by Content-Length; the origin trims the name,
+     strips the vertical tab, matches "chunked", and stops at the zero chunk. The control
+     byte is still what makes the two readings differ and is still what the counter
+     attributes on.)
 requires_prereq: []
 tags: [protocol, framing, raw-socket, obfuscated-coding]
 introduced: "2026-09-05"
@@ -56,9 +63,13 @@ decoy_note: >
   partner whose integration predates the current contract. Nobody re-read what
   "accept invalid" meant for the coding header specifically.
 notes: >
-  Same pins as BENCH-EDGE-0001. Confidence: MEDIUM — `option
-  accept-invalid-http-request` is required for the balancer to forward a value
-  containing a control byte instead of answering 400, and that should be confirmed on
-  a running stack. If it strips or rejects the VT, this entry needs a different
-  obfuscation (a space before the colon is the next candidate, which the origin's
-  reader also accepts); the counter and its two tests do not change.
+  Same pins as BENCH-EDGE-0001. Confidence: MEDIUM — verified on the running stack
+  2026-09-05. `option accept-invalid-http-request` is indeed required, and is what lets
+  the 0x0b byte through in the header value at all. What it does NOT do is stop haproxy
+  2.0.29 rejecting the message: under the plain name `Transfer-Encoding` the balancer
+  parses the value as a coding list, fails to find "chunked" as its final token, and
+  answers 400 before anything is forwarded — the same refusal it gives to "cow" and to
+  "chunkedx". So the entry uses the fallback already named here, a space before the
+  colon, which takes the header out of the balancer's coding logic while the origin's
+  reader still folds the name and reads the value. The counter and its two tests do not
+  change, and the control byte remains what the origin attributes on.

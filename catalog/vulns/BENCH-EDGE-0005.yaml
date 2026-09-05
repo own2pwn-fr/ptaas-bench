@@ -35,7 +35,7 @@ oracle:
   poc: |
     PUT /api/cart/items/7 HTTP/1.1
     Host: www.halyardsupply.net
-    Content-Length: 4
+    Content_Length: 4
     Transfer-Encoding: identity, chunked
 
     60
@@ -46,7 +46,12 @@ oracle:
     0
 
     (Same construction as BENCH-EDGE-0002: Content-Length is the length of the size
-     line, the chunk size is the length of the trailing request.)
+     line, the chunk size is the length of the trailing request. The length header is
+     spelled with an underscore for the reason set out in BENCH-EDGE-0002's poc — the
+     balancer deletes a header literally named Content-Length once it has framed the
+     message as chunked, and the underscore spelling is opaque to it and folded back to
+     '-' by the origin's reader. The coding header itself is untouched: `identity,
+     chunked` is a perfectly ordinary list and the balancer accepts it.)
 requires_prereq: []
 tags: [protocol, framing, raw-socket, coding-list]
 introduced: "2026-09-05"
@@ -56,9 +61,11 @@ decoy_note: >
   accept only the literal value, which is narrow, obvious in review, and wrong in
   exactly one direction nobody thought about. The balancer kept following the RFC.
 notes: >
-  Pins as for BENCH-EDGE-0001. Confidence: MEDIUM-HIGH — unlike 0002 this asks the hop
-  in front to do only what the RFC says (treat a list ending in chunked as chunked), so
-  it does not depend on lax duplicate-header handling; it depends only on the balancer
-  forwarding the Content-Length header alongside, which the 2.0 legacy parser does and
-  HTX does not. The same "balancer removed the Content-Length" failure mode described
-  in BENCH-EDGE-0002's notes applies here and should be checked at the same time.
+  Pins as for BENCH-EDGE-0001. Confidence: MEDIUM-HIGH — verified on the running stack
+  2026-09-05. Unlike 0002 this asks the hop in front to do only what the RFC says (treat
+  a list ending in chunked as chunked), and haproxy 2.0.29 does exactly that and forwards
+  the list verbatim. The "balancer removed the Content-Length" failure mode described in
+  BENCH-EDGE-0002's notes DID occur and is handled the same way here: the length header
+  is carried past the balancer under a name it does not recognise. What the legacy pin
+  buys is therefore not the framing decision but the verbatim forwarding of header names;
+  HTX normalises them and would not carry it.

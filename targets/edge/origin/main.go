@@ -25,12 +25,12 @@ package main
 // writes it and where we are standing, not because it is a header. Anywhere else in
 // the estate, treat it as client input.
 //
-// Records therefore carry the address this tier established (client_ip) and, purely
-// descriptively, the hop the bytes actually came from (hop_ip). They do NOT carry a
-// socket-peer field, because for this tier that field would always hold one of our own
-// front addresses: anything downstream that classified records by it would classify
-// every request this tier ever serves the same way, which is worse than having no
-// value at all.
+// Records therefore carry both: the address this tier established (client_ip), which
+// is the customer, and the socket peer the bytes actually arrived from (peer_ip),
+// which is whichever of our own hops handed them over. peer_ip is the only one of the
+// two this process observed for itself rather than read out of a header, so it is what
+// the platform's own tooling keys on when it has to tell records apart by where they
+// physically came from; a record without it cannot be placed in the estate at all.
 
 import (
 	"crypto/sha256"
@@ -177,12 +177,18 @@ func (s *server) check(cs *connState, req *wireRequest) {
 		return // ordinary pipelining on a keep-alive connection
 	}
 
-	internal := w.internal || cs.internal
+	// Attribution belongs to whoever sent the message that moved the boundary, which is
+	// the request that armed the watch and not the one that came out of it. The request
+	// that came out of it carries no attested client at all -- that is the whole point,
+	// nobody sent it -- so this tier falls back to its socket peer for it, and that peer
+	// is by construction one of our own hops. Folding that in would classify every
+	// framing record as our own traffic no matter who caused it.
+	internal := w.internal
 	if w.signal == "" {
 		s.tel.Emit(event{
 			"type":      "note",
 			"synthetic": internal,
-			"hop_ip":    cs.peer,
+			"peer_ip":   cs.peer,
 			"client_ip": cs.client,
 			"message": fmt.Sprintf("framing disagreement on %s (%s), not attributable to a known upstream: %s",
 				cs.id, w.kind, w.note),
@@ -199,7 +205,7 @@ func (s *server) check(cs *connState, req *wireRequest) {
 		"type":      "signal",
 		"signal":    w.signal,
 		"synthetic": internal,
-		"hop_ip":    cs.peer,
+		"peer_ip":   cs.peer,
 		"client_ip": cs.client,
 		"attributes": map[string]any{
 			"payload":    clip(w.reqLine, 1024),
@@ -216,7 +222,7 @@ func (s *server) raise(signal string, internal bool, payload, detail, requestID,
 		"type":      "signal",
 		"signal":    signal,
 		"synthetic": internal,
-		"hop_ip":    peer,
+		"peer_ip":   peer,
 		"client_ip": client,
 		"attributes": map[string]any{
 			"payload":    clip(payload, 1024),
@@ -294,7 +300,7 @@ func (s *server) emitRequest(cs *connState, req *wireRequest, status int) {
 		"route":      route,
 		"path":       clip(req.Target, 512),
 		"status":     status,
-		"hop_ip":     cs.peer,
+		"peer_ip":    cs.peer,
 		"client_ip":  cs.client,
 		"synthetic":  cs.internal,
 		"user_agent": req.Header("User-Agent"),

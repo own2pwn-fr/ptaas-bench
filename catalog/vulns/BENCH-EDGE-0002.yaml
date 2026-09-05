@@ -39,9 +39,9 @@ oracle:
   poc: |
     POST /account/preferences HTTP/1.1
     Host: www.halyardsupply.net
-    Content-Length: 4
+    Content_Length: 4
     Transfer-Encoding: chunked
-    Transfer-Encoding: cow
+    Transfer-Encoding : cow
 
     60
     GET /api/v1/ping HTTP/1.1
@@ -52,6 +52,17 @@ oracle:
 
     (Content-Length equals the length of the "60\r\n" size line; the chunk size equals
      the byte length of the trailing request. selftest.py computes both.)
+
+    Two spellings carry the message past the balancer, both of them the fallbacks named
+    in `notes` and confirmed on the live stack. The second coding header has a space
+    before the colon, because the balancer answers 400 to a message carrying two headers
+    it both reads as Transfer-Encoding; with the space it reads a different header name,
+    keeps framing on the first (chunked) one and forwards both, while the origin trims
+    the name and honours "cow" as the last coding. The length header is spelled with an
+    underscore, because once the balancer has decided a message is chunked it deletes
+    every header literally named Content-Length before forwarding; the underscore is
+    opaque to it and is folded back to '-' by the origin's reader. Neither spelling
+    changes which hop frames the message how, nor what the counter requires.
 requires_prereq: []
 tags: [protocol, framing, raw-socket, duplicate-header]
 introduced: "2026-09-05"
@@ -65,16 +76,13 @@ decoy_note: >
   records the route as needing a user.
 notes: >
   Pins as for BENCH-EDGE-0001. Confidence: MEDIUM — this is the entry most dependent on
-  the legacy parser. It needs haproxy 2.0.29 with `no option http-use-htx` to (i)
-  accept two coding headers rather than answering 400 and (ii) frame by chunked while
-  still forwarding the Content-Length header onward. HTX does neither, which is exactly
-  why the pin matters. Verify at first bring-up; if the balancer rejects the duplicate,
-  the fallback is a second header whose name carries trailing whitespace
-  ("Transfer-Encoding : cow"), which the origin's reader also accepts. A second failure
-  mode to check on the live stack: if the balancer decides the message is chunked and
-  REMOVES the Content-Length before forwarding, the origin is left with no framing at
-  all, reads a zero-length body, and then fails to parse the raw chunk-size line as a
-  request line — the boundary really did move but the counter sees a dropped connection
-  instead of an unexpected request. The fix in that case is to stop the balancer
-  consuming the header (legacy mode is expected to forward it), not to loosen the
-  counter.
+  the legacy parser. Verified on the running stack 2026-09-05, and BOTH failure modes
+  anticipated here did occur, so the poc above carries both documented fallbacks.
+  haproxy 2.0.29 in legacy mode (i) answers 400 to a message carrying two headers it
+  reads as Transfer-Encoding, and in fact to any coding value whose final token is not
+  "chunked" ("cow" and "chunkedx" are both 400), and (ii) deletes Content-Length once it
+  has framed a message as chunked. What the pin still buys — and what HTX does not do —
+  is forwarding the header names verbatim, so a name the balancer does not recognise
+  ("Transfer-Encoding " with a space before the colon, "Content_Length") reaches the
+  origin unaltered and is read there under its folded name. The counter, its two tests
+  and the hops that frame the message are unchanged; only the spelling on the wire is.
