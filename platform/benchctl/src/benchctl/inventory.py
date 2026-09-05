@@ -40,6 +40,13 @@ per host. ``refused_equivalents:`` -- the section a target had to invent while t
 key ignored the host -- is read as ``safe`` rows on its declared host, so those
 hardened paths count for coverage and for precision again instead of being invisible.
 
+Host comparison is normalised in one place, :func:`normalize_host`, whose docstring
+records the four decisions (case, port, IPv6 brackets, trailing dot) and why each
+was made. The scorer absorbs the divergence rather than requiring six emitters --
+five SDK runtimes plus a target instrumented from an Apache access log -- to agree
+on a convention nobody can enforce; a score must not move because one SDK kept the
+brackets of an IPv6 authority and another unwrapped them.
+
 An app with no ``routes.yaml`` at all is not an error here -- targets are written
 after the catalog. It degrades to a warning, and only when some other target has
 already published one (otherwise the feature is simply not deployed yet and there
@@ -48,6 +55,7 @@ is nothing useful to say).
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
@@ -70,16 +78,55 @@ STATUS_SAFE = "safe"
 STATUS_PLANTED = "planted"
 
 
+_IPV4ISH = re.compile(r"[0-9.]+\Z")
+
+
+def _is_ip_literal(value: str) -> bool:
+    """True for an address rather than a name (IPv6 by its colons, IPv4 by shape)."""
+    return ":" in value or bool(_IPV4ISH.match(value))
+
+
 def normalize_host(host: str | None) -> str | None:
-    """Lower-case, strip the port and any trailing dot. None stays None."""
+    """Fold a host to the form the scorer compares. None stays None.
+
+    HOST NORMALISATION, DECIDED HERE ONCE (see the module docstring for why the
+    scorer absorbs this rather than policing it across five SDK runtimes):
+
+    * **case** -- folded. DNS is case-insensitive and every SDK already folds; a
+      target distinguishing ``WWW`` from ``www`` would be relying on undefined
+      behaviour, not on a planted flaw.
+    * **port** -- stripped. A virtual host is a name, not a socket; the same vhost
+      answering on :80 and :8080 is one row. A port is only recognised after a
+      single colon followed by digits, because a bare IPv6 literal is all colons
+      and its "port" cannot be told from its address without brackets.
+    * **IPv6 brackets** -- dropped, so ``[2001:db8::1]`` and ``2001:db8::1`` are the
+      same host on both sides of a comparison. The Node SDK keeps the brackets a URL
+      authority carries and the Python SDK unwraps them to the form a resolver deals
+      in; both are defensible, six emitters will never agree forever, and a score
+      that moved because of that disagreement would be measuring our plumbing.
+    * **trailing dot** -- stripped *for matching*. ``example.com.`` and
+      ``example.com`` name one virtual host, and letting an SDK's capture style
+      decide whether a target's precision is measurable would be the worse failure.
+      This is not a claim that the two are interchangeable to the target: whether a
+      host-header flaw turns on the root dot is decided by its oracle firing, not by
+      this comparison, and the raw host as observed is preserved next to the
+      normalised one in the score document so that analysis stays possible.
+    """
     if not host:
         return None
-    value = str(host).strip().rstrip(".").lower()
-    if value.startswith("[") and "]" in value:  # IPv6 literal with a port
-        value = value[1:value.index("]")]
-    elif value.count(":") == 1:
-        value = value.split(":", 1)[0]
-    return value or None
+    value = str(host).strip().lower()
+    if not value:
+        return None
+    if value.startswith("["):
+        # Bracketed IPv6 authority, with or without a port: keep only the address,
+        # which is exactly the bare form the other SDKs report.
+        inner = value[1:].partition("]")[0].strip()
+        return inner or None
+    if value.count(":") == 1:
+        head, _, tail = value.partition(":")
+        if tail.isdigit():
+            value = head
+    return value.rstrip(".") or None
 
 
 def host_matches(row_host: str | None, host: str | None) -> bool:
@@ -87,7 +134,9 @@ def host_matches(row_host: str | None, host: str | None) -> bool:
 
     Inventories name vhosts by their short label (``www``) while a finding carries a
     fully-qualified name (``www.northlakefab.com``) or the harness alias, so the
-    first DNS label is compared as well as the whole name. An unknown host matches
+    first DNS label is compared as well as the whole name. That heuristic is skipped
+    for addresses: ``192.168.0.1`` and ``192.168.0.2`` share a first label but are
+    two hosts, and so do two IPv4-mapped IPv6 literals. An unknown host matches
     nothing here; callers decide whether to fall back to host-agnostic matching.
     """
     a, b = normalize_host(row_host), normalize_host(host)
@@ -95,6 +144,8 @@ def host_matches(row_host: str | None, host: str | None) -> bool:
         return True  # nothing declared on one side: not a discriminator
     if a == b:
         return True
+    if _is_ip_literal(a) or _is_ip_literal(b):
+        return False
     return a.split(".")[0] == b.split(".")[0]
 
 

@@ -154,8 +154,18 @@ class Finding:
 
     @property
     def host(self) -> str | None:
-        """Hostname the finding was reported against, port stripped."""
+        """Hostname the finding was reported against, normalised for comparison."""
         return normalize_host(self.authority)
+
+    @property
+    def host_observed(self) -> str | None:
+        """The authority exactly as the tool wrote it, kept as evidence.
+
+        The verdict is made on :attr:`host`; this is what was on the wire, so a
+        reader can see that a match survived a trailing dot, a port or an IPv6
+        bracket rather than having to trust that it did.
+        """
+        return self.authority
 
     @property
     def authority(self) -> str | None:
@@ -373,6 +383,7 @@ def classify_findings(
             "confidence": f.confidence,
             "app": app,
             "host": f.host,
+            "host_observed": f.host_observed,
             "host_match": host_match,
             "verdict": verdict,
             "matched_vuln": matched.id if matched is not None else None,

@@ -909,7 +909,7 @@
             "string",
             "null"
           ],
-          "description": "Host the finding was reported against, taken from its URL."
+          "description": "Host the finding was reported against, normalised for comparison: case folded, port stripped, IPv6 brackets dropped so [2001:db8::1] and 2001:db8::1 are one host, trailing dot stripped. See benchctl/inventory.py::normalize_host for why each of those was chosen."
         },
         "host_match": {
           "type": [
@@ -924,6 +924,13 @@
             null
           ],
           "description": "How the host took part in the match. `exact` means the finding's host designates a declared vhost and the verdict distinguishes an exposed path from its hardened twin on another vhost. The `agnostic-*` values record that the host could not discriminate, so the verdict rests on (app, method, route) alone \u2014 an assumption that can change a verdict has to be visible."
+        },
+        "host_observed": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The URL authority exactly as the tool wrote it, kept as evidence next to the normalised form."
         }
       }
     },

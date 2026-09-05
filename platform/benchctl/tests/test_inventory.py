@@ -5,10 +5,14 @@ from __future__ import annotations
 from benchctl.catalog import load_catalog
 from benchctl.events import events_from_iterable
 from benchctl.findings import classify_findings, finding_from_dict
+import pytest
+
 from benchctl.inventory import (
     coverage_summary,
     crosscheck_inventory,
+    host_matches,
     load_inventories,
+    normalize_host,
 )
 from benchctl.scoring import score_run
 from conftest import http_event, param, routes_inventory, vuln_entry
@@ -380,3 +384,99 @@ def test_coverage_says_when_it_cannot_tell_vhosts_apart(make_catalog):
     assert exact["metrics"]["crawl"]["surface"]["covered"] == 1
     assert exact["metrics"]["crawl"]["by_host"]["www"]["covered"] == 1
     assert exact["metrics"]["crawl"]["by_host"]["static"]["covered"] == 0
+
+
+# --------------------------------------------------------------------------- #
+# host normalisation (SDK drift must not move a score)
+# --------------------------------------------------------------------------- #
+
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        # IPv6: the Node SDK keeps the brackets a URL authority carries, the Python
+        # SDK unwraps them to the form a resolver deals in. Both fold to one host.
+        ("[2001:db8::1]", "2001:db8::1"),
+        ("2001:db8::1", "2001:db8::1"),
+        ("[2001:db8::1]:8080", "2001:db8::1"),
+        ("[::1]", "::1"),
+        ("::1", "::1"),
+        # case is folded, port is stripped, trailing dot is stripped for matching
+        ("WWW.Example.COM", "www.example.com"),
+        ("www.example.com.", "www.example.com"),
+        ("shopfront:3000", "shopfront"),
+        ("10.88.0.9:8080", "10.88.0.9"),
+        # not a port: a colon followed by a name is part of the host
+        ("weird:name", "weird:name"),
+        ("", None),
+        (None, None),
+    ],
+)
+def test_host_normalisation_table(raw, expected):
+    assert normalize_host(raw) == expected
+
+
+@pytest.mark.parametrize(
+    "a,b",
+    [
+        ("[2001:db8::1]", "2001:db8::1"),
+        ("2001:db8::1", "[2001:db8::1]"),
+        ("[2001:db8::1]:443", "2001:db8::1"),
+        ("2001:db8::1", "[2001:db8::1]:8080"),
+        ("example.com", "example.com."),
+        ("example.com.", "EXAMPLE.com"),
+        ("www", "www.northlakefab.com"),
+    ],
+)
+def test_hosts_that_must_compare_equal(a, b):
+    # Symmetric on purpose: the divergence can appear on either side, since the
+    # inventory is written by a human and the event by whichever SDK ships next.
+    assert host_matches(a, b)
+    assert host_matches(b, a)
+
+
+@pytest.mark.parametrize(
+    "a,b",
+    [
+        ("2001:db8::1", "2001:db8::2"),
+        ("[2001:db8::1]", "[2001:db8::2]"),
+        # Two addresses sharing a first label are two hosts; the short-label
+        # heuristic that lets `www` match `www.example.com` must not apply to them.
+        ("192.168.0.1", "192.168.0.2"),
+        ("::ffff:192.168.0.1", "::ffff:192.168.0.2"),
+        ("www", "static.northlakefab.com"),
+    ],
+)
+def test_hosts_that_must_not_compare_equal(a, b):
+    assert not host_matches(a, b)
+    assert not host_matches(b, a)
+
+
+def test_an_ipv6_inventory_row_matches_either_sdk_spelling(make_catalog):
+    root = make_catalog([vuln_entry(id="BENCH-INFR-0001", app="infra",
+                                    **{"class": "exposed_vcs"}, severity="high",
+                                    entrypoint={"method": "GET", "path": "/.git/config",
+                                                "param": None, "default_value": None},
+                                    oracle={"kind": "artifact",
+                                            "condition": "The repository object store was read."})])
+    routes_inventory(root, "infra", [
+        {"path": "/.git/config", "method": "GET", "hosts": ["[2001:db8::1]"], "status": "planted"},
+        {"path": "/.git/config", "method": "GET", "hosts": ["2001:db8::2"], "status": "safe"},
+    ])
+    inv = load_inventories(root)["infra"]
+    # Declared bracketed, observed bare (Python SDK) and vice versa (Node SDK).
+    assert inv.match_path("GET", "/.git/config", host="2001:db8::1").status == "planted"
+    assert inv.match_path("GET", "/.git/config", host="[2001:db8::2]").status == "safe"
+    assert inv.resolve_host("[2001:db8::1]:8080") == "2001:db8::1"
+
+
+def test_the_raw_host_is_kept_as_evidence_beside_the_normalised_one(make_catalog):
+    root = build(make_catalog)
+    report = classify_findings(
+        load_catalog(root),
+        [finding_from_dict({"tool": "zap", "url": "http://ShopFront.:8080/api/products?q=1",
+                            "method": "GET", "param": "q", "cwe": 89, "name": "SQLi"})],
+        inventories=load_inventories(root), app_map={"shopfront": "shopfront"},
+    )
+    row = report["findings"][0]
+    assert row["host"] == "shopfront"                    # what the verdict used
+    assert row["host_observed"] == "ShopFront.:8080"     # what was on the wire
