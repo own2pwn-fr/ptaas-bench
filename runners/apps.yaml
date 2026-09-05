@@ -15,19 +15,29 @@
 # a target that has not landed yet; the moment its file exists, the file wins, and the
 # run record says which of the two was used.
 #
-# TWO URLS, AND USING THE WRONG ONE CORRUPTS THE SCORE
+# TWO URLS THAT LOOK INTERCHANGEABLE AND ARE NOT
 #
-#   base_url      what the TOOL uses: the customer-facing name on bench-public,
-#                 normally supplied by the target's own credentials file.
-#   internal_url  what the HARNESS uses: the same application by its internal name.
-#                 Harness-owned, because it is a compose service name rather than
-#                 anything seed-derived.
-#                 The collector and the target SDKs classify traffic as the
-#                 platform's own by SOURCE ADDRESS -- never by a header, which a tool
-#                 could see through any reflection or verbose error. Harness traffic
-#                 (the logins performed for scanners that cannot log themselves in)
-#                 therefore goes through the dual-homed sinkhole and must arrive on
-#                 the internal side, or it is scored as the tool's crawl coverage.
+#   base_url      what the TOOL uses.    MUST be public: a name that resolves on
+#                 bench-public. Normally supplied by the target's own credentials
+#                 file, because it is derived from DEPLOY_SEED.
+#   internal_url  what the HARNESS uses. MUST be platform-side: a name that resolves
+#                 to an address in the platform's range (10.77.0.0/24) and NOT on the
+#                 tool's network.
+#
+# The rule, and the only reason it matters: the collector and the target SDKs
+# classify traffic as the platform's own by SOURCE ADDRESS -- never by a header,
+# which a tool could read back through any reflection or verbose error. Connect by a
+# name that resolves on the tool's network and the harness's own preflight and login
+# traffic arrives from an address the target reads as a scanner's, and is credited to
+# whichever tool is running as crawl coverage it never earned.
+#
+# The trap is that a bare compose service name resolves on EVERY network its service
+# is attached to, so `infra-web` is a tool-side name while `web01` is not. Targets
+# publish operations aliases -- web01, cache01, ops01, records01, search01 -- for
+# exactly this, and their self-tests default to them. Preflight refuses to open a run
+# when internal_url names something public and the target offers a platform-side-only
+# alias; where a target genuinely has only one name for both (shopfront, intranet),
+# preflight says so and the harness pins its connections to the internal address.
 #
 # There are no published host ports. A target is reached by service name, from inside
 # the networks; publishing would put a target on a developer's loopback and give
@@ -129,38 +139,54 @@ apps:
     notes: Angular SPA over Spring Boot. Everything is behind a login.
 
   blog:
-    services: [blog-web, blog-api, blog-mongo, blog-redis]
-    base_url: http://blog-web:8000
-    internal_url: http://blog-api:8000
-    reset_service: blog-api
-    health_services: [blog-api, blog-mongo]
-    openapi_url: http://blog-web:8000/openapi.json
+    services: [blog-web, blog-documents, blog-cache]
+    # No base_url: targets/blog/bench-credentials.yaml carries it. Note it is
+    # `blog-web`, which is also an alias on the internal network -- preflight reports
+    # that ambiguity and the harness pins its own connections by address.
+    # press01 is the internal-only name; `press` is public, so the two differ by one
+    # character and only one of them is correct here.
+    internal_url: http://press01:8000
+    reset_service: blog-web
+    health_services: [blog-web, blog-documents, blog-cache]
+    notes: >
+      Document-store flaws behind a Vue SPA. Mongo and the cache hold state in
+      memory, so both are restarted with the app rather than trusted to a digest
+      computed over what was written to disk.
 
   legacy:
     services: [legacy-web, legacy-db]
-    base_url: http://legacy-web
-    internal_url: http://legacy-web
+    # No base_url: targets/legacy/bench-credentials.yaml carries it.
+    # web01 is the operations name: internal-only, so our traffic is told apart from
+    # the tool's by address as well as by name.
+    internal_url: http://web01
     reset_service: legacy-web
     health_services: [legacy-web, legacy-db]
-    notes: Server-rendered PHP. The one target every scanner should do well on.
+    notes: >
+      Server-rendered PHP, forms everywhere, query strings that were never meant to
+      be tampered with. The one target every scanner should do well on, and the
+      baseline the SPA results are read against.
 
   corp:
-    services: [corp-web, corp-db]
-    base_url: http://corp-web:8080
-    internal_url: http://corp-web:8080
-    reset_service: corp-web
-    health_services: [corp-web, corp-db]
+    services: [corp-portal, corp-db, corp-imds]
+    # No base_url: targets/corp/bench-credentials.yaml carries it.
+    # `portal` is the internal-only alias; the app listens on 8080 and the ops
+    # listener on 9310, which is where state-reset talks and which is not reachable
+    # over any network.
+    internal_url: http://portal:8080
+    reset_service: corp-portal
+    health_services: [corp-portal, corp-db]
+    notes: >
+      .NET portal with a metadata service beside it on its own network, which is the
+      SSRF target. corp-imds is restarted with the rest: it is part of the
+      application's world even though no tool reaches it directly.
 
   intranet:
     services: [intranet-hub]
     # No base_url: targets/intranet/bench-credentials.yaml carries it.
-    #
-    # Every internal alias of this service (`hub`, `hub.<domain>`) is also a public
-    # alias, so there is no name that reaches it over the internal network alone.
-    # Preflight reports the ambiguity and the harness pins its own connections to the
-    # internal address, which is the only way our logins are classified as the
-    # platform's traffic rather than the tool's.
-    internal_url: http://hub:8080
+    # `staff-services` is the operations name and resolves on the internal network
+    # only; `hub` and `hub.<domain>` are what the staff (and therefore the tool) use
+    # and resolve on the public one.
+    internal_url: http://staff-services:8080
     reset_service: intranet-hub
     health_services: [intranet-hub]
     notes: >

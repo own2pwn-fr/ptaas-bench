@@ -18,6 +18,7 @@ from runners._lib.preflight import (
     check_base_url_reachable,
     check_credentials,
     check_dns_from_tool_network,
+    check_internal_name_is_platform_side,
     check_name_ambiguity,
     check_no_dev_services,
     check_no_published_ports,
@@ -464,3 +465,105 @@ def test_every_app_in_the_catalog_has_an_entry_in_apps_yaml():
     registry = set(BenchConfig.load().apps)
     assert not (catalog_apps - registry), f"planted but unreachable: {catalog_apps - registry}"
     assert not (registry - catalog_apps), f"in apps.yaml with no ground truth: {registry - catalog_apps}"
+
+
+# -- the harness must connect by a platform-side name -------------------------------
+
+
+def two_network_model(services: dict) -> dict:
+    return {
+        "services": services,
+        "networks": {
+            "bench-public": {"name": "bench-public"},
+            "bench-internal": {"name": "bench-internal"},
+        },
+    }
+
+
+INFRA_WEB = {
+    "infra-web": {
+        "networks": {
+            "bench-public": {"aliases": ["www.northlakefab.com", "static.northlakefab.com"]},
+            "bench-internal": {"aliases": ["web01"]},
+        }
+    }
+}
+
+
+def test_the_bare_service_name_is_a_tool_side_name():
+    """It resolves on every network its service joins, so harness traffic sent to it
+    arrives from an address the target classifies as a scanner's."""
+    app = AppSpec(
+        key="infra",
+        services=["infra-web"],
+        base_url="http://www.northlakefab.com",
+        internal_url="http://infra-web",
+    )
+    docker = FakeDocker(compose_model=two_network_model(INFRA_WEB))
+    check = check_internal_name_is_platform_side(docker, app, ("bench-public", "bench-internal"))
+    assert not check.ok
+    assert "['web01']" in check.detail
+    assert "credited to whichever tool is running" in check.detail
+
+
+def test_the_operations_alias_passes():
+    app = AppSpec(
+        key="infra",
+        services=["infra-web"],
+        base_url="http://www.northlakefab.com",
+        internal_url="http://web01",
+    )
+    docker = FakeDocker(compose_model=two_network_model(INFRA_WEB))
+    check = check_internal_name_is_platform_side(docker, app, ("bench-public", "bench-internal"))
+    assert check.ok and "bench-internal only" in check.detail
+
+
+def test_a_target_with_one_name_for_both_networks_is_not_a_configuration_error():
+    """shopfront and intranet are reachable under one name on both networks by
+    design; there the harness pins the connection to the internal address instead."""
+    app = AppSpec(
+        key="shopfront",
+        services=["shopfront"],
+        base_url="http://shopfront:3000",
+        internal_url="http://shopfront:3000",
+    )
+    docker = FakeDocker(compose_model=two_network_model({
+        "shopfront": {"networks": {
+            "bench-public": {"aliases": ["shopfront", "storefront-web-01"]},
+            "bench-internal": {"aliases": ["shopfront"]},
+        }}
+    }))
+    check = check_internal_name_is_platform_side(docker, app, ("bench-public", "bench-internal"))
+    assert check.ok
+    assert "pins its connections" in check.detail
+
+
+@pytest.mark.skipif(
+    not (REPO_ROOT / "compose" / "infra.yml").exists(), reason="no target fragments"
+)
+def test_every_landed_target_connects_by_a_platform_side_name():
+    """Run against the fragments as committed, so the next one that lands is checked
+    here rather than by review."""
+    import yaml
+
+    services: dict = {}
+    networks = {
+        "bench-public": {"name": "bench-public"},
+        "bench-internal": {"name": "bench-internal"},
+    }
+    for fragment in sorted((REPO_ROOT / "compose").glob("*.yml")):
+        doc = yaml.safe_load(fragment.read_text()) or {}
+        services.update(doc.get("services") or {})
+        for key, spec in (doc.get("networks") or {}).items():
+            networks.setdefault(key, spec or {"name": key})
+    docker = FakeDocker(compose_model={"services": services, "networks": networks})
+
+    config = BenchConfig.load()
+    config.resolve_urls()
+    landed = [a for a in config.apps.values() if any(s in services for s in a.services)]
+    assert landed, "no landed target matched a compose fragment"
+    for app in landed:
+        check = check_internal_name_is_platform_side(
+            docker, app, ("bench-public", app.internal_network)
+        )
+        assert check.ok, f"{app.key}: {check.detail}"

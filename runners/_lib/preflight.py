@@ -6,7 +6,7 @@ findings file with nothing in it, and that reads in the comparison table as a sc
 with poor coverage. The whole point of stopping early is that "the harness was
 misconfigured" and "the tool missed everything" must never be the same output.
 
-Eight checks:
+Nine checks:
 
 * **The target's credentials file exists.** It is the authority for the base URL
   (seed-derived, so it cannot be hardcoded) and for the identities. Missing, we do not
@@ -39,6 +39,15 @@ Eight checks:
   developer's loopback during a measured run and lets traffic reach it without
   passing the client accounting the origin performs -- and that accounting is what
   decides whether a request is scored as the tool's.
+* **The name the harness connects by is platform-side.** ``base_url`` is what the
+  tool uses and must be public; ``internal_url`` is what the harness uses and must
+  resolve to an address in the platform's range. The two fields look interchangeable
+  and are not: connect by a name that resolves on the tool's network and the
+  harness's own preflight and login traffic arrives from an address the target
+  classifies as a tool's, and is credited to whichever tool is running as crawl
+  coverage. When the target offers a name that is platform-side only -- infra's
+  ``web01``, ``cache01``, ``ops01`` -- not using it is a configuration error here,
+  not a property of the target, so it is fatal.
 * **Name ambiguity is reported.** A service whose name or alias exists on both
   networks makes interface selection a coin toss for anything that connects by name.
   The harness pins its own logins to the internal address, but the ambiguity is a
@@ -433,6 +442,76 @@ def check_name_ambiguity(docker: Any, app: AppSpec, networks: tuple[str, str]) -
     return Check(name, True, "the names in use resolve on one network each")
 
 
+def check_internal_name_is_platform_side(
+    docker: Any, app: AppSpec, networks: tuple[str, str]
+) -> Check:
+    """The name the harness connects by must not resolve on the tool's network.
+
+    The bare compose service name resolves on every network the service is attached
+    to, so `infra-web` reaches the target over the tool's network and our traffic
+    arrives from an address the target classifies as a scanner's. The operations
+    aliases -- `web01`, `cache01`, `ops01` -- exist precisely so that platform
+    traffic can be told apart, and the target's own self-test already defaults to
+    them.
+
+    Fatal when the target offers a platform-side-only name and this file does not use
+    it: that is a mistake in apps.yaml, and it is ours to fix. Not fatal when no such
+    name exists (shopfront and intranet are reachable under one name on both
+    networks by design) -- there the harness pins the connection to the internal
+    address instead, and check_name_ambiguity reports it.
+    """
+    public_net, internal_net = networks
+    name = f"internal-name:{app.key}"
+    doc = docker.compose_config()
+    if doc is None:
+        return Check(name, True, "could not read the compose config", indeterminate=True)
+
+    resolved = _resolved_network_names(doc)
+    # service -> {alias -> set(networks)}
+    per_service: dict[str, dict[str, set[str]]] = {}
+    for service in app.services:
+        spec = (doc.get("services") or {}).get(service) or {}
+        names: dict[str, set[str]] = {}
+        for key, attachment in (spec.get("networks") or {}).items():
+            network = resolved.get(key, key)
+            for alias in [service, *((attachment or {}).get("aliases") or [])]:
+                names.setdefault(str(alias), set()).add(network)
+        per_service[service] = names
+
+    host = app.internal_host
+    owner = next((svc for svc, names in per_service.items() if host in names), None)
+    if owner is None:
+        return Check(
+            name, True, f"{host!r} is not an alias of any service of this app", indeterminate=True
+        )
+
+    nets = per_service[owner].get(host, set())
+    if public_net not in nets:
+        return Check(name, True, f"{host!r} resolves on {internal_net} only")
+
+    alternatives = sorted(
+        alias
+        for alias, alias_nets in per_service[owner].items()
+        if internal_net in alias_nets and public_net not in alias_nets
+    )
+    if alternatives:
+        return Check(
+            name,
+            False,
+            f"internal_url uses {host!r}, which also resolves on {public_net}: the "
+            "harness's own preflight and login traffic would arrive from an address "
+            "the target classifies as a tool's and be credited to whichever tool is "
+            f"running. {owner} offers {alternatives}, which resolve on {internal_net} "
+            "only -- use one of those.",
+        )
+    return Check(
+        name,
+        True,
+        f"{host!r} resolves on both networks and {owner} offers no platform-side-only "
+        "alias; the harness pins its connections to the internal address instead.",
+    )
+
+
 def check_base_url_reachable(http: Any, app: AppSpec, address: str | None) -> Check:
     """Open one connection to the tool-facing base URL, from the tool's network.
 
@@ -526,6 +605,11 @@ def preflight(
                 )
             )
         report.checks.extend(check_credentials(config, app, authed_apps))
+        report.checks.append(
+            check_internal_name_is_platform_side(
+                docker, app, (config.network, app.internal_network)
+            )
+        )
         report.checks.append(
             check_name_ambiguity(docker, app, (config.network, app.internal_network))
         )
