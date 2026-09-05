@@ -33,6 +33,7 @@ export { telemetryMiddleware } from "./middleware.js";
 export type { MiddlewareOptions } from "./middleware.js";
 export { observe, rawValue, sha256, truncateSample, SAMPLE_MAX_CHARS } from "./attributes.js";
 export { compileSourceMatcher, normaliseAddress } from "./net.js";
+export { normaliseHost, requestHost } from "./request.js";
 export type { SourceMatcher } from "./net.js";
 export { composeRoute, watchRoute } from "./route.js";
 export type { RouteSnapshot } from "./route.js";

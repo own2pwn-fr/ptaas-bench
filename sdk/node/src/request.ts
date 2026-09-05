@@ -163,6 +163,41 @@ export function collectAttributes(
 }
 
 /**
+ * Normalise an authority to a comparable host name.
+ *
+ * Lowercased and stripped of its port, because `Example.com`, `example.com:8080` and
+ * `example.com` are one virtual host and have to compare equal. IPv6 literals keep
+ * their brackets: splitting such an authority on the first colon would truncate the
+ * address to `[`, and a wrong host is worse than none.
+ *
+ * @returns the normalised host, or undefined when there is nothing usable to report.
+ */
+export function normaliseHost(value: string | undefined): string | undefined {
+  if (!value) return undefined;
+  let authority = value.trim();
+  // `user@host` is not legal in a Host header, but a caller can still send it and an
+  // HTTP/2 `:authority` may carry it.
+  const at = authority.lastIndexOf("@");
+  if (at >= 0) authority = authority.slice(at + 1);
+
+  if (authority.startsWith("[")) {
+    const close = authority.indexOf("]");
+    if (close < 0) return undefined;
+    authority = authority.slice(0, close + 1);
+  } else {
+    const colon = authority.indexOf(":");
+    if (colon >= 0) authority = authority.slice(0, colon);
+  }
+  authority = authority.toLowerCase();
+  return authority.length > 0 ? authority : undefined;
+}
+
+/** The virtual host a request was addressed to, if it named one. */
+export function requestHost(req: RequestLike): string | undefined {
+  return normaliseHost(headerValue(req, "host") ?? headerValue(req, ":authority"));
+}
+
+/**
  * Address of the peer that actually opened the connection.
  *
  * Not `req.ip`, on purpose: with `trust proxy` enabled that is derived from

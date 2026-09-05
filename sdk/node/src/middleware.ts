@@ -6,6 +6,7 @@ import {
   headerValue,
   isSynthetic,
   peerAddress,
+  requestHost,
   type RequestLike,
 } from "./request.js";
 import { composeRoute, watchRoute } from "./route.js";
@@ -129,6 +130,11 @@ export function telemetryMiddleware(options: MiddlewareOptions = {}) {
             auth_subject: identify(req) ?? null,
             params: attributes,
           };
+          // Reported as its own field for grouping, and left in the attributes below
+          // as well: the Host header is an input a handler can act on, and one this
+          // service does act on.
+          const host = requestHost(request);
+          if (host) event.host = host;
           const ip = clientIp(request);
           if (ip) event.client_ip = ip;
           if (context?.peerIp) event.peer_ip = context.peerIp;

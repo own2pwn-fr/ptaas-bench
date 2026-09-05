@@ -62,6 +62,18 @@ export interface HttpRequestEvent extends EventBase {
   method: string;
   /** Framework route template (`/api/orders/:id`), never a concrete URL. */
   route: string;
+  /**
+   * Virtual host the request was addressed to: the `Host` header (or `:authority` over
+   * HTTP/2), lowercased with any port removed.
+   *
+   * One process commonly serves several names, and the same path can be configured
+   * differently on each. Without this, every name sharing a path is indistinguishable
+   * in the data, and anything aggregated per route silently merges them.
+   *
+   * Omitted entirely when the request carried no host. An absent value is a fact worth
+   * knowing; a default would be a wrong value that nothing downstream could question.
+   */
+  host?: string;
   path?: string;
   status?: number;
   auth_subject?: string | null;
