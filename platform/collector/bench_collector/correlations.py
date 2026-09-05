@@ -67,15 +67,30 @@ class CorrelationRegistry:
             self.overflowed += 1
         return entry
 
-    def pending(self, destination_host: str | None = None) -> list[dict[str, Any]]:
+    def pending(
+        self, destination_host: str | None = None, registered_after: float | None = None
+    ) -> list[dict[str, Any]]:
+        """Live hints, oldest first.
+
+        ``registered_after`` is an incremental cursor for the sinkhole, which polls
+        this to keep its container-to-app map warm rather than to answer a specific
+        callback. Insertion order is registration order, so it costs a comparison.
+        """
         self._evict(self.clock())
         entries = list(self._entries.values())
         if destination_host:
             wanted = destination_host.strip().rstrip(".").lower()
             entries = [entry for entry in entries if _host_matches(entry, wanted)]
+        if registered_after is not None:
+            entries = [entry for entry in entries if entry["registered_at"] > registered_after]
         return entries
 
-    async def wait_for(self, destination_host: str | None, timeout: float) -> list[dict[str, Any]]:
+    async def wait_for(
+        self,
+        destination_host: str | None,
+        timeout: float,
+        registered_after: float | None = None,
+    ) -> list[dict[str, Any]]:
         """Pending hints for a host, waiting up to ``timeout`` for one to be registered.
 
         Ordering between a hint and the callback it describes is not guaranteed: the
@@ -92,7 +107,7 @@ class CorrelationRegistry:
         loop = asyncio.get_running_loop()
         deadline = loop.time() + max(timeout, 0.0)
         while True:
-            matches = self.pending(destination_host)
+            matches = self.pending(destination_host, registered_after)
             if matches or timeout <= 0:
                 return matches
             remaining = deadline - loop.time()
@@ -102,7 +117,7 @@ class CorrelationRegistry:
             try:
                 await asyncio.wait_for(arrival.wait(), remaining)
             except TimeoutError:
-                return self.pending(destination_host)
+                return self.pending(destination_host, registered_after)
 
     def get(self, correlation_id: str) -> dict[str, Any] | None:
         self._evict(self.clock())

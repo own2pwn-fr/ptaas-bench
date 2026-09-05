@@ -12,7 +12,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import replace
 
-from tests.conftest import PLATFORM_IP, client_for, correlation
+from tests.conftest import PLATFORM_IP, TARGET_PEER, client_for, correlation
 
 
 async def open_run(client, **spec):
@@ -322,3 +322,92 @@ async def test_both_sides_land_in_the_event_stream_whatever_the_order(client):
     assert [(event["type"], event["seq"]) for event in events] == [("oob", 1), ("correlation", 2)]
     observed, hint = events
     assert hint["destination_host"] in observed["raw"]
+
+
+# ----------------------------------------------- container-to-app mapping stamp
+
+
+async def test_registration_peer_is_stamped_when_the_sink_omits_it(settings):
+    """The sinkhole's fallback attribution tier needs to know which container speaks
+    for which app; without it, its strongest rule's source check degrades to
+    "unknown"."""
+    async with client_for(settings, peer=TARGET_PEER) as (http, _):
+        await http.post("/v1/runs", json={"tool": "zap"})
+        entry = (await http.post("/v1/correlations", json=correlation())).json()["correlation"]
+        assert entry["client_ip"] == TARGET_PEER
+        assert entry["app"] == "shopfront"
+
+        listed = (await http.get("/v1/correlations")).json()["correlations"]
+        assert listed[0]["client_ip"] == TARGET_PEER
+
+
+async def test_a_sink_supplied_address_is_not_overwritten(settings):
+    async with client_for(settings, peer=TARGET_PEER) as (http, _):
+        await http.post("/v1/runs", json={"tool": "zap"})
+        entry = (
+            await http.post("/v1/correlations", json=correlation(client_ip="203.0.113.9"))
+        ).json()["correlation"]
+        assert entry["client_ip"] == "203.0.113.9"
+
+
+async def test_hints_batched_through_the_event_stream_are_stamped_too(settings):
+    async with client_for(settings, peer=TARGET_PEER) as (http, _):
+        await http.post("/v1/runs", json={"tool": "zap"})
+        await http.post(
+            "/v1/events", json={"events": [dict(correlation(), type="correlation")]}
+        )
+        assert (await http.get("/v1/correlations")).json()["correlations"][0]["client_ip"] == TARGET_PEER
+
+
+async def test_the_stamp_is_recorded_but_never_decides_anything(settings):
+    """`client_ip` stays descriptive even when the collector wrote it itself: the
+    synthetic rule reads peer_ip and source_ip, and nothing else."""
+    async with client_for(settings, peer=PLATFORM_IP) as (http, _):
+        run = (await http.post("/v1/runs", json={"tool": "zap"})).json()
+        await http.post("/v1/correlations", json=correlation())
+
+        stored = (await http.get(f"/v1/runs/{run['run_id']}/events")).json()["events"][0]
+        assert stored["client_ip"] == PLATFORM_IP
+        assert stored["synthetic"] is False
+
+
+async def test_only_correlations_are_stamped(settings):
+    """On an http_request, `client_ip` means the client of the target. Filling it from
+    the SDK's own connection would assert that the target called itself."""
+    from tests.conftest import http_request_event
+
+    async with client_for(settings, peer=TARGET_PEER) as (http, _):
+        run = (await http.post("/v1/runs", json={"tool": "zap"})).json()
+        await http.post("/v1/events", json={"events": [http_request_event()]})
+
+        stored = (await http.get(f"/v1/runs/{run['run_id']}/events")).json()["events"][0]
+        assert stored["client_ip"] is None
+
+
+async def test_registered_after_is_an_incremental_cursor(client):
+    """The sinkhole polls on a timer to keep its map warm, not to answer a specific
+    callback, so it should not have to re-read the whole set."""
+    await open_run(client)
+    await client.post("/v1/correlations", json=correlation(destination_host="first.test"))
+    page = (await client.get("/v1/correlations")).json()
+    cursor = page["correlations"][0]["registered_at"]
+
+    assert (await client.get("/v1/correlations", params={"registered_after": cursor})).json()["count"] == 0
+
+    await client.post("/v1/correlations", json=correlation(destination_host="second.test"))
+    page = (await client.get("/v1/correlations", params={"registered_after": cursor})).json()
+    assert [entry["destination_host"] for entry in page["correlations"]] == ["second.test"]
+
+
+async def test_one_hint_serves_several_observations(client):
+    """No consume/ack by design: a single outbound fetch is legitimately observed as a
+    DNS lookup, then an HTTP connection, then perhaps SMTP. Retiring the hint on first
+    match would destroy the rest of that evidence."""
+    await open_run(client)
+    await client.post("/v1/correlations", json=correlation())
+
+    for _ in range(3):
+        page = (
+            await client.get("/v1/correlations", params={"destination_host": "9f2c.oast.fun"})
+        ).json()
+        assert page["count"] == 1

@@ -74,6 +74,11 @@ def _install_control_guard(app: FastAPI, collector: Collector) -> None:
         return await call_next(request)
 
 
+def _peer(request: Request) -> str | None:
+    """The address on the other end of this connection. Never a header."""
+    return request.client.host if request.client else None
+
+
 def get_collector(request: Request) -> Collector:
     return request.app.state.collector
 
@@ -201,7 +206,7 @@ def create_app(collector: Collector | None = None) -> FastAPI:
                 log.error("malformed /v1/events body (expected {'events': [...]}) : %s", raw[:512])
                 result["dropped"] = 1
             else:
-                result = collector.submit(events)
+                result = collector.submit(events, peer=_peer(request))
         except Exception:
             # Fire-and-forget contract: a target's request handler must not fail, and
             # must not slow down, because the collector had a bad day.
@@ -229,7 +234,7 @@ def create_app(collector: Collector | None = None) -> FastAPI:
             collector.counters["dropped_invalid"] += 1
             log.exception("dropping malformed correlation")
             return JSONResponse(status_code=status.HTTP_202_ACCEPTED, content={"registered": False})
-        entry = collector.register_correlation(spec)
+        entry = collector.register_correlation(spec, peer=_peer(request))
         return JSONResponse(
             status_code=status.HTTP_202_ACCEPTED,
             content={"registered": True, "correlation": entry},
@@ -239,6 +244,7 @@ def create_app(collector: Collector | None = None) -> FastAPI:
     async def list_correlations(
         collector: CollectorDep,
         destination_host: str | None = None,
+        registered_after: float | None = None,
         include_expired: bool = False,
         wait_ms: int = Query(default=0, ge=0, le=5000),
     ) -> dict[str, Any]:
@@ -253,8 +259,14 @@ def create_app(collector: Collector | None = None) -> FastAPI:
         first can wait here instead of concluding it was unattributable. Bounded at
         5s, and never required: both sides are in the run's event stream, so the
         authoritative join is offline and order-independent.
+
+        `registered_after` is an incremental cursor: the sinkhole polls this endpoint
+        on a timer to keep its container-to-app map warm, which does not need the
+        whole set every time.
         """
-        entries = await collector.correlations.wait_for(destination_host, wait_ms / 1000)
+        entries = await collector.correlations.wait_for(
+            destination_host, wait_ms / 1000, registered_after
+        )
         return {
             "now": collector.correlations.clock(),
             "ttl": collector.correlations.ttl,

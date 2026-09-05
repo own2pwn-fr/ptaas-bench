@@ -563,3 +563,17 @@ async def test_signal_events_count_under_their_own_name(client):
     await open_run(client)
     await post_events(client, [signal_event(), legacy_trigger_event()])
     assert (await client.get("/v1/stats")).json()["events_by_type"] == {"signal": 1, "trigger": 1}
+
+
+async def test_the_allowlisted_caller_reaches_the_control_surface(settings):
+    """The other half of the guard: the sinkhole and the orchestrator must get in, or
+    the platform has locked out its own scoring."""
+    from dataclasses import replace
+
+    from bench_collector.config import parse_cidrs
+
+    guarded = replace(settings, control_networks=parse_cidrs("10.99.0.0/16"))
+    async with client_for(guarded, peer=PLATFORM_IP) as (http, _):
+        assert (await http.post("/v1/runs", json={"tool": "zap"})).status_code == 201
+        for path in ("/v1/runs", "/v1/runs/active", "/v1/stats", "/v1/correlations"):
+            assert (await http.get(path)).status_code == 200, path

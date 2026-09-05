@@ -224,12 +224,14 @@ paths:
           content: {application/json: {schema: {$ref: '#/components/schemas/IngestResult'}}}
 
   # ---------------------------------------------------------------------------
-  # PROVISIONAL. The correlation shape below is the collector's proposal, already
-  # implemented and tested here, and has been relayed to the sinkhole's author for
-  # reconciliation rather than reinvention. Two points are still open and may change:
-  # whether the sinkhole needs a consume/ack call to retire a hint it has matched,
-  # and whether it matches on `correlation_id` or on `(destination_host, route)`.
-  # Everything outside this block is settled.
+  # Settled with the sinkhole's author. Two decisions worth keeping written down:
+  #
+  #   * There is no consume/ack call, and there should not be one. A single outbound
+  #     fetch is legitimately observed several times — the DNS lookup, then the HTTP
+  #     connection, then perhaps SMTP for the same payload — so retiring a hint on
+  #     first match would destroy the rest of that evidence. Hints leave only by TTL.
+  #   * Matching is on `destination_host`, not on `correlation_id`. The sinkhole
+  #     mirrors the host relation described under the `destination_host` filter.
   # ---------------------------------------------------------------------------
   /v1/correlations:
     post:
@@ -256,6 +258,10 @@ paths:
 
         Same fire-and-forget contract as ingestion: a malformed hint is dropped,
         counted and answered 202.
+
+        A hint is never retired by being matched: one outbound fetch is legitimately
+        observed as a DNS lookup, then an HTTP connection, then perhaps SMTP. Hints
+        leave the live set only by TTL or by the size cap.
       requestBody:
         required: true
         content:
@@ -309,6 +315,14 @@ paths:
             sides also land in the run's event stream with their own `seq`, so the
             authoritative join is done offline by the scorer, where arrival order does
             not matter.
+        - name: registered_after
+          in: query
+          schema: {type: number}
+          description: |
+            Incremental cursor: return only hints registered after this epoch second.
+            The sinkhole polls this endpoint on a timer to keep its container-to-app
+            map warm, which does not need the whole set every time. Entries are
+            returned oldest first, so the cursor is the last `registered_at` seen.
         - {name: include_expired, in: query, schema: {type: boolean, default: false}, description: Debugging escape hatch; eviction has already run}
       responses:
         "200":
@@ -567,7 +581,7 @@ components:
 
     CorrelationEvent:
       description: |
-        PROVISIONAL, see the note above /v1/correlations. A hint travelling through the
+        A hint travelling through the
         event stream: either registered via POST /v1/correlations and mirrored here, or
         batched directly by an SDK that prefers one door. Both register in the live
         pending set. It is exported with the run's events so that a published score can
@@ -582,7 +596,6 @@ components:
 
     CorrelationCreate:
       type: object
-      description: PROVISIONAL, see the note above /v1/correlations.
       required: [app, signal, destination_host]
       properties:
         app: {type: string}
@@ -600,7 +613,24 @@ components:
         request_id: {type: string, nullable: true}
         ts: {type: number}
         peer_ip: {type: string, nullable: true, description: Socket peer; the only address a decision is made on}
-        client_ip: {type: string, nullable: true, description: Descriptive and untrusted}
+        client_ip:
+          type: string
+          nullable: true
+          description: |
+            For a correlation this means "which container registered the hint", and
+            the collector fills it from the peer of the registration connection when
+            the sink omits it. That container-to-app mapping is what lets the sinkhole
+            attribute a callback by source when host matching alone is not enough;
+            without it that whole fallback tier has nothing to work with.
+
+            Observed on our own socket, so unlike a sink-supplied value it cannot be
+            claimed by the tool — but it is still never used for a decision here, and
+            in particular never for the synthetic rule.
+
+            Note that this is the registering container's address on the network it
+            reached the collector over (bench-internal), which is NOT the address the
+            same container uses for the outbound request the hint describes
+            (bench-public).
         synthetic: {type: boolean, default: false}
         ttl:
           type: number
@@ -620,7 +650,6 @@ components:
 
     CorrelationPage:
       type: object
-      description: PROVISIONAL, see the note above /v1/correlations.
       properties:
         now: {type: number, description: The collector's clock, so the sinkhole can compare against its own observations}
         ttl: {type: number}

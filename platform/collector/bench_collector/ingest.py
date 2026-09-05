@@ -104,6 +104,30 @@ def parse_address(raw: Any) -> ipaddress.IPv4Address | ipaddress.IPv6Address | N
         return None
 
 
+def stamp_registration_peer(record: dict[str, Any], peer: str | None) -> None:
+    """Fill a correlation's ``client_ip`` from the peer that registered it.
+
+    Only when the sink omitted it, and only for correlations, where the field means
+    "which container registered this hint" rather than "who called the target". That
+    mapping is what lets the sinkhole attribute a callback by source when host
+    matching alone is not enough: without it, its fallback tier has nothing to work
+    with and its strongest rule's source check degrades to "unknown".
+
+    Observed on our own socket, so unlike a sink-supplied value it cannot be claimed
+    by the tool. It is still not used for any decision here -- the synthetic rule
+    reads peer_ip/source_ip and nothing else.
+
+    Note for the sinkhole: this is the registering container's address on the network
+    it reached the collector over (bench-internal), which is not the address the same
+    container uses to make the outbound request the hint describes (bench-public).
+    """
+    if record.get("client_ip") or not peer:
+        return
+    address = parse_address(peer)
+    if address is not None:
+        record["client_ip"] = str(address)
+
+
 class Collector:
     """Owns the engine, the active-run state and the writer task."""
 
@@ -201,16 +225,17 @@ class Collector:
 
     # ---------------------------------------------------------------- correlations
 
-    def register_correlation(self, spec: CorrelationCreate) -> dict[str, Any]:
+    def register_correlation(self, spec: CorrelationCreate, peer: str | None = None) -> dict[str, Any]:
         """Register an outbound-fetch hint and mirror it into the event stream.
 
         Registration is synchronous in memory because the callback it describes can
-        arrive within milliseconds; the event copy goes through the ordinary buffered
+        arrive within microseconds; the event copy goes through the ordinary buffered
         path so the caller -- a planted sink, mid-request -- still pays no database
         latency.
         """
         record = spec.model_dump(mode="json", by_alias=True)
         record["type"] = "correlation"
+        stamp_registration_peer(record, peer)
         if self.is_synthetic_source(spec):
             record["synthetic"] = True
         entry = self.correlations.register(record, ttl=spec.ttl)
@@ -308,7 +333,7 @@ class Collector:
 
     # --------------------------------------------------------------------- events
 
-    def submit(self, raw_events: Iterable[Any]) -> dict[str, int]:
+    def submit(self, raw_events: Iterable[Any], peer: str | None = None) -> dict[str, int]:
         """Validate and enqueue a batch. Never raises, never awaits the database."""
         run_id = self.active_run_id
         received_at = _now()
@@ -346,7 +371,8 @@ class Collector:
             if event.type == "correlation":
                 # Same door, same registry: an SDK may batch a hint with its other
                 # telemetry rather than call POST /v1/correlations, and the sinkhole
-                # must see it either way.
+                # must see it either way -- including the peer stamp it needs.
+                stamp_registration_peer(payload, peer)
                 entry = self.correlations.register(payload, ttl=payload.get("ttl"))
                 self.counters["correlations"] += 1
                 payload = entry

@@ -22,6 +22,9 @@ from bench_collector.ingest import Collector
 PLATFORM_CIDRS = "10.99.0.0/16, fd00:99::/32"
 TOOL_IP = "192.0.2.77"
 PLATFORM_IP = "10.99.4.12"
+# A target container as seen from the collector's own socket: this is what a
+# registration peer looks like, and what the sinkhole maps back to an app key.
+TARGET_PEER = "10.77.0.21"
 
 
 @pytest.fixture
@@ -41,13 +44,23 @@ def settings(tmp_path) -> Settings:
 
 
 @asynccontextmanager
-async def client_for(settings: Settings | None = None, collector: Collector | None = None):
-    """A running app on the given settings, yielded as (client, collector)."""
+async def client_for(
+    settings: Settings | None = None,
+    collector: Collector | None = None,
+    peer: str = "127.0.0.1",
+):
+    """A running app on the given settings, yielded as (client, collector).
+
+    `peer` is the socket address the app sees on the other end of the connection --
+    the one thing a caller cannot lie about, and therefore the one the collector is
+    allowed to make decisions on.
+    """
     collector = collector or Collector(settings)
     app = create_app(collector)
+    transport = ASGITransport(app=app, client=(peer, 44321))
     async with (
         app.router.lifespan_context(app),
-        AsyncClient(transport=ASGITransport(app=app), base_url="http://otel-collector:8900") as http,
+        AsyncClient(transport=transport, base_url="http://otel-collector:8900") as http,
     ):
         yield http, collector
 
