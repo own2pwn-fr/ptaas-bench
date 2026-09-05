@@ -1,0 +1,24 @@
+#!/bin/sh
+# Provision the publication's content.
+#
+# Drops what this service owns in the document store and the cache and writes the
+# seeded state back, all of it derived from DEPLOY_SEED, so the same seed always gives
+# the same identifiers and the same timestamps. Run it twice: the digest it prints must
+# be the same both times, and if it is not then something outside this service is still
+# holding state from the last deployment.
+#
+# It is a command, not a route: nothing a reader can reach should be able to empty the
+# publication.
+set -eu
+
+cd /srv/pressroom
+
+if ! out=$(/opt/venv/bin/python -m pressroom.seed "$@"); then
+    echo "state-reset: provisioning did not complete" >&2
+    exit 1
+fi
+
+case "$out" in
+    state\ *) printf '%s\n' "$out" ;;
+    *) echo "state-reset: unexpected reply: $out" >&2; exit 1 ;;
+esac

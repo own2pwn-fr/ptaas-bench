@@ -1,0 +1,51 @@
+id: BENCH-BLOG-0024
+title: Article import honours object tags in front matter
+app: blog
+component: api
+class: unsafe_yaml
+severity: critical
+entrypoint:
+  method: POST
+  path: /api/studio/articles/import
+  auth: user
+  param: document
+  param_in: json
+  default_value: '---
+
+    title: Harbour vote
+
+    topic: civic
+
+    ---
+
+    Body text.'
+  content_type: application/json
+discovery:
+  render: spa-vue
+  reachable_from:
+  - /studio
+  - /studio/import
+  requires:
+  - js-execution
+  - multi-step-flow
+  difficulty: 4
+oracle:
+  kind: sink
+  condition: 'Imported articles carry YAML front matter, and the loader chosen for it honours the language''s
+    object tags, so a tag can name any callable in the interpreter. The counter moves when a load resolved
+    a Python name or built an object through such a tag -- a constructor outside the plain mapping, sequence
+    and scalar set having actually run. Front matter using ordinary YAML types, however deeply nested,
+    never moves it.
+
+    '
+  poc: 'POST /api/studio/articles/import {"document":"---\ntitle: x\nlayout: !!python/object/apply:os.getcwd
+    []\n---\n"}'
+  signal: blog.studio.import.yaml_construct
+tags:
+- json
+- authenticated
+- deserialisation
+introduced: '2026-09-05'
+decoy_note: The importer exists to take articles out of the old static-site repository, whose front matter
+  used custom tags for layouts; the permissive loader was what made those files load at all, and the migration
+  was supposed to be over by now.

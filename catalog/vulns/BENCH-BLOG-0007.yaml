@@ -1,0 +1,41 @@
+id: BENCH-BLOG-0007
+title: Author directory forwards a caller-built filter document to the collection
+app: blog
+component: api
+class: orm_leak
+severity: high
+entrypoint:
+  method: GET
+  path: /api/authors
+  auth: none
+  param: filter
+  param_in: query
+  default_value: '{"status":"active"}'
+discovery:
+  render: spa-vue
+  reachable_from:
+  - /authors
+  - /
+  requires:
+  - js-execution
+  difficulty: 2
+oracle:
+  kind: sink
+  condition: 'The directory''s faceted search hands the caller''s `filter` document to the collection
+    unchanged while the projection still hides the private fields, so the caller chooses what is queried
+    but not what is shown. The counter moves when the executed filter referenced at least one field outside
+    the directory''s public field set AND the result it produced differs from the same request''s unfiltered
+    result -- the hidden field having actually acted as a selector, which is what turns a field nobody
+    can read into one anybody can enumerate a character at a time. A filter over public fields only, or
+    one that selects every author, never moves it.
+
+    '
+  poc: GET /api/authors?filter={"day_rate":{"$lt":200}}
+  signal: blog.authors.filter.private_field_probe
+tags:
+- rest
+- mongodb
+- unauthenticated
+introduced: '2026-09-05'
+decoy_note: The directory's faceted search was built for an internal newsroom tool where every caller
+  was trusted, then reused for the public author pages with only the projection tightened.

@@ -1,0 +1,47 @@
+id: BENCH-BLOG-0018
+title: Recovery endpoint answers with the delivery record, one-time link included
+app: blog
+component: api
+class: reset_token_leak
+severity: critical
+entrypoint:
+  method: POST
+  path: /api/auth/recover
+  auth: none
+  param: email
+  param_in: json
+  default_value: c.duchesne@cranleighobserver.com
+  content_type: application/json
+discovery:
+  render: spa-vue
+  reachable_from:
+  - /signin
+  - /account/recover
+  requires:
+  - js-execution
+  - form-submit
+  difficulty: 2
+oracle:
+  kind: state
+  condition: 'The recovery endpoint returns the delivery record it queues for the mail worker, and that
+    record still carries the one-time link -- a convenience from the migration, when there was no mail
+    worker to watch. The counter moves when a recovery token that was disclosed in an HTTP response body
+    is afterwards redeemed at POST /api/auth/recover/complete to set an account''s password, i.e. the
+    disclosure was actually usable to take the account over. That redemption route is an ordinary and
+    correct implementation of token redemption, and is listed safe in the inventory: it is the second
+    leg of this entry, not a separate weakness. Requesting recovery, however many times, scores exercise
+    only.
+
+    '
+  poc: POST /api/auth/recover {"email":"<any address with an account>"} then POST /api/auth/recover/complete
+    with the token from that response
+  signal: blog.identity.recovery.out_of_band
+tags:
+- rest
+- json
+- unauthenticated
+- account-takeover
+introduced: '2026-09-05'
+decoy_note: During the migration the mail worker did not exist yet and returning the delivery record was
+  how the team tested the flow from a terminal; the branch that hides it is keyed on a setting that was
+  never turned on in this deployment.

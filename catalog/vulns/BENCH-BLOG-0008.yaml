@@ -1,0 +1,39 @@
+id: BENCH-BLOG-0008
+title: Comment list merges requested field names into its projection
+app: blog
+component: api
+class: orm_leak
+severity: high
+entrypoint:
+  method: GET
+  path: /api/comments
+  auth: none
+  param: include
+  param_in: query
+  default_value: author_display
+discovery:
+  render: spa-vue
+  reachable_from:
+  - /articles/{slug}
+  - /studio/queue
+  requires:
+  - js-execution
+  difficulty: 3
+oracle:
+  kind: sink
+  condition: 'The moderation console asks the shared comment list for extra fields with `include`, and
+    the list merges the requested names into its projection without an allow-list. The counter moves when
+    a served response actually carried a field from the private set -- the reporter''s address, the moderator''s
+    note, the spam score or the raw submitted body -- to a caller holding no moderation role. Asking for
+    a name no document has, or being refused, never moves it.
+
+    '
+  poc: GET /api/comments?include=reporter_email,moderation,spam_score
+  signal: blog.comments.projection.private_field_served
+tags:
+- rest
+- mongodb
+- unauthenticated
+introduced: '2026-09-05'
+decoy_note: One list endpoint serves both the public thread and the moderation console; the console needed
+  more fields, and passing the field names from the client was cheaper than a second endpoint.

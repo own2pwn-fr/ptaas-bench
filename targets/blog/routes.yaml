@@ -1,0 +1,168 @@
+# Route inventory for the `blog` target, per targets/target-contract.yaml.
+#
+# Two uses. Crawl coverage is measured over the WHOLE reachable surface rather than
+# over the interesting parts of it, because recall counted only on the pages we made
+# interesting is recall against a denominator we chose. And precision needs a
+# denominator too: a finding reported against a route marked `safe` here is a
+# confirmed false positive rather than merely unmatched.
+#
+# The ratio is the point of the file. 27 route entries are planted and 87 are not,
+# a little over three to one, and the safe ones are not filler: they are written in
+# the same style, validate their inputs through the same helpers, and refuse in the
+# same shape. Several sit directly beside a planted sibling on purpose --
+# /api/media/{asset_id}/derivative next to /api/media/{asset_id},
+# /api/search/suggest next to /api/search, PATCH on a draft next to GET on the same
+# draft -- so that a tool which reports the whole neighbourhood pays for it.
+#
+# Two routes carry `safe` although a catalog entry walks through them, and the
+# distinction is the point of the field. POST /api/articles/{slug}/summary is where the
+# comment-steered summary surfaces, and POST /api/auth/recover/complete is where a
+# disclosed recovery link is redeemed; both are ordinary, correctly written routes, the
+# second legs of BENCH-BLOG-0009 and BENCH-BLOG-0018 respectively, and each is named in
+# that entry's oracle condition. A finding reported against either as a weakness in its
+# own right is a false positive.
+#
+# Paths are the route templates the framework registers, which is what the agent
+# reports and what the catalog entrypoints are written against.
+#
+# THIS TARGET PUBLISHES A MACHINE-READABLE SPECIFICATION. /openapi.json is served,
+# and /docs and /redoc render it. That is realistic here -- the API is consumed
+# directly by the archive team and two syndication partners, so it is documented --
+# and it is deliberately left in place, because importing a specification instead of
+# discovering endpoints is a real capability difference between tools and one this
+# corpus should be able to measure. A tool that reads it starts with the entire API
+# surface, including the studio, without executing a line of JavaScript. A tool that
+# does not must crawl the compiled single page for the same routes.
+#
+# `render` describes how a crawler is expected to arrive. Every reader-facing page is
+# resolved in the browser by the compiled bundle and answered server-side by one
+# catch-all, so they are listed individually -- they are distinct URLs to a crawler --
+# and marked spa-vue.
+
+app: blog
+
+routes:
+
+  # ---- the compiled single page: every one of these is answered by the catch-all ----
+  - {path: '/',                         method: GET,    auth: none,       render: spa-vue,     params: [],                    status: safe}
+  - {path: '/articles',                 method: GET,    auth: none,       render: spa-vue,     params: [],                    status: safe}
+  - {path: '/articles/{slug}',          method: GET,    auth: none,       render: spa-vue,     params: [slug],                status: safe}
+  - {path: '/archive',                  method: GET,    auth: none,       render: spa-vue,     params: [],                    status: safe}
+  - {path: '/topics',                   method: GET,    auth: none,       render: spa-vue,     params: [],                    status: safe}
+  - {path: '/topics/{slug}',            method: GET,    auth: none,       render: spa-vue,     params: [slug],                status: safe}
+  - {path: '/authors',                  method: GET,    auth: none,       render: spa-vue,     params: [],                    status: safe}
+  - {path: '/authors/{handle}',         method: GET,    auth: none,       render: spa-vue,     params: [handle],              status: safe}
+  - {path: '/search',                   method: GET,    auth: none,       render: spa-vue,     params: [],                    status: safe}
+  - {path: '/newsletter',               method: GET,    auth: none,       render: spa-vue,     params: [],                    status: safe}
+  - {path: '/newsletter/{number}',      method: GET,    auth: none,       render: spa-vue,     params: [number],              status: safe}
+  - {path: '/signin',                   method: GET,    auth: none,       render: spa-vue,     params: [],                    status: safe}
+  - {path: '/register',                 method: GET,    auth: none,       render: spa-vue,     params: [],                    status: safe}
+  - {path: '/account',                  method: GET,    auth: user,       render: spa-vue,     params: [],                    status: safe}
+  - {path: '/studio',                   method: GET,    auth: user,       render: spa-vue,     params: [],                    status: safe}
+  - {path: '/studio/queue',             method: GET,    auth: admin,      render: spa-vue,     params: [],                    status: safe}
+  - {path: '/preview/{token}',          method: GET,    auth: none,       render: spa-vue,     params: [token],               status: safe}
+  - {path: '/about',                    method: GET,    auth: none,       render: spa-vue,     params: [],                    status: safe}
+  - {path: '/contact',                  method: GET,    auth: none,       render: spa-vue,     params: [],                    status: safe}
+  - {path: '/ethics',                   method: GET,    auth: none,       render: spa-vue,     params: [],                    status: safe}
+  - {path: '/privacy',                  method: GET,    auth: none,       render: spa-vue,     params: [],                    status: safe}
+  - {path: '/terms',                    method: GET,    auth: none,       render: spa-vue,     params: [],                    status: safe}
+  - {path: '/corrections',              method: GET,    auth: none,       render: spa-vue,     params: [],                    status: safe}
+  - {path: '/{full_path}',              method: GET,    auth: none,       render: spa-vue,     params: [full_path],           status: safe}
+
+  # ---- files and site metadata ----
+  - {path: '/assets/{name}',            method: GET,    auth: none,       render: static-html, params: [name],                status: safe}
+  - {path: '/favicon.ico',              method: GET,    auth: none,       render: static-html, params: [],                    status: safe}
+  - {path: '/site.webmanifest',         method: GET,    auth: none,       render: static-html, params: [],                    status: safe}
+  - {path: '/robots.txt',               method: GET,    auth: none,       render: static-html, params: [],                    status: safe}
+  - {path: '/humans.txt',               method: GET,    auth: none,       render: static-html, params: [],                    status: safe}
+  - {path: '/.well-known/security.txt', method: GET,    auth: none,       render: static-html, params: [],                    status: safe}
+  - {path: '/opensearch.xml',           method: GET,    auth: none,       render: static-html, params: [],                    status: safe}
+  - {path: '/sitemap.xml',              method: GET,    auth: none,       render: static-html, params: [],                    status: safe}
+  - {path: '/sitemap-pages.xml',        method: GET,    auth: none,       render: static-html, params: [],                    status: safe}
+  - {path: '/sitemap-articles.xml',     method: GET,    auth: none,       render: static-html, params: [],                    status: safe}
+  - {path: '/feed.xml',                 method: GET,    auth: none,       render: static-html, params: [],                    status: safe}
+  - {path: '/feed.json',                method: GET,    auth: none,       render: api-only,    params: [],                    status: safe}
+  - {path: '/openapi.json',             method: GET,    auth: none,       render: api-only,    params: [],                    status: safe}
+  - {path: '/docs',                     method: GET,    auth: none,       render: static-html, params: [],                    status: safe}
+  - {path: '/docs/oauth2-redirect',     method: GET,    auth: none,       render: static-html, params: [],                    status: safe}
+  - {path: '/redoc',                    method: GET,    auth: none,       render: static-html, params: [],                    status: safe}
+
+  # ---- reading ----
+  - {path: '/api/articles',             method: GET,    auth: none,       render: spa-vue,     params: [topic, author, sort, page, per_page], status: safe}
+  - {path: '/api/articles/archive',     method: GET,    auth: none,       render: spa-vue,     params: [match, per_page],     status: planted}
+  - {path: '/api/articles/{slug}',      method: GET,    auth: none,       render: spa-vue,     params: [slug, _trace],        status: planted}
+  - {path: '/api/articles/{slug}/related',   method: GET,  auth: none,    render: spa-vue,     params: [slug],                status: safe}
+  - {path: '/api/articles/{slug}/reactions', method: GET,  auth: none,    render: spa-vue,     params: [slug],                status: safe}
+  - {path: '/api/articles/{slug}/reactions', method: POST, auth: none,    render: spa-vue,     params: [slug, kind],          status: safe}
+  - {path: '/api/articles/{slug}/comments',  method: GET,  auth: none,    render: spa-vue,     params: [slug, page],          status: safe}
+  - {path: '/api/articles/{slug}/comments',  method: POST, auth: none,    render: spa-vue,     params: [slug, body, name],    status: planted}
+  - {path: '/api/articles/{slug}/summary',   method: POST, auth: none,    render: spa-vue,     params: [slug],                status: safe}
+  - {path: '/api/comments',             method: GET,    auth: none,       render: spa-vue,     params: [article, include, page], status: planted}
+  - {path: '/api/comments/{comment_id}',     method: GET,  auth: none,    render: spa-vue,     params: [comment_id],          status: safe}
+  - {path: '/api/comments/{comment_id}/report', method: POST, auth: none, render: spa-vue,     params: [comment_id, reason],  status: safe}
+  - {path: '/api/topics',               method: GET,    auth: none,       render: spa-vue,     params: [],                    status: safe}
+  - {path: '/api/topics/{slug}',        method: GET,    auth: none,       render: spa-vue,     params: [slug],                status: safe}
+  - {path: '/api/topics/{slug}/articles',    method: GET,  auth: none,    render: spa-vue,     params: [slug, page],          status: safe}
+  - {path: '/api/authors',              method: GET,    auth: none,       render: spa-vue,     params: [topic, status, filter, page], status: planted}
+  - {path: '/api/authors/{handle}',     method: GET,    auth: none,       render: spa-vue,     params: [handle],              status: safe}
+  - {path: '/api/authors/{handle}/articles', method: GET,  auth: none,    render: spa-vue,     params: [handle, page],        status: safe}
+  - {path: '/api/search',               method: GET,    auth: none,       render: spa-vue,     params: [q, page],             status: planted}
+  - {path: '/api/search/suggest',       method: GET,    auth: none,       render: spa-vue,     params: [q],                   status: safe}
+  - {path: '/api/reader/feed',          method: GET,    auth: none,       render: spa-vue,     params: [page, reader_prefs],  status: planted}
+  - {path: '/api/reader/history',       method: GET,    auth: none,       render: spa-vue,     params: [reader_id],           status: safe}
+
+  # ---- embeds and pictures ----
+  - {path: '/api/embed/providers',      method: GET,    auth: none,       render: spa-vue,     params: [],                    status: safe}
+  - {path: '/api/embed/resolve',        method: GET,    auth: none,       render: spa-vue,     params: [url],                 status: planted}
+  - {path: '/api/embed/card',           method: GET,    auth: none,       render: spa-vue,     params: [title, topic],        status: planted}
+  - {path: '/api/media/{asset_id}',     method: GET,    auth: none,       render: spa-vue,     params: [asset_id],            status: planted}
+  - {path: '/api/media/{asset_id}/derivative', method: GET, auth: none,   render: spa-vue,     params: [asset_id, width],     status: safe}
+  - {path: '/api/preview/{token}',      method: GET,    auth: none,       render: spa-vue,     params: [token],               status: planted}
+
+  # ---- newsletter ----
+  - {path: '/api/newsletter/issues',    method: GET,    auth: none,       render: spa-vue,     params: [page],                status: safe}
+  - {path: '/api/newsletter/issues/{issue_number}', method: GET, auth: none, render: spa-vue,  params: [issue_number],        status: safe}
+  - {path: '/api/newsletter/subscribe', method: POST,   auth: none,       render: spa-vue,     params: [email, cadence],      status: safe}
+  - {path: '/api/newsletter/preferences', method: POST, auth: none,       render: spa-vue,     params: [email, token, cadence, topics], status: planted}
+  - {path: '/api/newsletter/preview',   method: POST,   auth: user,       render: spa-vue,     params: [subject, issue],      status: planted}
+
+  # ---- sessions and accounts ----
+  - {path: '/api/auth/session',         method: GET,    auth: none,       render: spa-vue,     params: [],                    status: safe}
+  - {path: '/api/auth/session',         method: POST,   auth: none,       render: spa-vue,     params: [email, password, code], status: planted}
+  - {path: '/api/auth/session',         method: DELETE, auth: user,       render: spa-vue,     params: [],                    status: safe}
+  - {path: '/api/auth/register',        method: POST,   auth: none,       render: spa-vue,     params: [email, password, display], status: safe}
+  - {path: '/api/auth/recover',         method: POST,   auth: none,       render: spa-vue,     params: [email],               status: planted}
+  - {path: '/api/auth/recover/complete', method: POST,  auth: none,       render: spa-vue,     params: [token, password],     status: safe}
+  - {path: '/api/account/profile',      method: GET,    auth: user,       render: spa-vue,     params: [],                    status: safe}
+  - {path: '/api/account/profile',      method: PATCH,  auth: user,       render: spa-vue,     params: [display, cadence, email], status: safe}
+  - {path: '/api/account/password',     method: POST,   auth: user,       render: spa-vue,     params: [current, replacement], status: safe}
+  - {path: '/api/account/bookmarks',    method: GET,    auth: user,       render: spa-vue,     params: [page],                status: safe}
+  - {path: '/api/account/bookmarks',    method: POST,   auth: user,       render: spa-vue,     params: [article],             status: safe}
+  - {path: '/api/account/bookmarks/{article_slug}', method: DELETE, auth: user, render: spa-vue, params: [article_slug],      status: safe}
+  - {path: '/api/account/activity',     method: GET,    auth: user,       render: spa-vue,     params: [],                    status: safe}
+
+  # ---- studio ----
+  - {path: '/api/studio/overview',      method: GET,    auth: user,       render: spa-vue,     params: [],                    status: safe}
+  - {path: '/api/studio/queue',         method: GET,    auth: admin,      render: spa-vue,     params: [page, ng_session],    status: planted}
+  - {path: '/api/studio/queue/{comment_id}', method: POST, auth: admin,   render: spa-vue,     params: [comment_id, decision], status: safe}
+  - {path: '/api/studio/drafts',        method: GET,    auth: user,       render: spa-vue,     params: [page],                status: safe}
+  - {path: '/api/studio/drafts',        method: POST,   auth: user,       render: spa-vue,     params: [title, body],         status: safe}
+  - {path: '/api/studio/drafts/{draft_id}', method: GET, auth: user,      render: spa-vue,     params: [draft_id],            status: planted}
+  - {path: '/api/studio/drafts/{draft_id}', method: PATCH, auth: user,    render: spa-vue,     params: [draft_id, title, body, state], status: safe}
+  - {path: '/api/studio/drafts/{draft_id}/revisions', method: GET, auth: user, render: spa-vue, params: [draft_id],           status: safe}
+  - {path: '/api/studio/drafts/{draft_id}/restore', method: POST, auth: user, render: spa-vue, params: [draft_id, snapshot],  status: planted}
+  - {path: '/api/studio/drafts/{draft_id}/share', method: POST, auth: user, render: spa-vue,   params: [draft_id],            status: safe}
+  - {path: '/api/studio/assist',        method: POST,   auth: user,       render: spa-vue,     params: [draft_id, instruction], status: planted}
+  - {path: '/api/studio/reports',       method: POST,   auth: user,       render: spa-vue,     params: [name, segment],       status: planted}
+  - {path: '/api/studio/reports/{report_id}', method: GET, auth: user,    render: spa-vue,     params: [report_id],           status: safe}
+  - {path: '/api/studio/media',         method: GET,    auth: user,       render: spa-vue,     params: [state, page],         status: safe}
+  - {path: '/api/studio/media',         method: POST,   auth: user,       render: spa-vue,     params: [file, credit],        status: planted}
+  - {path: '/api/studio/media/fetch',   method: POST,   auth: user,       render: spa-vue,     params: [source_url],          status: planted}
+  - {path: '/api/studio/articles/import', method: POST, auth: user,       render: spa-vue,     params: [document],            status: planted}
+  - {path: '/api/studio/plugins/manifest', method: GET, auth: user,       render: spa-vue,     params: [],                    status: safe}
+  - {path: '/api/studio/plugins/install', method: POST, auth: admin,      render: spa-vue,     params: [package],             status: planted}
+
+  # ---- platform ----
+  - {path: '/api/status',               method: GET,    auth: none,       render: api-only,    params: [],                    status: safe}
+  - {path: '/api/config',               method: GET,    auth: none,       render: api-only,    params: [],                    status: safe}
+  - {path: '/api/internal/diagnostics', method: GET,    auth: none,       render: api-only,    params: [],                    status: planted}

@@ -1,0 +1,44 @@
+id: BENCH-BLOG-0002
+title: Newsletter preference centre matches a management token by operator
+app: blog
+component: api
+class: nosqli_operator
+severity: high
+entrypoint:
+  method: POST
+  path: /api/newsletter/preferences
+  auth: none
+  param: token
+  param_in: json
+  default_value: ntk-a80db26444
+  content_type: application/json
+discovery:
+  render: spa-vue
+  reachable_from:
+  - /newsletter
+  - /newsletter/preferences
+  requires:
+  - js-execution
+  - multi-step-flow
+  - form-submit
+  difficulty: 4
+oracle:
+  kind: sink
+  condition: 'The preference centre finds a subscriber by pairing the address typed into the form with
+    the management token from the mailing footer, and both values go into the filter untyped. The counter
+    moves when the filter sent to the driver contained a `$`-prefixed key in the token slot AND the subscriber
+    document that came back belongs to an address other than the one submitted -- the caller reading somebody
+    else''s list membership and delivery address. A token that simply does not match never moves it.
+
+    '
+  poc: POST /api/newsletter/preferences {"email":{"$ne":""},"token":{"$ne":""}}
+  signal: blog.newsletter.preferences.filter_shape
+tags:
+- rest
+- json
+- mongodb
+- unauthenticated
+introduced: '2026-09-05'
+decoy_note: Preference centres are reached from an unsubscribe footer, so they cannot require a password;
+  the pairing of address and token was considered the authentication and nobody revisited how the pair
+  is looked up.

@@ -1,0 +1,9 @@
+[project]
+name = "pressroom"
+version = "3.8.1"
+description = "Northgate Review: reader site, studio and the API behind both."
+requires-python = ">=3.12"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

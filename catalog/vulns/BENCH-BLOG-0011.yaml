@@ -1,0 +1,41 @@
+id: BENCH-BLOG-0011
+title: Comment cleaner is single-pass and the result is entity-normalised afterwards
+app: blog
+component: api
+class: xss_mutation
+severity: medium
+entrypoint:
+  method: POST
+  path: /api/articles/{slug}/comments
+  auth: none
+  param: body
+  param_in: json
+  default_value: Good piece. The ferry timetable point deserved more room.
+  content_type: application/json
+discovery:
+  render: spa-vue
+  reachable_from:
+  - /articles/{slug}
+  requires:
+  - js-execution
+  - form-submit
+  difficulty: 2
+oracle:
+  kind: sink
+  condition: 'Comment markup is cleaned by a single-pass tag filter and the cleaned string then goes through
+    the typography pass, which decodes character references -- so a construct that did not exist before
+    cleaning can exist after it. The counter moves when the stored document is re-parsed and still contains
+    an executable node: a script element, an event-handler attribute, or a URL whose scheme resolves to
+    javascript. A payload the filter removed, or one stored as inert text, never moves it.
+
+    '
+  poc: POST /api/articles/{slug}/comments {"body":"<scr<script>ipt>fetch('//x')</scr<script>ipt>"}
+  signal: blog.comments.sanitizer.residual_script
+tags:
+- json
+- stored
+- unauthenticated
+introduced: '2026-09-05'
+decoy_note: Comments allow a little markup because readers quote each other, and the cleaner was written
+  in-house after the third dependency advisory in a year; running the typography pass after it, rather
+  than before, is the ordering nobody questioned.

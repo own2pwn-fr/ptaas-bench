@@ -1,0 +1,40 @@
+id: BENCH-BLOG-0023
+title: Reader preference cookie is an object graph the feed route loads
+app: blog
+component: api
+class: deser_pickle
+severity: critical
+entrypoint:
+  method: GET
+  path: /api/reader/feed
+  auth: none
+  param: reader_prefs
+  param_in: cookie
+  default_value: gASVHQAAAAAAAAB9lIwFdG9waWOUjAVjaXZpY5RzLg==
+discovery:
+  render: spa-vue
+  reachable_from:
+  - /
+  - /account/preferences
+  requires:
+  - js-execution
+  difficulty: 3
+oracle:
+  kind: sink
+  condition: 'The personalised feed remembers topic weightings for readers who never signed in, and the
+    cookie holding them is the same serialised object graph the studio uses, decoded on every request
+    without a session to bound it. The counter moves when the decode resolved a global outside the preference
+    classes -- a module or callable a preference cookie cannot contain. A cookie that fails to decode
+    is discarded silently and never moves it.
+
+    '
+  poc: 'GET /api/reader/feed with Cookie: reader_prefs=<base64 of an object graph whose reduction names
+    os.getcwd>'
+  signal: blog.reader.prefs.decode_foreign_type
+tags:
+- cookie
+- unauthenticated
+- deserialisation
+introduced: '2026-09-05'
+decoy_note: Anonymous personalisation cannot use the session store, so the state lives in the cookie;
+  the serialiser was reused from the studio because it already knew the preference classes.

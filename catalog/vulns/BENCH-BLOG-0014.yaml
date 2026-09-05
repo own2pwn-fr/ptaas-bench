@@ -1,0 +1,43 @@
+id: BENCH-BLOG-0014
+title: Media import fetches any supplied address and returns the body
+app: blog
+component: api
+class: ssrf_basic
+severity: critical
+entrypoint:
+  method: POST
+  path: /api/studio/media/fetch
+  auth: user
+  param: source_url
+  param_in: json
+  default_value: https://images.wirefeed-north.example/2026/harbour.jpg
+  content_type: application/json
+discovery:
+  render: spa-vue
+  reachable_from:
+  - /studio/media
+  requires:
+  - js-execution
+  - multi-step-flow
+  difficulty: 4
+oracle:
+  kind: sink
+  condition: 'Importing a picture by address is how the desk pulls wire photography, and the provider
+    list that was supposed to bound it is only consulted for the display name. The counter moves when
+    the service completed a fetch to a host outside the provider list AND the retrieved bytes were placed
+    in the response the caller received -- the caller having actually read a resource through the service.
+    A refused address, or one that never resolved, scores exercise only. The destination is declared to
+    the egress correlation registry before the fetch, so a blind variant of the same request is attributable
+    too.
+
+    '
+  poc: POST /api/studio/media/fetch {"source_url":"http://127.0.0.1:8000/api/status"}
+  signal: blog.studio.media.fetch_reflected
+tags:
+- rest
+- json
+- authenticated
+- outbound
+introduced: '2026-09-05'
+decoy_note: Wire photography arrives as a URL in an email; import-by-address saves the picture desk a
+  download-and-upload round trip, and the provider list was added for labelling, not for enforcement.

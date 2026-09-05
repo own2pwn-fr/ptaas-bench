@@ -1,0 +1,37 @@
+id: BENCH-BLOG-0006
+title: Share-card renderer builds its SVG template from the supplied title
+class: ssti
+severity: critical
+entrypoint:
+  method: GET
+  path: /api/embed/card
+  auth: none
+  param: title
+  param_in: query
+  default_value: The harbour vote, explained
+discovery:
+  render: spa-vue
+  reachable_from:
+  - /
+  - /articles/{slug}
+  requires: []
+  difficulty: 2
+oracle:
+  kind: sink
+  condition: 'Social preview cards are rendered by the same engine as the newsletter, and the card renderer
+    interpolates the title into the SVG template source before compiling it. The counter moves when the
+    title''s own parse tree contains an expression node and the render completed, i.e. the engine compiled
+    and evaluated caller text. A title that is drawn into the card as text never moves it.
+
+    '
+  poc: GET /api/embed/card?title={{7*7}}
+  signal: blog.embed.card.template_escape
+tags:
+- rest
+- jinja
+- unauthenticated
+decoy_note: Preview cards have to interpolate a headline into an SVG, and the renderer was written by
+  whoever was closest to the marketing request; nobody thought of an SVG template as an execution context.
+app: blog
+component: api
+introduced: '2026-09-05'

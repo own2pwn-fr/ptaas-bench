@@ -1,0 +1,165 @@
+# Northgate Review: the reader site, the studio, and the two datastores behind them.
+#
+# Relative paths resolve against this file's directory (compose/), per the `include`
+# semantics of the Compose specification. The build context is the repository root
+# because the service and the estate's observability agent are versioned and built
+# together.
+#
+# WHY THE TAGS ARE PINNED
+# -----------------------
+# The document store's behaviour is load-bearing here in a way it is not for most
+# services: the archive filter and the readership reports are evaluated per document by
+# the server, and whether that is available at all is a property of the server version.
+# A floating tag would not keep the deployment fresh, it would change what the product
+# can do without changing anything in this repository. Record the digests at first
+# bring-up (`docker image inspect --format '{{index .RepoDigests 0}}'`) and replace the
+# tags with `image@sha256:...`; until then the tags are exact, never `latest`.
+#
+# NAMES
+# -----
+# The publication's own domain is a network alias, overridable per deployment through
+# BLOG_SITE_DOMAIN, because a name resolvable by anything on the same network is a
+# statement about what this is.
+
+services:
+
+  # ---------------------------------------------------------------------------
+  # The only service on the reader-facing network. The datastores behind it are
+  # reachable from inside the estate alone, which is why the service can talk to
+  # them without credentials and the world cannot talk to them at all.
+  # ---------------------------------------------------------------------------
+  blog-web:
+    build:
+      context: ..
+      dockerfile: targets/blog/Dockerfile
+    container_name: blog-web
+    hostname: press01
+    profiles: [targets, blog]
+    environment:
+      TELEMETRY_SERVICE: blog
+      TELEMETRY_ENDPOINT: http://otel-collector:8900
+      # Our own ranges. Traffic from the estate's internal network, and from the
+      # resolver's address on the reader-facing one, is generated rather than organic:
+      # deployment checks, warm-up jobs, the coherence probe. Membership is decided on
+      # the socket peer and never on a header a caller can set.
+      TELEMETRY_SYNTHETIC_CIDRS: "10.77.0.0/24,10.88.0.5/32"
+
+      # Left empty on purpose: with no explicit name the publication's masthead and
+      # domain are derived from DEPLOY_SEED, so two installations of this platform are
+      # two different papers rather than two copies of one. A deployment that names
+      # them should set BLOG_SITE_NAME and BLOG_SITE_DOMAIN together, and match the
+      # network alias below; `python -m pressroom.seed --accounts` prints what a given
+      # seed produced.
+      SITE_NAME: ${BLOG_SITE_NAME:-}
+      SITE_DOMAIN: ${BLOG_SITE_DOMAIN:-}
+      # Content, logins and per-deployment keys all derive from this. Two deployments
+      # with different seeds share no names, no addresses and no passphrases.
+      DEPLOY_SEED: ${DEPLOY_SEED:-}
+
+      MONGO_URL: mongodb://blog-documents:27017
+      MONGO_DB: pressroom
+      REDIS_URL: redis://blog-cache:6379/0
+      MEDIA_ROOT: /var/lib/pressroom/media
+
+      # The estate's management range. The diagnostics view and the article trace
+      # switch are meant to answer only inside it.
+      OPS_CIDRS: "10.60.0.0/22"
+    # The resolver for the network this container serves. Docker's embedded resolver
+    # cannot do the job: on an internal network it has no route to forward an external
+    # name, so anything this service is asked to fetch would hang for the resolver
+    # timeout instead of being answered. Pinned here because the picture desk's import,
+    # the link-preview resolver and the plugin installer all make outbound lookups.
+    dns: ["10.88.0.5"]
+    networks:
+      bench-public:
+        aliases:
+          - www.${BLOG_SITE_DOMAIN:-cranleighobserver.com}
+          - ${BLOG_SITE_DOMAIN:-cranleighobserver.com}
+          - blog-web
+          - press01
+          - press
+      bench-internal:
+        aliases: [blog-web, press01]
+    # Ports are NOT published. The reader-facing network has no route to the host by
+    # design; publishing would put this container on a developer's loopback and give
+    # anything that took the container a way back out. See the `dev` profile below.
+    depends_on:
+      blog-documents: {condition: service_healthy}
+      blog-cache: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD", "/opt/venv/bin/python", "-c",
+             "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8000/api/status')"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  blog-documents:
+    image: mongo:7.0.14
+    container_name: blog-documents
+    hostname: documents
+    profiles: [targets, blog]
+    command: ["mongod", "--bind_ip_all", "--quiet"]
+    networks:
+      bench-internal:
+        aliases: [blog-documents]
+    dns: ["10.77.0.5"]
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  blog-cache:
+    image: redis:7.4.1-alpine
+    container_name: blog-cache
+    hostname: cache
+    profiles: [targets, blog]
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    networks:
+      bench-internal:
+        aliases: [blog-cache]
+    dns: ["10.77.0.5"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  # ---------------------------------------------------------------------------
+  # Local development only, never during a measured run: `--profile dev`.
+  #
+  # It publishes the site on the developer's machine, which is exactly the route the
+  # sealed networks exist to remove. Bringing it up during a run would let a
+  # compromised container reach the host and would let host traffic reach the service
+  # without passing the peer accounting every counter here depends on.
+  # ---------------------------------------------------------------------------
+  blog-devtap:
+    image: nginx:1.27.3-alpine
+    container_name: blog-devtap
+    profiles: [dev]
+    command: ["nginx", "-g", "daemon off;"]
+    volumes:
+      - ../targets/blog/devtap.conf:/etc/nginx/conf.d/default.conf:ro
+    ports:
+      - "8280:80"
+    networks: [bench-internal, blog-dev]
+    depends_on: [blog-web]
+
+# Mirrors docker-compose.yml exactly so that `include` merges the two definitions
+# rather than conflicting with them.
+networks:
+  bench-public:
+    name: bench-public
+    internal: true
+    ipam:
+      config:
+        - subnet: 10.88.0.0/24
+  bench-internal:
+    name: bench-internal
+    internal: true
+    ipam:
+      config:
+        - subnet: 10.77.0.0/24
+  # Used by the development tap alone, and the only non-internal network here.
+  blog-dev:
+    name: blog-dev

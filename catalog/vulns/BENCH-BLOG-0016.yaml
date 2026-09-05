@@ -1,0 +1,42 @@
+id: BENCH-BLOG-0016
+title: Share-preview links are signed with a key that ships in the front-end bundle
+app: blog
+component: api
+class: hardcoded_secret
+severity: high
+entrypoint:
+  method: GET
+  path: /api/preview/{token}
+  auth: none
+  param: token
+  param_in: path
+  default_value: v1.eyJkIjoiZGZ0LTIwMDEtMDQifQ.QkFTRTY0
+discovery:
+  render: spa-vue
+  reachable_from:
+  - /studio/drafts/{id}
+  - /preview/{token}
+  requires:
+  - js-execution
+  difficulty: 3
+oracle:
+  kind: sink
+  condition: 'Share-preview links are signed with a key the studio bundle also carries, because the front
+    end builds the link locally so the button feels instant; anybody who reads the bundle can mint one.
+    The counter moves when a presented token verifies under that key but carries an identifier the service
+    never issued -- every link the service creates is recorded in the cache''s issued set -- i.e. the
+    caller signed their own link to an unpublished draft and it was honoured. A link the service issued,
+    and a token that fails verification, never move it.
+
+    '
+  poc: GET /api/preview/<a link signed offline with the key read out of the compiled shell, naming a draft
+    the caller does not own>
+  signal: blog.preview.token.unissued
+tags:
+- rest
+- unauthenticated
+- front-end
+introduced: '2026-09-05'
+decoy_note: The share button had to produce a link without a round trip -- the desk copies it into chat
+  while still typing -- so the signing key went into the bundle and the server was left verifying links
+  it had not necessarily minted.

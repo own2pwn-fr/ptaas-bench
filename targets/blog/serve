@@ -1,0 +1,22 @@
+#!/bin/sh
+# Start the service.
+#
+# Provisioning runs first and only when the store is empty, so a restart never costs
+# the publication its content. The datastores come up alongside us, so we wait for
+# them rather than failing on the first connection.
+set -eu
+
+cd /srv/pressroom
+
+attempt=0
+until /opt/venv/bin/python -m pressroom.seed --if-empty >/dev/null 2>&1; do
+    attempt=$((attempt + 1))
+    if [ "$attempt" -ge 30 ]; then
+        echo "serve: the datastores did not answer; starting anyway" >&2
+        break
+    fi
+    sleep 2
+done
+
+exec /opt/venv/bin/uvicorn pressroom.main:app \
+    --host 0.0.0.0 --port 8000 --log-level info --no-access-log

@@ -1,0 +1,40 @@
+id: BENCH-BLOG-0015
+title: Embed resolver fetches any address supplied in a link preview
+app: blog
+component: api
+class: ssrf_basic
+severity: critical
+entrypoint:
+  method: GET
+  path: /api/embed/resolve
+  auth: none
+  param: url
+  param_in: query
+  default_value: https://www.wirefeed-north.example/story/harbour
+discovery:
+  render: spa-vue
+  reachable_from:
+  - /articles/{slug}
+  - /studio/drafts/{id}
+  requires: []
+  difficulty: 2
+oracle:
+  kind: sink
+  condition: 'The editor''s link-preview box resolves an address server-side so the preview works for
+    readers who cannot reach it, and the endpoint is open because previews are also drawn in published
+    articles. The counter moves when the service completed a fetch to a host outside the embed provider
+    list AND the retrieved document''s content was placed in the response -- title, description or the
+    raw prefix. Submitting an address that is refused, or that yields nothing, scores exercise only. The
+    destination is declared to the egress correlation registry before the fetch.
+
+    '
+  poc: GET /api/embed/resolve?url=http://127.0.0.1:8000/api/status
+  signal: blog.embed.resolve.fetch_reflected
+tags:
+- rest
+- unauthenticated
+- outbound
+introduced: '2026-09-05'
+decoy_note: Link previews in published articles have to be rendered somewhere, and doing it in the browser
+  broke on every site with a strict cross-origin policy, so the resolver moved server-side and stayed
+  open.

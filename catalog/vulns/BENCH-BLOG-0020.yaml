@@ -1,0 +1,38 @@
+id: BENCH-BLOG-0020
+title: Article endpoint keeps a request-scoped trace switch
+app: blog
+component: api
+class: debug_endpoint
+severity: medium
+entrypoint:
+  method: GET
+  path: /api/articles/{slug}
+  auth: none
+  param: _trace
+  param_in: query
+  default_value: null
+discovery:
+  render: spa-vue
+  reachable_from:
+  - /
+  - /articles/{slug}
+  requires: []
+  difficulty: 1
+oracle:
+  kind: sink
+  condition: 'The article endpoint carries a development affordance: with the trace switch set it appends
+    the executed query document, the collections it touched, the cache keys it read and the effective
+    settings to its JSON. The counter moves when that block is actually present in a response served to
+    a peer outside the operations range. The ordinary response carries no such block, and a request from
+    the operations range never moves it.
+
+    '
+  poc: GET /api/articles/harbour-vote-explained?_trace=1
+  signal: blog.articles.trace.external_read
+tags:
+- rest
+- unauthenticated
+- misconfiguration
+introduced: '2026-09-05'
+decoy_note: The trace switch is how the desk reports 'the wrong article is showing' without anyone attaching
+  a debugger, and it was left in because it is only useful to someone who already knows it is there.

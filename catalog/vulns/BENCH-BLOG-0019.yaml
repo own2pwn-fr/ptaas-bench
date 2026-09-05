@@ -1,0 +1,39 @@
+id: BENCH-BLOG-0019
+title: Runtime diagnostics view is mounted under the API and open
+class: debug_endpoint
+severity: high
+entrypoint:
+  method: GET
+  path: /api/internal/diagnostics
+  auth: none
+  param: null
+  param_in: query
+  default_value: null
+discovery:
+  render: api-only
+  reachable_from:
+  - /openapi.json
+  requires:
+  - wordlist
+  difficulty: 3
+oracle:
+  kind: sink
+  condition: 'A diagnostics view -- process environment, effective settings, datastore endpoints and the
+    last handled errors -- is mounted under the API prefix, and the network policy that was meant to fence
+    it off never followed the service out of staging. The counter moves when the view is actually served,
+    status 200 with its payload, to a peer outside the operations range. A request from the operations
+    range never moves it.
+
+    '
+  poc: GET /api/internal/diagnostics
+  signal: blog.ops.diagnostics.external_read
+tags:
+- rest
+- unauthenticated
+- misconfiguration
+decoy_note: Every service in the estate carries the same diagnostics blueprint; it is fenced off at the
+  network layer everywhere else, and this service was the one that moved to the new network without its
+  policy.
+app: blog
+component: api
+introduced: '2026-09-05'

@@ -1,0 +1,42 @@
+id: BENCH-BLOG-0004
+title: Saved audience segment is executed as a per-document predicate
+app: blog
+component: api
+class: nosqli_js
+severity: critical
+entrypoint:
+  method: POST
+  path: /api/studio/reports
+  auth: user
+  param: segment
+  param_in: json
+  default_value: reads > 500
+  content_type: application/json
+discovery:
+  render: spa-vue
+  reachable_from:
+  - /studio
+  - /studio/reports
+  requires:
+  - js-execution
+  - multi-step-flow
+  difficulty: 4
+oracle:
+  kind: sink
+  condition: 'Readership reports let an editor save an audience segment, and the segment is compiled into
+    the same per-document JavaScript predicate the archive uses. The counter moves when the executed predicate
+    contains text outside the segment grammar AND the report counted documents the declared segment excludes,
+    or the run exceeded the declared segment''s runtime by more than a second. Saving a segment without
+    the report being run scores exercise only.
+
+    '
+  poc: POST /api/studio/reports {"name":"quarter","segment":"reads > 500' || 'x'=='x"}
+  signal: blog.studio.reports.server_side_eval
+tags:
+- rest
+- json
+- mongodb
+- authenticated
+introduced: '2026-09-05'
+decoy_note: The report builder reuses the archive's filter compiler on purpose -- one syntax for the desk
+  to learn -- so it inherited the same shortcut, this time behind a login where it felt less exposed.

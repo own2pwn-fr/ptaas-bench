@@ -1,0 +1,44 @@
+id: BENCH-BLOG-0001
+title: Sign-in filter accepts a query operator in place of an address
+app: blog
+component: api
+class: nosqli_operator
+severity: high
+entrypoint:
+  method: POST
+  path: /api/auth/session
+  auth: none
+  param: email
+  param_in: json
+  default_value: c.duchesne@cranleighobserver.com
+  content_type: application/json
+discovery:
+  render: spa-vue
+  reachable_from:
+  - /
+  - /signin
+  requires:
+  - js-execution
+  - form-submit
+  difficulty: 2
+oracle:
+  kind: sink
+  condition: 'The sign-in handler reads the request body as a plain document and drops the value of `email`
+    straight into the collection filter, so a nested object arriving in that slot becomes a query operator
+    instead of a string. The counter moves only when the filter document actually handed to the driver
+    carried a `$`-prefixed key in the slot the parameter fills AND the query returned an account whose
+    stored address is not the literal value submitted, i.e. the caller was signed in as somebody they
+    never named. A refused sign-in, or an operator that matched nothing, never moves it.
+
+    '
+  poc: POST /api/auth/session {"email":{"$ne":null},"code":{"$ne":null}}
+  signal: blog.identity.session.filter_shape
+tags:
+- rest
+- json
+- mongodb
+- unauthenticated
+introduced: '2026-09-05'
+decoy_note: 'The sign-in route is the oldest handler in the service: it was ported line for line from
+  the Express application the site ran on before, where the body was always a plain object, and it never
+  picked up the typed request models the rest of the API uses.'

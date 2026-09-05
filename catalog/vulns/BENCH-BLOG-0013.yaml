@@ -1,0 +1,38 @@
+id: BENCH-BLOG-0013
+title: Media originals are served by identifier regardless of publication state
+app: blog
+component: api
+class: idor_read
+severity: high
+entrypoint:
+  method: GET
+  path: /api/media/{asset_id}
+  auth: none
+  param: asset_id
+  param_in: path
+  default_value: ast-0001
+discovery:
+  render: spa-vue
+  reachable_from:
+  - /articles/{slug}
+  - /
+  requires: []
+  difficulty: 2
+oracle:
+  kind: differential
+  condition: 'Asset identifiers are sequential and the media route resolves one to a file without consulting
+    the asset''s publication state, so photography attached to an unpublished story is served to anyone
+    who counts upwards. The counter moves when an asset whose state is anything other than published is
+    served to a caller holding no editorial session. Published assets, and unpublished ones served to
+    their own desk, never move it.
+
+    '
+  poc: GET /api/media/ast-0025 with no session, ast-0025 being attached to a story that has not run
+  signal: blog.media.asset.unlisted_served
+tags:
+- rest
+- unauthenticated
+- differential
+introduced: '2026-09-05'
+decoy_note: Assets are uploaded long before the story runs and the CDN in front of this route was meant
+  to be the only caller; publication state lives on the story, not on the file.

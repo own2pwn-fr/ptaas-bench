@@ -1,0 +1,11 @@
+# Runtime dependencies, pinned. The pins move when somebody has read the changelog.
+fastapi==0.115.6
+uvicorn[standard]==0.32.1
+pymongo==4.10.1
+redis==5.2.1
+jinja2==3.1.4
+PyYAML==6.0.2
+pillow==11.0.0
+PyJWT==2.10.1
+httpx==0.28.1
+python-multipart==0.0.20

@@ -1,0 +1,46 @@
+id: BENCH-BLOG-0021
+title: Plugin installer resolves internal distribution names against the public index first
+app: blog
+component: api
+class: dependency_confusion
+severity: high
+entrypoint:
+  method: POST
+  path: /api/studio/plugins/install
+  auth: admin
+  param: package
+  param_in: json
+  default_value: northgate-render-figures
+  content_type: application/json
+discovery:
+  render: spa-vue
+  reachable_from:
+  - /studio/settings
+  - /api/studio/plugins/manifest
+  requires:
+  - js-execution
+  - multi-step-flow
+  - openapi-spec
+  difficulty: 5
+oracle:
+  kind: oob
+  condition: 'The studio''s rendering plugins are installed from a list of indexes consulted in order,
+    and the public index is first, so a private distribution name is asked for in public before it is
+    asked for at home. The sink declares the destination to the egress correlation registry immediately
+    before the lookup; the counter is raised by the sinkhole -- the resolver for the whole target network
+    -- when it observes the lookup for the caller-supplied distribution name against the public index
+    host, joined back to the request that declared it. Reading the manifest of internal names, or submitting
+    one without the lookup taking place, scores exercise only.
+
+    '
+  poc: POST /api/studio/plugins/install {"package":"<a distribution name from GET /api/studio/plugins/manifest>"}
+  signal: blog.studio.plugins.index_lookup
+tags:
+- json
+- authenticated
+- admin
+- outbound
+- supply-chain
+introduced: '2026-09-05'
+decoy_note: The private index went in after the public one and was appended to the list rather than put
+  in front of it, which is the order every example in the packaging documentation shows.

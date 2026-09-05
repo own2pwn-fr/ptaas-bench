@@ -1,0 +1,44 @@
+id: BENCH-BLOG-0005
+title: Newsletter subject line is spliced into the layout template source
+app: blog
+component: api
+class: ssti
+severity: critical
+entrypoint:
+  method: POST
+  path: /api/newsletter/preview
+  auth: user
+  param: subject
+  param_in: json
+  default_value: What the harbour vote means for the ferry timetable
+  content_type: application/json
+discovery:
+  render: spa-vue
+  reachable_from:
+  - /studio
+  - /studio/newsletter
+  requires:
+  - js-execution
+  - multi-step-flow
+  difficulty: 4
+oracle:
+  kind: sink
+  condition: 'The composer supports merge fields, and the quickest way to have them in the subject line
+    as well was to build the layout''s template source with the subject already inside it. Anything the
+    subject contains is therefore compiled as template program text rather than passed in as a value.
+    The counter moves when the subject''s own parse tree contains an expression node -- an output that
+    is not literal text -- and the render then completed, which is the engine having evaluated caller
+    text. A subject that is merely echoed into the preview body without being compiled never moves it.
+
+    '
+  poc: POST /api/newsletter/preview {"subject":"{{ 7*7 }}","issue":41}
+  signal: blog.render.template_escape
+tags:
+- rest
+- json
+- jinja
+- authenticated
+introduced: '2026-09-05'
+decoy_note: Merge fields in the body were designed in; merge fields in the subject line were asked for
+  the week before a launch, and concatenating the subject into the layout source was the one-line version
+  of the change.

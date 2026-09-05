@@ -1,0 +1,43 @@
+id: BENCH-BLOG-0022
+title: Draft snapshots are restored with the interpreter's native object loader
+app: blog
+component: api
+class: deser_pickle
+severity: critical
+entrypoint:
+  method: POST
+  path: /api/studio/drafts/{draft_id}/restore
+  auth: user
+  param: snapshot
+  param_in: json
+  default_value: gASVIgAAAAAAAAB9lCiMBGJvZHmUjAAAlHUu
+  content_type: application/json
+discovery:
+  render: spa-vue
+  reachable_from:
+  - /studio/drafts/{id}
+  requires:
+  - js-execution
+  - multi-step-flow
+  difficulty: 5
+oracle:
+  kind: sink
+  condition: 'Autosave snapshots are the editor''s own object graph written out by the interpreter''s
+    native serialiser, and restoring one asks the interpreter to resolve and call whatever the graph names.
+    The counter moves when a load resolved a global outside the small set of snapshot classes the editor
+    emits -- a module or callable that cannot appear in a snapshot this service wrote -- which is the
+    document having brought a code path rather than data. A snapshot that fails to parse, and a genuine
+    one, never move it.
+
+    '
+  poc: POST /api/studio/drafts/{draft_id}/restore {"snapshot":"<base64 of an object graph whose reduction
+    names os.getcwd>"}
+  signal: blog.studio.snapshot.decode_foreign_type
+tags:
+- json
+- authenticated
+- deserialisation
+introduced: '2026-09-05'
+decoy_note: Autosave had to survive a browser crash mid-paragraph, so the editor state is written whole
+  rather than diffed; the native serialiser handles the editor's own classes with no schema to maintain,
+  which is exactly why it was chosen.

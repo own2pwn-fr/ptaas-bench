@@ -1,0 +1,39 @@
+id: BENCH-BLOG-0026
+title: Search phrase pattern backtracks catastrophically on a crafted query
+app: blog
+component: api
+class: redos
+severity: medium
+entrypoint:
+  method: GET
+  path: /api/search
+  auth: none
+  param: q
+  param_in: query
+  default_value: harbour ferry timetable
+discovery:
+  render: spa-vue
+  reachable_from:
+  - /
+  - /search
+  requires: []
+  difficulty: 1
+oracle:
+  kind: timing
+  condition: 'The search box normalises a query into phrases with a pattern that nests a repeated group
+    inside another repetition, so a subject built from the right characters makes the matcher explore
+    exponentially many ways to divide it. The match runs on the matching pool under a two-second budget.
+    The counter moves when a single match attempt exhausts that budget -- measured on the attempt itself,
+    never on the shape of the input -- which happens only when the caller actually induced the backtracking.
+    A long or unusual query that matches or fails promptly never moves it.
+
+    '
+  poc: GET /api/search?q=<1499 repetitions of 'a' followed by '!'>
+  signal: blog.search.pattern.backtrack_budget
+tags:
+- rest
+- unauthenticated
+- thread-pool
+introduced: '2026-09-05'
+decoy_note: The phrase pattern grew one alternation at a time as the desk asked for quoted phrases, then
+  hyphenated names, then initials; the budget was added after an incident and treated as the fix.

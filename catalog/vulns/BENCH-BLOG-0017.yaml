@@ -1,0 +1,43 @@
+id: BENCH-BLOG-0017
+title: Session tokens are signed with a short passphrase kept since the first release
+app: blog
+component: api
+class: jwt_weak_secret
+severity: critical
+entrypoint:
+  method: GET
+  path: /api/studio/queue
+  auth: admin
+  param: ng_session
+  param_in: cookie
+  default_value: <the session cookie of any signed-in account>
+discovery:
+  render: spa-vue
+  reachable_from:
+  - /studio
+  - /studio/queue
+  requires:
+  - js-execution
+  - multi-step-flow
+  difficulty: 4
+oracle:
+  kind: sink
+  condition: 'The session cookie is a token signed with HS256 under a passphrase that has been in the
+    deployment configuration since the first release, so the signature can be reproduced offline from
+    any captured cookie. The counter moves when a request is served under a token whose signature verifies
+    but whose identifier is absent from the issued-session set in the cache -- a token this service never
+    minted -- on a route that requires a role. An expired token, or one whose signature does not verify,
+    is refused and never moves it.
+
+    '
+  poc: GET /api/studio/queue under an HS256 token signed with the passphrase recovered offline from a
+    captured cookie
+  signal: blog.identity.token.unissued
+tags:
+- rest
+- jwt
+- authenticated
+- admin
+introduced: '2026-09-05'
+decoy_note: The passphrase was typed into a compose file on the first afternoon of the project and rotating
+  it would sign every reader out, which is the reason given each time it comes up.

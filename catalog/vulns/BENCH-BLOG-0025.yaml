@@ -1,0 +1,49 @@
+id: BENCH-BLOG-0025
+title: Legacy scan container carries its tone curve as an expression
+app: blog
+component: api
+class: image_parser_rce
+severity: critical
+entrypoint:
+  method: POST
+  path: /api/studio/media
+  auth: user
+  param: file
+  param_in: multipart
+  default_value: harbour-quay.png
+  content_type: multipart/form-data
+discovery:
+  render: spa-vue
+  reachable_from:
+  - /studio/media
+  - /studio
+  requires:
+  - js-execution
+  - multi-step-flow
+  - file-upload
+  difficulty: 5
+oracle:
+  kind: sink
+  condition: 'Uploads dispatch on the file''s own magic. Ordinary pictures go through the imaging library;
+    a file that announces the archive''s container is read by the path written for the drum imager the
+    paper used until 2016, which stores the operator''s tone curve as an expression over the level ramp
+    and reconstructs it by working that expression out. Reading runs on the conversion pool inside a watched
+    section. The counter moves when the runtime integrity monitor observes an import, a file open, a process
+    spawn or a network connect while a curve is being worked out, or when the curve produces something
+    that is not a ramp -- the effect of code running where only arithmetic belongs. A picture in any ordinary
+    format, and a container whose curve really is arithmetic, never move it.
+
+    '
+  poc: POST /api/studio/media, multipart, a file beginning NGP1 whose header line reads curve=__import__('os').system('id')
+  signal: blog.media.scan.curve_escape
+tags:
+- multipart
+- authenticated
+- imaging
+- thread-pool
+- file-upload
+introduced: '2026-09-05'
+decoy_note: Twenty years of negatives exist only in the old imager's container, and the migration off
+  it has been a quarter away for three quarters. Its manual documents the tone curve as a formula, so
+  reconstructing it by working the formula out is what reading the format means; the reader was written
+  by whoever was closest to the archive project.

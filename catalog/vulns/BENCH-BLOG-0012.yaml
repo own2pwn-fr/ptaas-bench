@@ -1,0 +1,38 @@
+id: BENCH-BLOG-0012
+title: Draft detail is loaded by identifier without an ownership condition
+app: blog
+component: api
+class: idor_read
+severity: high
+entrypoint:
+  method: GET
+  path: /api/studio/drafts/{draft_id}
+  auth: other-user
+  param: draft_id
+  param_in: path
+  default_value: dft-2002-01
+discovery:
+  render: spa-vue
+  reachable_from:
+  - /studio/drafts
+  requires:
+  - js-execution
+  - multi-step-flow
+  difficulty: 4
+oracle:
+  kind: differential
+  condition: 'The draft detail handler fetches by identifier alone; the list it was written for only ever
+    produced the signed-in author''s own identifiers, so the condition was never added. The counter moves
+    when a draft is served whose owning author is not the session''s author, i.e. the caller actually
+    received a colleague''s unpublished copy. Refusals and self-owned reads never move it.
+
+    '
+  poc: GET /api/studio/drafts/dft-2003-01 with the session of the writer who owns dft-2002-01
+  signal: blog.studio.drafts.subject_mismatch
+tags:
+- rest
+- authenticated
+- differential
+introduced: '2026-09-05'
+decoy_note: The studio's draft list is scoped to the author, so every identifier the front end could produce
+  was already the caller's own; the detail route inherited that assumption.
