@@ -76,7 +76,7 @@ platform:
 
 apps:
   # ---------------------------------------------------------------------------
-  # LANDED. Matches the fragments in compose/ and the trees in targets/.
+  # Matches the fragments in compose/ and the trees in targets/.
   # ---------------------------------------------------------------------------
   edge:
     services: [edge-nginx, edge-haproxy, edge-varnish, edge-origin]
@@ -95,13 +95,11 @@ apps:
       every oracle depends on knowing which hops a request passed through.
 
   # ---------------------------------------------------------------------------
-  # FORWARD CONTRACT. These targets have not landed yet; their compose fragments are
-  # still owed. Service names, ports and internal aliases below are proposals, and
-  # the target's own fragment wins the moment it exists.
-  # Each will ship targets/<app>/bench-credentials.yaml, which then supplies the
-  # base URL and the identities; the `base_url` lines here are placeholders that
-  # exist only so `--dry-run` works before a target lands, and preflight refuses to
-  # open a real run against an application whose credentials file is missing.
+  # All eight have landed. What is below is no longer a proposal: the service names,
+  # ports and internal aliases are read off the fragments in compose/, and each target
+  # ships targets/<app>/bench-credentials.yaml, which is where the base URL and the
+  # identities come from. Preflight refuses to open a run against an application whose
+  # credentials file is missing.
   # ---------------------------------------------------------------------------
   shopfront:
     # Compose service `shopfront`; hostname storefront-web-01, which is also its
@@ -130,12 +128,15 @@ apps:
       them -- the run records whether the tool had one.
 
   admin:
-    services: [admin-web, admin-api, admin-db, admin-ldap]
-    base_url: http://admin-web:8080
-    internal_url: http://admin-api:8080
-    reset_service: admin-api
-    health_services: [admin-api, admin-db]
-    openapi_url: http://admin-web:8080/v3/api-docs
+    # One service, not two: the shell is served by the same process as the API.
+    services: [admin-app, admin-db, admin-directory]
+    # No base_url: targets/admin/bench-credentials.yaml carries it.
+    # The estate-side name is qualified with the company's own domain, because three
+    # estates rack a `web01` and a bare name would resolve to whichever answered first.
+    internal_url: http://web01.calderwood.example:8080
+    reset_service: admin-app
+    health_services: [admin-app, admin-db]
+    openapi_url: http://web01.calderwood.example:8080/v3/api-docs
     notes: Angular SPA over Spring Boot. Everything is behind a login.
 
   blog:
@@ -156,9 +157,10 @@ apps:
   legacy:
     services: [legacy-web, legacy-db]
     # No base_url: targets/legacy/bench-credentials.yaml carries it.
-    # web01 is the operations name: internal-only, so our traffic is told apart from
-    # the tool's by address as well as by name.
-    internal_url: http://web01
+    # The operations name: internal-only, so our traffic is told apart from the tool's
+    # by address as well as by name. Qualified with the company's own domain, because
+    # three estates rack a `web01`.
+    internal_url: http://web01.braithwaite-tool.net
     reset_service: legacy-web
     health_services: [legacy-web, legacy-db]
     notes: >
@@ -169,10 +171,10 @@ apps:
   corp:
     services: [corp-portal, corp-db, corp-imds]
     # No base_url: targets/corp/bench-credentials.yaml carries it.
-    # `portal` is the internal-only alias; the app listens on 8080 and the ops
-    # listener on 9310, which is where state-reset talks and which is not reachable
-    # over any network.
-    internal_url: http://portal:8080
+    # `portal` is the internal-only alias; the app listens on 80 and the ops listener
+    # on 9310, which is where state-reset talks and which is not reachable over any
+    # network.
+    internal_url: http://portal
     reset_service: corp-portal
     health_services: [corp-portal, corp-db]
     notes: >
@@ -186,7 +188,7 @@ apps:
     # `staff-services` is the operations name and resolves on the internal network
     # only; `hub` and `hub.<domain>` are what the staff (and therefore the tool) use
     # and resolve on the public one.
-    internal_url: http://staff-services:8080
+    internal_url: http://staff-services
     reset_service: intranet-hub
     health_services: [intranet-hub]
     notes: >
@@ -209,10 +211,10 @@ apps:
       - infra-postgres
       - infra-telemetry
     # No base_url: targets/infra/bench-credentials.yaml carries it.
-    # web01 is the only internal-only name here; every public alias is a seeded
-    # domain, so our traffic and the tool's are told apart by name as well as by
+    # The management name is the only internal-only one here; every public alias is a
+    # seeded domain, so our traffic and the tool's are told apart by name as well as by
     # address.
-    internal_url: http://web01
+    internal_url: http://web01.mgmt.northlakefab.com
     # The operator's entry point on this host. It asks the operations listener to run
     # the deployment; the routine itself lives elsewhere, because this container is
     # the one that answers the public.
