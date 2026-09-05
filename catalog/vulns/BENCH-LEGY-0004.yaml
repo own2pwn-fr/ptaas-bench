@@ -22,7 +22,7 @@ oracle:
   kind: sink
   condition: |
     The help page joins the parameter to the article directory and includes the result. The sink reports when the canonical path of the file the include actually resolved to lies outside that directory AND the include produced output that was written into the response. A path that resolves back inside the article directory, and one that resolves outside but yields nothing, never report: the record is of a file having been read out, not of a traversal sequence having been sent.
-  poc: GET /help.php?topic=../../../../etc/passwd
+  poc: GET /help.php?topic=../../../../../etc/passwd
   signal: help.article.include_scope
 tags:
 - server-rendered

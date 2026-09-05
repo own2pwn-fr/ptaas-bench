@@ -109,5 +109,14 @@ services:
         ipv4_address: 10.77.0.5
       bench-public:
         ipv4_address: 10.88.0.5
+    # The replay scripts live here read-only because this container is the only place
+    # that has both a route to the applications and an address the collector accepts on
+    # its control endpoints. Running them from the host would fail the allowlist;
+    # running them from a tool-side container would have their traffic scored as a
+    # tool's own exploitation. Read-only, and never mounted into an application.
+    volumes:
+      # `z` because the host enforces SELinux: without a shared label the container
+      # cannot open the directory at all.
+      - ./:/opt/checks:ro,z
     depends_on:
       otel-collector: {condition: service_healthy}

@@ -28,7 +28,7 @@ FROM php:8.3.14-apache
 
 RUN set -eux; \
     docker-php-ext-install -j"$(nproc)" pdo_mysql opcache; \
-    a2enmod headers; \
+    a2enmod headers rewrite; \
     a2dissite 000-default; \
     rm -f /var/www/html/index.html
 

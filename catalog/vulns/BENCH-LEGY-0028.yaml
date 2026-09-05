@@ -24,7 +24,7 @@ oracle:
   kind: sink
   condition: |
     The report builder includes the template named in the form post. The sink reports when the canonical path of the included template lies outside the report template directory AND the include wrote something into the response. Choosing one of the offered templates never reports.
-  poc: POST /admin/reports.php with template=../../../../etc/passwd, as staff
+  poc: POST /admin/reports.php with template=../../../../../etc/passwd, as staff
   signal: reporting.template.include_scope
 tags:
 - admin

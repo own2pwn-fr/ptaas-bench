@@ -95,8 +95,17 @@ for ($attempt = 0; $attempt < 60; $attempt++) {
 
 $schema = (string) file_get_contents(__DIR__ . '/schema.sql');
 foreach (preg_split('/;\s*\n/', $schema) as $statement) {
-    $statement = trim($statement);
-    if ($statement === '' || str_starts_with($statement, '--')) {
+    // A chunk carries the comment lines that sit above the statement it ends with, so
+    // the comments are stripped line by line. Discarding the whole chunk because its
+    // first line is a comment silently drops the statement underneath it.
+    $lines = [];
+    foreach (preg_split('/\r?\n/', $statement) as $line) {
+        if (!str_starts_with(ltrim($line), '--')) {
+            $lines[] = $line;
+        }
+    }
+    $statement = trim(implode("\n", $lines));
+    if ($statement === '') {
         continue;
     }
     $pdo->exec($statement);

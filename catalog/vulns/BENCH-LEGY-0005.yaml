@@ -22,7 +22,7 @@ oracle:
   kind: sink
   condition: |
     Every page renders its header by including the fragment named in the appearance cookie. The sink reports when the canonical path of the included fragment lies outside the skin directory AND the include wrote something into the response. The cookie is not a form field and is not linked anywhere, so reaching this one means the caller went looking at inputs the pages do not advertise.
-  poc: 'GET / with Cookie: bt_skin=../../../../etc/passwd'
+  poc: 'GET / with Cookie: bt_skin=../../../../../etc/passwd'
   signal: layout.skin.include_scope
 tags:
 - cookie

