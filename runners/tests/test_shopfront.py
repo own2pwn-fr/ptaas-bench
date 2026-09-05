@@ -145,23 +145,45 @@ def test_the_target_is_asked_for_its_current_identities():
     assert ("compose_exec", ("shopfront", ["/usr/local/bin/state-reset", "--emit-credentials"])) in docker.calls
 
 
+EMITTED_OTHER_SEED = (
+    "app: shopfront\n"
+    "users:\n"
+    "  - role: user\n"
+    "    username: seed2-user@example.test\n"
+    "    password: other\n"
+    "    subject_id: '1001'\n"
+)
+
+
 @landed
-def test_live_identities_override_the_committed_file():
+def test_a_committed_file_from_another_seed_stops_the_run():
+    """The harness could scan happily with the live identities, which is the problem.
+
+    Everything else that reads the file -- the target's selftest, the scorer's view
+    of which subject owns what -- would then describe a different deployment from the
+    one being scanned, and the published result would rest on credentials nobody can
+    reproduce from the repository.
+    """
     config = BenchConfig.load()
     config.resolve_urls()
     app = config.apps["shopfront"]
-    emitted = (
-        "app: shopfront\n"
-        "users:\n"
-        "  - role: user\n"
-        "    username: seed2-user@example.test\n"
-        "    password: other\n"
-        "    subject_id: '1001'\n"
-    )
-    docker = FakeDocker(exec_results={"shopfront": ExecResult(["exec"], 0, emitted, "")})
-    check = check_live_credentials(config, app, docker)
+    docker = FakeDocker(exec_results={"shopfront": ExecResult(["exec"], 0, EMITTED_OTHER_SEED, "")})
+    check = check_live_credentials(config, app, docker, fatal_on_mismatch=True)
+    assert not check.ok
+    assert "different\nDEPLOY_SEED" in check.detail or "different DEPLOY_SEED" in check.detail
+    # The operator is told exactly how to fix it.
+    assert "--emit-credentials >" in check.detail
+
+
+@landed
+def test_the_live_identities_are_used_when_the_mismatch_is_waived():
+    """--allow-stale-credentials must produce a correct scan, not an anonymous one."""
+    config = BenchConfig.load()
+    config.resolve_urls()
+    app = config.apps["shopfront"]
+    docker = FakeDocker(exec_results={"shopfront": ExecResult(["exec"], 0, EMITTED_OTHER_SEED, "")})
+    check = check_live_credentials(config, app, docker, fatal_on_mismatch=False)
     assert check.ok
-    assert "different DEPLOY_SEED" in check.detail
     creds = config.creds_for(app, role="user")
     assert creds.username == "seed2-user@example.test"
     # The login shape comes from the committed file and is not seed-dependent.

@@ -45,6 +45,8 @@ class FakeDocker:
     health: dict[str, str] = field(default_factory=dict)
     # container ref -> the `docker inspect` payload the topology capture reads
     containers: dict[str, Any] = field(default_factory=dict)
+    # The merged `docker compose config` model the preflight checks read.
+    compose_model: Any = field(default_factory=lambda: {"services": {}, "networks": {}})
     # container id -> how many polls it stays "running" before exiting
     runs_for_polls: dict[str, int] = field(default_factory=dict)
     default_runs_for_polls: int = 10_000  # effectively "never exits on its own"
@@ -70,6 +72,17 @@ class FakeDocker:
 
     def compose_ps_id(self, service: str) -> str:
         return f"cid-{service}"
+
+    def compose_config(self):
+        return self.compose_model
+
+    def compose_services_by_profile(self):
+        if self.compose_model is None:
+            return None
+        return {
+            name: list((spec or {}).get("profiles") or [])
+            for name, spec in (self.compose_model.get("services") or {}).items()
+        }
 
     def compose_exec(self, service: str, argv, *, stdin=None, timeout=None):
         self.calls.append(("compose_exec", (service, list(argv))))

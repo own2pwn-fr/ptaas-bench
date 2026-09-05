@@ -143,11 +143,12 @@ class DockerClient:
         res = self._exec(self._compose_argv("config", "--format", "json"), timeout=120)
         return res.stdout if res.ok else None
 
-    def compose_services_by_profile(self) -> dict[str, list[str]] | None:
-        """service name -> the compose profiles that gate it.
+    def compose_config(self) -> dict[str, Any] | None:
+        """The fully merged compose model, or None when it cannot be read.
 
-        Used to refuse a run while a `dev`-profile service is up: those publish a
-        target on the host, which is the route the sealed network exists to remove.
+        The merged model is the only honest source for "what will actually run":
+        it has every fragment's contribution applied, including the ones a target
+        added after this harness was written.
         """
         raw = self.compose_config_json()
         if raw is None:
@@ -155,6 +156,17 @@ class DockerClient:
         try:
             doc = json.loads(raw)
         except json.JSONDecodeError:
+            return None
+        return doc if isinstance(doc, dict) else None
+
+    def compose_services_by_profile(self) -> dict[str, list[str]] | None:
+        """service name -> the compose profiles that gate it.
+
+        Used to refuse a run while a `dev`-profile service is up: those publish a
+        target on the host, which is the route the sealed network exists to remove.
+        """
+        doc = self.compose_config()
+        if doc is None:
             return None
         return {
             name: list((spec or {}).get("profiles") or [])

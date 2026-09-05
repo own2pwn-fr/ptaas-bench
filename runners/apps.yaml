@@ -66,7 +66,7 @@ platform:
 
 apps:
   # ---------------------------------------------------------------------------
-  # LANDED. Matches compose/edge.yml, compose/shopfront.yml and targets/.
+  # LANDED. Matches the fragments in compose/ and the trees in targets/.
   # ---------------------------------------------------------------------------
   edge:
     services: [edge-nginx, edge-haproxy, edge-varnish, edge-origin]
@@ -85,8 +85,9 @@ apps:
       every oracle depends on knowing which hops a request passed through.
 
   # ---------------------------------------------------------------------------
-  # FORWARD CONTRACT. These targets have not landed. Service names, ports and the
-  # internal aliases below are proposals, and the target's compose fragment wins.
+  # FORWARD CONTRACT. These targets have not landed yet; their compose fragments are
+  # still owed. Service names, ports and internal aliases below are proposals, and
+  # the target's own fragment wins the moment it exists.
   # Each will ship targets/<app>/bench-credentials.yaml, which then supplies the
   # base URL and the identities; the `base_url` lines here are placeholders that
   # exist only so `--dry-run` works before a target lands, and preflight refuses to
@@ -151,17 +152,48 @@ apps:
     health_services: [corp-web, corp-db]
 
   intranet:
-    services: [intranet-web]
-    base_url: http://intranet-web:5000
-    internal_url: http://intranet-web:5000
-    reset_service: intranet-web
-    health_services: [intranet-web]
-    notes: HTMX fragments over XHR. Neither classic nor SPA crawling handles it well.
+    services: [intranet-hub]
+    # No base_url: targets/intranet/bench-credentials.yaml carries it.
+    #
+    # Every internal alias of this service (`hub`, `hub.<domain>`) is also a public
+    # alias, so there is no name that reaches it over the internal network alone.
+    # Preflight reports the ambiguity and the harness pins its own connections to the
+    # internal address, which is the only way our logins are classified as the
+    # platform's traffic rather than the tool's.
+    internal_url: http://hub:8080
+    reset_service: intranet-hub
+    health_services: [intranet-hub]
+    notes: >
+      HTMX fragments over XHR: neither classic nor SPA crawling handles it well,
+      which is the point. Single service, SQLite on a volume, so the restart is
+      cheap and the reset is a file rebuild.
 
   infra:
-    services: [infra-web, infra-redis, infra-mongo, infra-elastic]
-    base_url: http://infra-web
-    internal_url: http://infra-web
+    # Nine services, and all of them hold the state that makes this target what it
+    # is: the datastores answer unauthenticated on the tool's network, and Redis,
+    # Mongo and Elasticsearch keep it in memory where no reset script can reach.
+    services:
+      - infra-web
+      - infra-redis
+      - infra-redis-ops
+      - infra-mongo
+      - infra-elastic
+      - infra-sessions
+      - infra-jobs
+      - infra-postgres
+      - infra-telemetry
+    # No base_url: targets/infra/bench-credentials.yaml carries it.
+    # web01 is the only internal-only name here; every public alias is a seeded
+    # domain, so our traffic and the tool's are told apart by name as well as by
+    # address.
+    internal_url: http://web01
+    # The operator's entry point on this host. It asks the operations listener to run
+    # the deployment; the routine itself lives elsewhere, because this container is
+    # the one that answers the public.
     reset_service: infra-web
     health_services: [infra-web]
-    notes: Leftover artefacts and unauthenticated datastores. The floor every scanner should clear.
+    notes: >
+      Leftover artefacts and unauthenticated datastores: the floor every scanner
+      should clear. Its credentials file declares no login (`users: []`) and the
+      catalog agrees -- nothing here sits behind one -- so preflight passes that as
+      a legitimate answer rather than a missing file.

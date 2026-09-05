@@ -293,9 +293,14 @@ class Orchestrator:
             self.apps,
             self.docker,
             tool_image=self.tool.image_ref,
-            topology={k: t.addresses for k, t in self.topology.items()},
+            topology=self.topology,
+            # Reachability is probed from the sinkhole, which sits on the tool's
+            # network, aimed at the target's address there. Before the run opens, so
+            # the probe is dropped rather than credited to the tool.
+            target_http=self.target_http,
             allow_pull=not self.args.no_pull,
             check_dns=not self.args.skip_dns_check,
+            allow_stale_credentials=self.args.allow_stale_credentials,
         )
         self.preflight_report = report
         try:
@@ -702,6 +707,27 @@ class Orchestrator:
 
     # -- the record -------------------------------------------------------------
 
+    def _redact(self, argv: list[str]) -> list[str]:
+        """Keep credential values out of the published run record.
+
+        ZAP takes them through the environment, but wapiti, nikto and skipfish take
+        them on the command line, and the command line is recorded verbatim so that a
+        published number is re-runnable. The values are seeded rather than secret, but
+        a deployment with a non-default DEPLOY_SEED has passwords that are specific to
+        it, and a record that is meant to be published should not carry them. The flag
+        and its position are preserved, so the argv still shows exactly what was run.
+        """
+        secrets = {c.password for c in self._credentials().values() if c.password}
+        if not secrets:
+            return argv
+        out = []
+        for token in argv:
+            for secret in secrets:
+                if secret and secret in token:
+                    token = token.replace(secret, "<redacted>")
+            out.append(token)
+        return out
+
     def _build_record(self, **kw: Any) -> dict[str, Any]:
         results = kw["results"]
         stop_reasons = [r.stop_reason for r in results]
@@ -786,7 +812,10 @@ class Orchestrator:
                 "collector_stats": self.collector.stats(),
             },
             "auth": {app: session.to_dict() for app, session in kw["sessions"].items()},
-            "invocations": [r.to_dict() for r in results],
+            "invocations": [
+                {**r.to_dict(), "argv": self._redact(r.to_dict().get("argv") or [])}
+                for r in results
+            ],
             "normalisation": {
                 "cwe_map_version": self.table.version,
                 "findings": len(kw["normalised"].findings),
@@ -844,7 +873,10 @@ class Orchestrator:
             "findings": len(normalised.findings),
             "unmapped": len(normalised.unmapped),
             "cwe_map_version": self.table.version,
-            "invocations": [r.to_dict() for r in results],
+            "invocations": [
+                {**r.to_dict(), "argv": self._redact(r.to_dict().get("argv") or [])}
+                for r in results
+            ],
         }
         self.record = record
         self._write_record(run_dir)
@@ -965,6 +997,13 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="DEBUG ONLY. Skips the target reset; the run is marked as such and must "
         "not be published -- stored findings may belong to the previous tool.",
+    )
+    behaviour.add_argument(
+        "--allow-stale-credentials",
+        action="store_true",
+        help="DEBUG ONLY. Proceed when targets/<app>/bench-credentials.yaml disagrees "
+        "with what the running deployment reports. The live identities are used "
+        "either way; the file is then wrong for anything else that reads it.",
     )
     behaviour.add_argument(
         "--allow-unverified-auth",

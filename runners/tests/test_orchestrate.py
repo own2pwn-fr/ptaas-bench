@@ -156,3 +156,24 @@ def test_a_pinned_digest_in_apps_yaml_wins_over_the_previous_run(tmp_path):
     orchestrator = Orchestrator(args)
     orchestrator.apps[0].expected_digest = "state pinned000000"
     assert orchestrator._reference_digests()["edge"] == "state pinned000000"
+
+
+def test_credentials_are_redacted_from_the_recorded_command_line(tmp_path):
+    """wapiti, nikto and skipfish take the password as an argument, and the argv is
+    recorded verbatim so a published number is re-runnable. A deployment with its own
+    DEPLOY_SEED has passwords specific to it, and the record is meant to be published."""
+    from runners.orchestrate import Orchestrator
+
+    args = build_parser().parse_args(
+        ["--tool", "wapiti", "--app", "intranet", "--results-dir", str(tmp_path)]
+    )
+    orchestrator = Orchestrator(args)
+    creds = orchestrator._credentials().get("intranet")
+    if creds is None or not creds.password:  # target not landed
+        return
+    argv = ["wapiti", "--form-user", creds.username, "--form-password", creds.password]
+    redacted = orchestrator._redact(argv)
+    assert creds.password not in redacted
+    assert redacted[-1] == "<redacted>"
+    # The flag and its position survive: the record still shows what was run.
+    assert redacted[:4] == ["wapiti", "--form-user", creds.username, "--form-password"]

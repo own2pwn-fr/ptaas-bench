@@ -6,7 +6,7 @@ findings file with nothing in it, and that reads in the comparison table as a sc
 with poor coverage. The whole point of stopping early is that "the harness was
 misconfigured" and "the tool missed everything" must never be the same output.
 
-Five checks:
+Eight checks:
 
 * **The target's credentials file exists.** It is the authority for the base URL
   (seed-derived, so it cannot be hardcoded) and for the identities. Missing, we do not
@@ -15,6 +15,11 @@ Five checks:
   The sinkhole is the resolver for that network and answers everything, so a name that
   is wrong does not fail to resolve -- it resolves to the sinkhole, and the tool spends
   its whole budget scanning the sinkhole.
+* **The base URL actually answers on the tool's network.** Resolving is not enough:
+  a name resolves through the sinkhole whatever happens, and a base URL naming the
+  wrong port (no port where the application listens on 8080) resolves perfectly and
+  then refuses every connection. The tool spends its whole budget collecting
+  connection errors and is published as having found nothing.
 * **A target that declares users has them.** The contract asks a target with no login
   to write the file with an empty ``users:`` list and a comment, precisely so that "no
   authentication here" can be told from "someone forgot". Only the second stops a run,
@@ -29,6 +34,15 @@ Five checks:
   a developer host access. Up during a run, that is a route out of the sealed network,
   and the egress capture that makes every blind vulnerability in the corpus measurable
   stops working -- silently, because the callbacks simply leave instead.
+* **No service on the tool's network publishes a host port**, whatever profile it
+  claims. Publishing does not breach the egress seal, but it puts a target on a
+  developer's loopback during a measured run and lets traffic reach it without
+  passing the client accounting the origin performs -- and that accounting is what
+  decides whether a request is scored as the tool's.
+* **Name ambiguity is reported.** A service whose name or alias exists on both
+  networks makes interface selection a coin toss for anything that connects by name.
+  The harness pins its own logins to the internal address, but the ambiguity is a
+  property of the target, so it is recorded rather than silently worked around.
 """
 
 from __future__ import annotations
@@ -137,8 +151,20 @@ def emit_credentials(docker: Any, app: AppSpec) -> tuple[dict[str, Any] | None, 
     return doc, "ok"
 
 
-def check_live_credentials(config: BenchConfig, app: AppSpec, docker: Any) -> Check:
-    """Overlay the live identities on the committed file, and say whether they differ."""
+def check_live_credentials(
+    config: BenchConfig, app: AppSpec, docker: Any, *, fatal_on_mismatch: bool = True
+) -> Check:
+    """Overlay the live identities on the committed file, and reconcile the two.
+
+    A disagreement is fatal by default when the catalog says this application has
+    flaws behind a login. It means the committed file belongs to a different
+    DEPLOY_SEED than the instance in front of us, and everything that reads that file
+    -- the target's own selftest, the scorer's view of which subject owns what -- is
+    then describing a different deployment from the one being scanned. The harness
+    could quietly scan with the live identities and produce a plausible run, which is
+    exactly the problem: the published result would rest on credentials nobody can
+    reproduce from the repository.
+    """
     name = f"credentials-live:{app.key}"
     committed = config.target_file(app)
     if committed is None:
@@ -158,12 +184,19 @@ def check_live_credentials(config: BenchConfig, app: AppSpec, docker: Any) -> Ch
     before = {(u.get("role"), u.get("username")) for u in (committed.raw.get("users") or [])}
     after = {(u.get("role"), u.get("username")) for u in (doc.get("users") or [])}
     if before != after:
-        return Check(
-            name,
-            True,
-            "the committed file belongs to a different DEPLOY_SEED; using the "
-            f"identities the target printed ({sorted(r for r, _ in after)})",
+        detail = (
+            f"{committed.path} does not match the running deployment: it lists "
+            f"{sorted(u for _, u in before)} and the target reports "
+            f"{sorted(u for _, u in after)}. The file belongs to a different "
+            "DEPLOY_SEED, so anything else reading it -- the target's selftest, the "
+            "scorer's view of which subject owns what -- describes a different "
+            "deployment from the one being scanned. Regenerate it:\n"
+            f"    docker compose exec {app.reset_service} {app.reset_command} "
+            f"--emit-credentials > {committed.path}"
         )
+        # The live identities are used regardless, so that --allow-stale-credentials
+        # produces a correct scan rather than an anonymous one.
+        return Check(name, not fatal_on_mismatch, detail)
     return Check(name, True, "the committed file matches the running deployment")
 
 
@@ -304,6 +337,135 @@ def _looks_like_ip(token: str) -> bool:
     return len(parts) == 4 and all(p.isdigit() and 0 <= int(p) <= 255 for p in parts)
 
 
+def _resolved_network_names(doc: dict[str, Any]) -> dict[str, str]:
+    """compose network key -> the real docker network name."""
+    return {
+        key: str((spec or {}).get("name") or key)
+        for key, spec in (doc.get("networks") or {}).items()
+    }
+
+
+def check_no_published_ports(docker: Any, network: str) -> Check:
+    """Refuse to run while anything on the tool's network publishes a host port.
+
+    Whatever profile it claims: a port published outside any profile is up whenever
+    the target is, and six more targets are still landing.
+    """
+    doc = docker.compose_config()
+    if doc is None:
+        return Check("published-ports", False, "could not read the compose config", indeterminate=True)
+
+    names = _resolved_network_names(doc)
+    offenders: list[str] = []
+    for service, spec in (doc.get("services") or {}).items():
+        spec = spec or {}
+        if not spec.get("ports"):
+            continue
+        attached = {names.get(key, key) for key in (spec.get("networks") or {})}
+        if network in attached:
+            published = [
+                str(p.get("published") if isinstance(p, dict) else p) for p in spec["ports"]
+            ]
+            offenders.append(f"{service} ({', '.join(published)})")
+    if offenders:
+        return Check(
+            "published-ports",
+            False,
+            f"{'; '.join(offenders)} publish host ports while attached to {network}. "
+            "Publishing does not breach the egress seal, but it puts a target on a "
+            "developer's loopback during a measured run and lets traffic reach it "
+            "without passing the client accounting the origin performs -- which is "
+            "what decides whether a request is scored as the tool's. Gate it behind a "
+            "`dev` profile, as edge-devtap does.",
+        )
+    return Check("published-ports", True, f"nothing on {network} publishes a host port")
+
+
+def check_name_ambiguity(docker: Any, app: AppSpec, networks: tuple[str, str]) -> Check:
+    """Report a name that is ambiguous in the one way that can change a score.
+
+    The condition worth reporting is NOT "this name resolves on two networks":
+    Docker's embedded resolver guarantees that for the bare service name of every
+    attached service, so reporting it would fire on every dual-homed target and mean
+    nothing. It is:
+
+        a name the harness or a tool actually connects by is ambiguous between two
+        networks whose source addresses are classified differently.
+
+    Only that can change a number. The two networks here are the tool's and the
+    platform's, and which one a connection leaves by decides the source address,
+    which decides whether the target records the request as the platform's own
+    traffic or as the tool's crawl coverage.
+
+    Informational, not fatal: it is how the target chose to name itself, and the
+    harness already pins its own connections to the internal address rather than
+    trusting the resolver. But anything else that reaches the target by name -- a
+    probe, a future component, a person with curl -- gets whichever interface the
+    resolver felt like.
+    """
+    name = f"name-ambiguity:{app.key}"
+    doc = docker.compose_config()
+    if doc is None:
+        return Check(name, True, "could not read the compose config", indeterminate=True)
+
+    resolved = _resolved_network_names(doc)
+    seen: dict[str, set[str]] = {}
+    for service in app.services:
+        spec = (doc.get("services") or {}).get(service) or {}
+        for key, attachment in (spec.get("networks") or {}).items():
+            network = resolved.get(key, key)
+            for alias in [service, *((attachment or {}).get("aliases") or [])]:
+                seen.setdefault(str(alias), set()).add(network)
+
+    # Narrowed to the names that are actually connected by. The bare service name is
+    # deliberately still collected above, because one of these two may *be* it.
+    in_use = {n for n in (app.host.split(":")[0], app.internal_host) if n}
+    both = sorted(n for n in in_use if set(networks) <= seen.get(n, set()))
+    if both:
+        return Check(
+            name,
+            True,
+            f"{both} resolve on both {networks[0]} and {networks[1]}; the harness pins "
+            "its own connections to the internal address, but anything connecting by "
+            "name gets whichever interface the resolver returns, and the interface "
+            "decides whether the traffic is scored as the tool's.",
+        )
+    return Check(name, True, "the names in use resolve on one network each")
+
+
+def check_base_url_reachable(http: Any, app: AppSpec, address: str | None) -> Check:
+    """Open one connection to the tool-facing base URL, from the tool's network.
+
+    DNS resolution is not reachability. The sinkhole answers every name, so a base
+    URL that names the wrong port -- ``http://hub.example`` where the application
+    listens on 8080 -- resolves perfectly and refuses every connection after that.
+    Nothing about the resulting run says so: it is a findings file with nothing in
+    it, which reads as a scanner with no coverage.
+
+    Any HTTP status counts as reachable, 401 and 500 included: the question is
+    whether something is listening, not whether it likes us. Only a transport
+    failure is a failure.
+
+    This runs BEFORE the run is opened, so the collector drops the event and the tool
+    is not credited with our probe. If this check ever moves after the run opens,
+    that stops being true.
+    """
+    name = f"reachable:{app.key}"
+    if not app.base_url:
+        return Check(name, False, "no tool-facing base URL to reach")
+    res = http.request("GET", app.base_url + "/", timeout=15, connect_to=address)
+    if res.status == 0:
+        return Check(
+            name,
+            False,
+            f"{app.base_url} did not answer from the tool's network ({res.error}). "
+            "A base URL that resolves but refuses connections -- naming the wrong "
+            "port, most often -- produces a whole run of connection errors that reads "
+            "as a scanner with no coverage.",
+        )
+    return Check(name, True, f"{app.base_url} answered HTTP {res.status}")
+
+
 def check_no_dev_services(docker: Any, profiles: tuple[str, ...] = FORBIDDEN_PROFILES) -> Check:
     """Refuse to run while a `dev`-profile service is up.
 
@@ -339,26 +501,50 @@ def preflight(
     *,
     tool_image: str | None = None,
     topology: dict[str, Any] | None = None,
+    target_http: Any = None,
     allow_pull: bool = True,
     check_dns: bool = True,
+    allow_stale_credentials: bool = False,
 ) -> PreflightReport:
     report = PreflightReport()
     authed_apps = apps_with_authenticated_entrypoints()
 
     report.checks.append(check_no_dev_services(docker))
+    report.checks.append(check_no_published_ports(docker, config.network))
 
     for app in apps:
         # Ask the target first: the answer changes what check_credentials reads.
         if config.target_file(app) is not None and app.reset_service:
-            report.checks.append(check_live_credentials(config, app, docker))
-        report.checks.extend(check_credentials(config, app, authed_apps))
-        if check_dns and tool_image:
-            expected = list((topology or {}).get(app.key, []))
             report.checks.append(
-                check_dns_from_tool_network(
-                    docker, app, tool_image, expected, network=config.network, allow_pull=allow_pull
+                check_live_credentials(
+                    config,
+                    app,
+                    docker,
+                    # A stale file only corrupts the published result for an
+                    # application that actually has a login to get wrong.
+                    fatal_on_mismatch=app.key in authed_apps and not allow_stale_credentials,
                 )
             )
+        report.checks.extend(check_credentials(config, app, authed_apps))
+        report.checks.append(
+            check_name_ambiguity(docker, app, (config.network, app.internal_network))
+        )
+        entry = (topology or {}).get(app.key)
+        addresses = list(getattr(entry, "addresses", entry) or [])
+        public_address = (
+            entry.address_on(config.network, prefer_host=app.host.split(":")[0])
+            if hasattr(entry, "address_on")
+            else None
+        )
+        if check_dns and tool_image:
+            report.checks.append(
+                check_dns_from_tool_network(
+                    docker, app, tool_image, addresses, network=config.network,
+                    allow_pull=allow_pull,
+                )
+            )
+        if target_http is not None:
+            report.checks.append(check_base_url_reachable(target_http, app, public_address))
     for check in report.checks:
         if check.indeterminate:
             log.warning("preflight %s could not be verified: %s", check.name, check.detail)
