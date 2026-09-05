@@ -1,0 +1,37 @@
+id: BENCH-CORP-0020
+title: Workspace restores its layout from a cookie by type name
+app: corp
+component: web
+class: deser_dotnet
+severity: critical
+entrypoint:
+  method: GET
+  path: /workspace
+  auth: user
+  param: wslayout
+  param_in: cookie
+  default_value: null
+discovery:
+  render: server-template
+  reachable_from:
+  - /workspace
+  requires:
+  - multi-step-flow
+  - state-change
+  difficulty: 5
+oracle:
+  kind: sink
+  condition: 'The workspace writes the saved layout into a cookie so the first paint does not wait on
+    the database, and reads it back through the same type-name-honouring reader. The sink runs after the
+    read has returned and walks the graph it produced: it fires only when an instance whose type lives
+    outside the portal''s own assembly actually exists in that graph. The cookie is only set once a layout
+    has been saved, so the input does not exist until the workspace has been used.'
+  poc: POST /api/workspace/layout once to have the cookie issued, then GET /workspace with a wslayout
+    cookie whose decoded document names a type outside the portal
+  signal: corp.workspace.session.type_binding
+tags:
+- cookie
+- authenticated
+introduced: '2026-09-05'
+decoy_note: Caching the layout in a cookie was a first-paint optimisation. It reuses the same reader as
+  the endpoint that saves it, which is why it inherited the same setting.

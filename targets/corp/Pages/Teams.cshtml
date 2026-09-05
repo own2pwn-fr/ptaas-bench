@@ -1,0 +1,22 @@
+@page "/teams"
+@model Portal.Pages.TeamsModel
+@{
+    ViewData["Title"] = "Teams";
+}
+
+<nav class="breadcrumbs"><a href="/">Home</a> / Teams</nav>
+
+<h1>Teams</h1>
+
+<p class="meta">Six standing teams across the three sites. Owners maintain the membership from this screen.</p>
+
+<table class="table">
+    <tr><th>Team</th><th>Cost centre</th><th>Members</th></tr>
+    @foreach (var row in Model.Rows)
+    {
+        <tr><td>@row.Name</td><td>@row.CostCentre</td><td>@row.Members</td></tr>
+    }
+</table>
+
+<p class="meta">Membership is edited through the team screen; see <a href="/help/directory">the staff directory</a> for who is where.</p>
+<p class="meta">Back to <a href="/workspace">your workspace</a>.</p>

@@ -1,0 +1,27 @@
+@page "/approvals"
+@model Portal.Pages.ApprovalsModel
+@{
+    ViewData["Title"] = "Approvals";
+}
+
+<nav class="breadcrumbs"><a href="/">Home</a> / Approvals</nav>
+
+<h1>Approvals</h1>
+
+<p class="meta">Requests you raised. The second-line queue is read by the approvals service and by anyone carrying an approver badge.</p>
+
+<table class="table">
+    <tr><th>Reference</th><th>Amount</th><th>State</th></tr>
+    @foreach (var row in Model.Rows)
+    {
+        <tr><td>@row.Reference</td><td>@row.Amount</td><td>@row.State</td></tr>
+    }
+</table>
+
+<div class="panel">
+    <h2>Second-line queue</h2>
+    <p class="meta">Approvers see everything still pending across the sites.</p>
+    <p><a class="btn" href="/api/approvals/queue">Open the queue</a></p>
+</div>
+
+<p class="meta">Back to <a href="/workspace">your workspace</a> or on to <a href="/reports">reports</a>.</p>

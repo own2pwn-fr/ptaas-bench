@@ -1,0 +1,19 @@
+@page "/admin"
+@model Portal.Pages.Admin.AdminPageModel
+@{
+    ViewData["Title"] = "Administration";
+}
+
+<nav class="breadcrumbs"><a href="/">Home</a> / Administration</nav>
+
+<h1>Administration</h1>
+<p class="meta">Signed in as @Model.DisplayName. These screens are limited to the directory team.</p>
+
+<div class="cards">
+    <div class="card"><h3>Staff directory</h3><p>Load the payroll extract.</p><p><a class="btn" href="/admin/directory">Open</a></p></div>
+    <div class="card"><h3>Integrations</h3><p>Check a partner endpoint from the portal.</p><p><a class="btn" href="/admin/integrations">Open</a></p></div>
+    <div class="card"><h3>Desktop agent</h3><p>Stage the release agents collect.</p><p><a class="btn" href="/admin/agents">Open</a></p></div>
+    <div class="card"><h3>Templates</h3><p>Edit the document templates.</p><p><a class="btn" href="/admin/templates">Open</a></p></div>
+</div>
+
+<p class="meta">Back to <a href="/workspace">your workspace</a>.</p>

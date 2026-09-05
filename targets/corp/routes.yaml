@@ -1,0 +1,191 @@
+# Route inventory for the corporate portal.
+#
+# Two uses. Crawl coverage over the whole reachable surface rather than only the
+# interesting parts of it - counting recall over the planted entries alone is a biased
+# denominator, because it only counts the pages that were made interesting. And a
+# denominator for precision: a finding reported against a route marked `safe` here is a
+# confirmed false positive rather than merely unmatched.
+#
+# Ratio: 85 safe routes to 19 planted, i.e. 4.5:1, comfortably past the 3:1 the target
+# contract asks for. That surplus is deliberate. This target's whole point as a third
+# crawl profile is that a plain corporate site has a large, dull, genuinely static
+# surface in front of a small interactive one, and a tool that reports findings across
+# that surface should be measurably wrong.
+#
+# Some pairs are there to be confused with each other, and the pair is the point:
+#
+#   /signin?returnUrl=  is safe - it accepts local paths only
+#   /go?to=             is planted - it is the outbound link interstitial
+#
+#   GET  /api/templates/{name}  is safe  - it reads through the bare file name
+#   PUT  /api/templates/{name}  is planted
+#
+#   POST /api/documents/{id}/render carries `profile`, which is planted;
+#   every other field of the same document surface is not.
+#
+# Paths are the route templates the framework registered, which is what the SDK reports
+# and what the catalog entrypoints are written against. Razor Pages templates are given
+# explicitly in each page so that a page and its inventory row cannot drift apart.
+# Static files under wwwroot are served before routing and therefore report the
+# unmatched template with their concrete path; they are listed by path.
+
+# ONE HOST. The portal answers on port 80 under three names that all resolve to the
+# same container - portal.meridian-castings.net, www.meridian-castings.net and the bare
+# domain - and it serves the same application to all three: nothing here varies by Host
+# and no path is hardened on one name and exposed on another. So no row below carries a
+# host of its own, and a path alone is a complete route key for this target.
+
+app: corp
+
+routes:
+
+  # ---- static content, served straight off disk -------------------------------
+  - {path: /robots.txt,                 method: GET,  auth: none, render: static-html, params: [],  status: safe}
+  - {path: /sitemap.xml,                method: GET,  auth: none, render: static-html, params: [],  status: safe}
+  - {path: /.well-known/security.txt,   method: GET,  auth: none, render: static-html, params: [],  status: safe}
+  - {path: /assets/site.css,            method: GET,  auth: none, render: static-html, params: [],  status: safe}
+  - {path: /assets/site.js,             method: GET,  auth: none, render: static-html, params: [],  status: safe}
+  - {path: /assets/mark.svg,            method: GET,  auth: none, render: static-html, params: [],  status: safe}
+  - {path: /legacy/notice-2019.html,    method: GET,  auth: none, render: static-html, params: [],  status: safe}
+  - {path: /legacy/supplier-pack.html,  method: GET,  auth: none, render: static-html, params: [],  status: safe}
+
+  # ---- the public site, server-rendered ---------------------------------------
+  - {path: /,                        method: GET, auth: none, render: server-template, params: [], status: safe}
+  - {path: /about,                   method: GET, auth: none, render: server-template, params: [], status: safe}
+  - {path: /leadership,              method: GET, auth: none, render: server-template, params: [], status: safe}
+  - {path: /offices,                 method: GET, auth: none, render: server-template, params: [], status: safe}
+  - {path: /history,                 method: GET, auth: none, render: server-template, params: [], status: safe}
+  - {path: /products,                method: GET, auth: none, render: server-template, params: [], status: safe}
+  - {path: /products/castings,       method: GET, auth: none, render: server-template, params: [], status: safe}
+  - {path: /products/machining,      method: GET, auth: none, render: server-template, params: [], status: safe}
+  - {path: /products/finishing,      method: GET, auth: none, render: server-template, params: [], status: safe}
+  - {path: /products/tooling,        method: GET, auth: none, render: server-template, params: [], status: safe}
+  - {path: /quality,                 method: GET, auth: none, render: server-template, params: [], status: safe}
+  - {path: /certifications,          method: GET, auth: none, render: server-template, params: [], status: safe}
+  - {path: /sustainability,          method: GET, auth: none, render: server-template, params: [], status: safe}
+  - {path: /suppliers,               method: GET, auth: none, render: server-template, params: [], status: safe}
+  - {path: /suppliers/terms,         method: GET, auth: none, render: server-template, params: [], status: safe}
+  - {path: /suppliers/onboarding,    method: GET, auth: none, render: server-template, params: [], status: safe}
+  - {path: /newsroom,                method: GET, auth: none, render: server-template, params: [], status: safe}
+  - {path: /newsroom/archive,        method: GET, auth: none, render: server-template, params: [], status: safe}
+  - {path: /careers,                 method: GET, auth: none, render: server-template, params: [], status: safe}
+  - {path: /careers/openings,        method: GET, auth: none, render: server-template, params: [], status: safe}
+  - {path: /careers/graduates,       method: GET, auth: none, render: server-template, params: [], status: safe}
+  - {path: /investors,               method: GET, auth: none, render: server-template, params: [], status: safe}
+  - {path: /contact,                 method: GET, auth: none, render: server-template, params: [], status: safe}
+  - {path: /help,                    method: GET, auth: none, render: server-template, params: [], status: safe}
+  - {path: /help/directory,          method: GET, auth: none, render: server-template, params: [], status: safe}
+  - {path: /help/onboarding,         method: GET, auth: none, render: server-template, params: [], status: safe}
+  - {path: /help/equipment,          method: GET, auth: none, render: server-template, params: [], status: safe}
+  - {path: /legal/privacy,           method: GET, auth: none, render: server-template, params: [], status: safe}
+  - {path: /legal/terms,             method: GET, auth: none, render: server-template, params: [], status: safe}
+  - {path: /legal/cookies,           method: GET, auth: none, render: server-template, params: [], status: safe}
+  - {path: /accessibility,           method: GET, auth: none, render: server-template, params: [], status: safe}
+  - {path: /sitemap,                 method: GET, auth: none, render: server-template, params: [], status: safe}
+  - {path: /error,                   method: GET, auth: none, render: server-template, params: [status], status: safe}
+
+  # ---- sign-in. The return address here accepts local paths only, on purpose:
+  #      it is the decoy for the interstitial two sections down.
+  - {path: /signin,   method: GET,  auth: none, render: server-template, params: [returnUrl], status: safe}
+  - {path: /signin,   method: POST, auth: none, render: server-template, params: [email, password, returnUrl], status: safe}
+  - {path: /signout,  method: GET,  auth: user, render: server-template, params: [], status: safe}
+  - {path: /signout,  method: POST, auth: user, render: server-template, params: [], status: safe}
+
+  # ---- the signed-in screens ---------------------------------------------------
+  - {path: /account,              method: GET, auth: user,  render: server-template, params: [], status: safe}
+  - {path: /account/profile,      method: GET, auth: user,  render: server-template, params: [], status: safe}
+  - {path: /documents,            method: GET, auth: user,  render: server-template, params: [], status: safe}
+  - {path: /approvals,            method: GET, auth: user,  render: server-template, params: [], status: safe}
+  - {path: /teams,                method: GET, auth: user,  render: server-template, params: [], status: safe}
+  - {path: /reports,              method: GET, auth: user,  render: server-template, params: [], status: safe}
+  - {path: /reports/timesheets,   method: GET, auth: user,  render: server-template, params: [], status: safe}
+  - {path: /connect/callback,     method: GET, auth: user,  render: server-template, params: [code, state], status: safe}
+  - {path: /admin,                method: GET, auth: admin, render: server-template, params: [], status: safe}
+  - {path: /admin/directory,      method: GET, auth: admin, render: server-template, params: [], status: safe}
+  - {path: /admin/integrations,   method: GET, auth: admin, render: server-template, params: [], status: safe}
+  - {path: /admin/agents,         method: GET, auth: admin, render: server-template, params: [], status: safe}
+  - {path: /admin/templates,      method: GET, auth: admin, render: server-template, params: [], status: safe}
+
+  # ---- the JSON surface behind those screens -----------------------------------
+  - {path: /api/status,                  method: GET,  auth: none,  render: api-only, params: [],            status: safe}
+  - {path: /api/telemetry/pageview,      method: POST, auth: none,  render: api-only, params: [path, referrer, ts], status: safe}
+  - {path: /api/news,                    method: GET,  auth: none,  render: api-only, params: [],            status: safe}
+  - {path: '/api/news/{id}',               method: GET,  auth: none,  render: api-only, params: [id],          status: safe}
+  - {path: /api/offices,                 method: GET,  auth: none,  render: api-only, params: [],            status: safe}
+  - {path: /api/products,                method: GET,  auth: none,  render: api-only, params: [],            status: safe}
+  - {path: /api/help/topics,             method: GET,  auth: none,  render: api-only, params: [],            status: safe}
+  - {path: '/api/help/topics/{slug}',      method: GET,  auth: none,  render: api-only, params: [slug],        status: safe}
+  - {path: /api/contact,                 method: POST, auth: none,  render: api-only, params: [email, message], status: safe}
+  - {path: /api/careers/apply,           method: POST, auth: none,  render: api-only, params: [role],        status: safe}
+  - {path: /api/directory/search,        method: GET,  auth: none,  render: api-only, params: [q],           status: safe}
+  - {path: /api/account,                 method: GET,  auth: user,  render: api-only, params: [],            status: safe}
+  - {path: /api/account/sessions,        method: GET,  auth: user,  render: api-only, params: [],            status: safe}
+  - {path: /api/workspace/layout,        method: GET,  auth: user,  render: api-only, params: [],            status: safe}
+  - {path: /api/documents,               method: GET,  auth: user,  render: api-only, params: [],            status: safe}
+  - {path: '/api/documents/{id}',          method: GET,  auth: user,  render: api-only, params: [id],          status: safe}
+  - {path: /api/approvals,               method: GET,  auth: user,  render: api-only, params: [],            status: safe}
+  - {path: '/api/approvals/{id}',          method: GET,  auth: user,  render: api-only, params: [id],          status: safe}
+  - {path: /api/teams,                   method: GET,  auth: none,  render: api-only, params: [],            status: safe}
+  - {path: '/api/teams/{id}',              method: GET,  auth: none,  render: api-only, params: [id],          status: safe}
+  - {path: '/api/teams/{id}/members',      method: GET,  auth: none,  render: api-only, params: [id],          status: safe}
+  - {path: /api/reports/summary,         method: GET,  auth: user,  render: api-only, params: [],            status: safe}
+  - {path: /api/reports/costs,           method: GET,  auth: user,  render: api-only, params: [],            status: safe}
+  - {path: /api/integrations,            method: GET,  auth: admin, render: api-only, params: [],            status: safe}
+  - {path: /api/agents,                  method: GET,  auth: admin, render: api-only, params: [],            status: safe}
+  - {path: /api/templates,               method: GET,  auth: admin, render: api-only, params: [],            status: safe}
+  - {path: '/api/templates/{name}',        method: GET,  auth: admin, render: api-only, params: [name],        status: safe}
+
+  # ============================ planted ==========================================
+
+  # Type-carrying reader, twice: once on the endpoint that saves the arrangement, once
+  # on the cookie the workspace reads back at first paint.
+  - {path: /api/workspace/layout,   method: POST, auth: user,  render: api-only,       params: [state],    status: planted}
+  - {path: /workspace,              method: GET,  auth: user,  render: server-template, params: [wslayout], status: planted}
+
+  # The employee record editor: it binds the whole entity, and it reads the verb out of
+  # a form field after the decision has been taken.
+  - {path: /account/profile,        method: POST, auth: user,  render: server-template, params: [displayName, nickname, telephone, site, costCentre, approvalLimit, directoryRole, _method], status: planted}
+
+  # Writes that take their destination from a caller-supplied name.
+  - {path: /api/documents,          method: POST, auth: user,  render: api-only, params: [name, title, file], status: planted}
+  - {path: '/api/templates/{name}',   method: PUT,  auth: admin, render: api-only, params: [name],              status: planted}
+
+  # The approval decision, dispatched on a verb the decision was not taken on.
+  - {path: '/api/approvals/{id}',     method: POST, auth: user,  render: api-only, params: [id, X-HTTP-Method-Override], status: planted}
+
+  # The converter job, assembled by hand.
+  - {path: '/api/documents/{id}/render', method: POST, auth: user, render: api-only, params: [id, profile], status: planted}
+
+  # The staff extract reader, with declarations processed and references followed.
+  - {path: /api/directory/import,   method: POST, auth: admin, render: api-only, params: [body], status: planted}
+
+  # Stored assets served inline from this origin.
+  - {path: '/media/{name}',           method: GET,  auth: none,  render: server-template, params: [name], status: planted}
+
+  # The endpoint check, which will fetch anything.
+  - {path: /api/integrations/probe, method: POST, auth: admin, render: api-only, params: [endpoint], status: planted}
+
+  # The badge, and the queue that honours it.
+  - {path: /api/approvals/queue,    method: GET,  auth: user,  render: api-only, params: [badge], status: planted}
+
+  # Two answers for two kinds of failure.
+  - {path: '/share/{token}',          method: GET,  auth: none,  render: server-template, params: [token], status: planted}
+
+  # The return address matched by origin rather than by registration.
+  - {path: /connect/authorize,      method: GET,  auth: user,  render: server-template, params: [client_id, redirect_uri, response_type, state], status: planted}
+
+  # The detailed error page the analytics team left attached.
+  - {path: /reports/export,         method: GET,  auth: user,  render: server-template, params: [format], status: planted}
+
+  # The streamed export that faults after the response has begun.
+  - {path: /api/reports/timesheets, method: GET,  auth: user,  render: api-only, params: [group], status: planted}
+
+  # Locations that leave this host: the interstitial, and the document handoff.
+  - {path: /go,                     method: GET,  auth: none,  render: server-template, params: [to],              status: planted}
+  - {path: /api/documents/handoff,  method: POST, auth: user,  render: api-only,        params: [documentId, next], status: planted}
+
+  # Membership saved whole, role included.
+  - {path: '/api/teams/{id}/members', method: PATCH, auth: user, render: api-only, params: [id, memberId, jobTitle, role], status: planted}
+
+  # The release agents will collect.
+  - {path: /api/agents/updates,     method: POST, auth: admin, render: api-only, params: [manifest_url], status: planted}

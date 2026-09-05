@@ -1,0 +1,38 @@
+id: BENCH-CORP-0003
+title: Document upload builds its destination path from the submitted name
+app: corp
+component: api
+class: path_traversal_write
+severity: critical
+entrypoint:
+  method: POST
+  path: /api/documents
+  auth: user
+  param: name
+  param_in: multipart
+  default_value: site-plan.pdf
+  content_type: multipart/form-data
+discovery:
+  render: server-template
+  reachable_from:
+  - /documents
+  requires:
+  - form-submit
+  - file-upload
+  difficulty: 3
+oracle:
+  kind: state
+  condition: The destination path is the upload root joined with the submitted name, with no containment
+    check. The sink fires after the write has completed, and only when the fully resolved path of the
+    file that was actually created lies outside the upload root. A traversal sequence that resolves back
+    inside the root, or a write that failed, does not fire it.
+  poc: POST /api/documents with the session cookie of a signed-in employee, multipart with name="../../../../tmp/despatch-note.txt"
+    and a small file part
+  signal: corp.documents.write.path_escape
+tags:
+- upload
+- authenticated
+- state
+introduced: '2026-09-05'
+decoy_note: Uploads keep the user's own file name because the finance team asked for it, and the name
+  is checked against a deny list of extensions rather than for containment.

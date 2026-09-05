@@ -1,0 +1,40 @@
+id: BENCH-CORP-0018
+title: Template save uses the path segment as the file name
+app: corp
+component: api
+class: path_traversal_write
+severity: critical
+entrypoint:
+  method: PUT
+  path: /api/templates/{name}
+  auth: admin
+  param: name
+  param_in: path
+  default_value: despatch-note
+  content_type: text/plain
+discovery:
+  render: api-only
+  reachable_from:
+  - /admin/templates
+  requires:
+  - form-submit
+  - multi-step-flow
+  difficulty: 5
+oracle:
+  kind: state
+  condition: Template names carry spaces and site folders, so the name in the address is unescaped once
+    more after routing has already decoded it, and the result is joined to the template directory to build
+    the destination. The sink fires after the write, and only when the fully resolved path of the file
+    that was created lies outside the template directory. A name that resolves back inside it does not
+    fire.
+  poc: PUT /api/templates/..%252f..%252f..%252f..%252ftmp%252fdespatch-note.txt with the administrator's
+    session cookie and a small text body
+  signal: corp.templates.write.path_escape
+tags:
+- rest
+- authenticated
+- admin
+- state
+introduced: '2026-09-05'
+decoy_note: Templates are edited by name from the administration screen and the name is the file name,
+  which made the editor trivial to write and the directory trivial to browse over a share.

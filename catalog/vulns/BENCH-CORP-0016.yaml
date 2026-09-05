@@ -1,0 +1,36 @@
+id: BENCH-CORP-0016
+title: Document handoff returns a caller-supplied continuation address
+app: corp
+component: api
+class: open_redirect
+severity: medium
+entrypoint:
+  method: POST
+  path: /api/documents/handoff
+  auth: user
+  param: next
+  param_in: json
+  default_value: /documents
+  content_type: application/json
+discovery:
+  render: api-only
+  reachable_from:
+  - /documents
+  requires:
+  - form-submit
+  - js-execution
+  difficulty: 4
+oracle:
+  kind: state
+  condition: The handoff endpoint answers with a redirect to the continuation address it was given, with
+    no test that it is local. The sink fires when a redirect was actually issued whose location has a
+    host other than the portal's own. A relative continuation does not fire it.
+  poc: POST /api/documents/handoff with the session cookie of a signed-in employee and {"documentId":8801,"next":"https://partner-supply.example/collect"}
+  signal: corp.documents.handoff.offsite_redirect
+tags:
+- rest
+- authenticated
+- redirect
+introduced: '2026-09-05'
+decoy_note: The viewer hands a document to the print desk on another host and comes back afterwards, so
+  the continuation address is genuinely allowed to be somewhere else.

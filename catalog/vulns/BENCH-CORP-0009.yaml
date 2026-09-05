@@ -1,0 +1,38 @@
+id: BENCH-CORP-0009
+title: Approval badge is encrypted blockwise with no integrity protection
+app: corp
+component: api
+class: ecb_mode
+severity: high
+entrypoint:
+  method: GET
+  path: /api/approvals/queue
+  auth: user
+  param: badge
+  param_in: cookie
+  default_value: null
+discovery:
+  render: api-only
+  reachable_from:
+  - /approvals
+  requires:
+  - multi-step-flow
+  difficulty: 3
+oracle:
+  kind: sink
+  condition: The badge is a block-encrypted record with each 16-byte block independent and no authentication
+    tag, and the display nickname occupies two whole blocks the holder chooses. The sink fires when a
+    presented badge decrypts to a role that does not match the role held for that employee in the database
+    AND the elevated role was actually honoured, i.e. the approvals queue was served to someone entitled
+    only to view. A tampered badge that fails to decrypt, or one whose role still matches the database,
+    does not fire it.
+  poc: Set the profile nickname so a whole block encrypts ';role=approver; ', then reorder the badge cookie's
+    ciphertext blocks so that block is where the role block was, and GET /api/approvals/queue
+  signal: corp.badge.token.block_splice
+tags:
+- cookie
+- crypto
+- authenticated
+introduced: '2026-09-05'
+decoy_note: 'The badge predates the session store: it was a stateless way to carry the approval role to
+  a second service, and blockwise encryption was chosen because the second service decrypts fields independently.'

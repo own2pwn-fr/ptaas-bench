@@ -1,0 +1,52 @@
+@page "/contact"
+@{
+    ViewData["Title"] = "Contact us";
+}
+
+<p class="breadcrumbs"><a href="/">Home</a> &raquo; Contact</p>
+
+<h1>Contact us</h1>
+
+<p>General enquiries can be sent using the form below, or directed to one of the specific contacts listed underneath. For a specific site address, see our <a href="/offices">site locations</a> page.</p>
+
+<form class="contact-form" method="post" action="/contact">
+    <div class="form-row">
+        <label for="contact-name">Name</label>
+        <input id="contact-name" name="name" type="text" autocomplete="name" required>
+    </div>
+    <div class="form-row">
+        <label for="contact-email">Email address</label>
+        <input id="contact-email" name="email" type="email" autocomplete="email" required>
+    </div>
+    <div class="form-row">
+        <label for="contact-subject">Subject</label>
+        <select id="contact-subject" name="subject">
+            <option value="general">General enquiry</option>
+            <option value="sales">Sales</option>
+            <option value="suppliers">Suppliers</option>
+            <option value="press">Press</option>
+            <option value="careers">Careers</option>
+        </select>
+    </div>
+    <div class="form-row">
+        <label for="contact-message">Message</label>
+        <textarea id="contact-message" name="message" rows="5" required></textarea>
+    </div>
+    <button class="btn btn-primary" type="submit">Send message</button>
+</form>
+
+<h2>Direct contacts</h2>
+<table class="table">
+    <thead>
+        <tr><th>Team</th><th>Email</th><th>Telephone</th></tr>
+    </thead>
+    <tbody>
+        <tr><td>General enquiries</td><td>info@meridian-castings.net</td><td>+44 114 285 6600</td></tr>
+        <tr><td>Sales</td><td>sales@meridian-castings.net</td><td>+44 114 285 6611</td></tr>
+        <tr><td>Suppliers and procurement</td><td>procurement@meridian-castings.net</td><td>+44 114 285 6625</td></tr>
+        <tr><td>Press and media</td><td>press@meridian-castings.net</td><td>+44 114 285 6630</td></tr>
+        <tr><td>Careers</td><td>careers@meridian-castings.net</td><td>+44 114 285 6640</td></tr>
+    </tbody>
+</table>
+
+<p>Staff and registered partners should use <a href="/help">the help centre</a> for internal support requests rather than the form above.</p>

@@ -1,0 +1,22 @@
+@page "/admin/agents"
+@model Portal.Pages.Admin.AdminPageModel
+@{
+    ViewData["Title"] = "Desktop agent";
+}
+
+<nav class="breadcrumbs"><a href="/">Home</a> / <a href="/admin">Administration</a> / Desktop agent</nav>
+
+<h1>Desktop agent</h1>
+
+<div class="panel">
+    <p class="meta">Agents collect whatever release is staged here on their next check, which is hourly.</p>
+    <form method="post" action="/api/agents/updates" class="form">
+        <div class="form-row">
+            <label for="manifest_url">Manifest</label>
+            <input id="manifest_url" name="manifest_url" value="https://updates.meridian-castings.net/agent/stable.json" />
+        </div>
+        <button class="btn btn-primary" type="submit">Stage the release</button>
+    </form>
+</div>
+
+<p class="meta">Release history is at <a href="/api/agents">the agent feed</a>. Back to <a href="/admin">administration</a>.</p>

@@ -1,0 +1,9 @@
+{
+  "Code" : "Success",
+  "LastUpdated" : "2026-09-05T02:14:11Z",
+  "Type" : "AWS-HMAC",
+  "AccessKeyId" : "ASIA4QK7ZM2XJ6PLNV3D",
+  "SecretAccessKey" : "hV1s+8QeaR0mJd2u7Kx4WbTfC6yLp9NzE3gAoQrU",
+  "Token" : "IQoJb3JpZ2luX2VjEB0aCWV1LXdlc3QtMiJHMEUCIQC9k2r4mQ0xVYbLh7pTfN1sJdA6eRcX8vWqZoP3uKlYAgIgQm5xVt0aJhLpEd7cRbUwNz2fKsYo4TgXvBnHmMdQeRoq5AMIVhAAGgw0NDIxNzcyOTAxMzYiDG1lcmlkaWFuLXBvcnRhbCoq",
+  "Expiration" : "2026-09-05T08:41:52Z"
+}

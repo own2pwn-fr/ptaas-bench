@@ -1,0 +1,12 @@
+@page "/error"
+@model Portal.Pages.ErrorModel
+@{
+    ViewData["Title"] = "Something went wrong";
+}
+
+<h1>@Model.Heading</h1>
+<div class="panel">
+    <p>@Model.Explanation</p>
+    <p class="meta">If this keeps happening, quote reference @Model.Reference when you contact the service desk on extension 2440.</p>
+    <p><a class="btn" href="/">Back to the home page</a> <a class="btn" href="/help">Help centre</a></p>
+</div>

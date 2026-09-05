@@ -1,0 +1,36 @@
+@page "/admin/directory"
+@model Portal.Pages.Admin.AdminPageModel
+@{
+    ViewData["Title"] = "Staff directory";
+}
+
+<nav class="breadcrumbs"><a href="/">Home</a> / <a href="/admin">Administration</a> / Staff directory</nav>
+
+<h1>Staff directory</h1>
+
+<div class="panel">
+    <p class="meta">Paste the payroll bureau extract. The pass is a dry run: it reports what an import would change and writes nothing.</p>
+    <div class="form-row">
+        <label for="extract">Extract</label>
+        <textarea id="extract" rows="12" spellcheck="false">&lt;staff&gt;&lt;person&gt;&lt;name&gt;Helen Abassi&lt;/name&gt;&lt;/person&gt;&lt;/staff&gt;</textarea>
+    </div>
+    <p><button id="run" class="btn btn-primary" type="button">Check the extract</button></p>
+    <pre id="out" class="panel"></pre>
+</div>
+
+<p class="meta">Back to <a href="/admin">administration</a>.</p>
+
+@section Scripts {
+<script>
+(function () {
+    document.getElementById('run').addEventListener('click', function () {
+        fetch('/api/directory/import', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/xml' },
+            body: document.getElementById('extract').value
+        }).then(function (r) { return r.text(); })
+          .then(function (t) { document.getElementById('out').textContent = t; });
+    });
+})();
+</script>
+}

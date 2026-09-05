@@ -1,0 +1,4 @@
+Contact: mailto:security@meridian-castings.net
+Expires: 2027-01-31T23:59:00.000Z
+Preferred-Languages: en
+Policy: https://portal.meridian-castings.net/legal/terms

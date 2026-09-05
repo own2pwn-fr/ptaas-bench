@@ -1,0 +1,30 @@
+@page "/reports"
+@{
+    ViewData["Title"] = "Reports";
+}
+
+<nav class="breadcrumbs"><a href="/">Home</a> / Reports</nav>
+
+<h1>Reports</h1>
+
+<p class="meta">Maintained by the analytics team at Riverside Way. Figures are refreshed overnight from the timesheet system.</p>
+
+<div class="cards">
+    <div class="card">
+        <h3>Hours by week</h3>
+        <p>Your cost centre, week by week.</p>
+        <p><a class="btn" href="/api/reports/costs">Open</a></p>
+    </div>
+    <div class="card">
+        <h3>Timesheet export</h3>
+        <p>The full timesheet stream, grouped as you ask for it.</p>
+        <p><a class="btn" href="/reports/timesheets">Open</a></p>
+    </div>
+    <div class="card">
+        <h3>Download</h3>
+        <p>The same figures as a spreadsheet.</p>
+        <p><a class="btn" href="/reports/export?format=xlsx">Download</a></p>
+    </div>
+</div>
+
+<p class="meta">Back to <a href="/workspace">your workspace</a> or on to <a href="/approvals">approvals</a>.</p>

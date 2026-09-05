@@ -1,0 +1,23 @@
+#!/bin/sh
+# Restore this instance to its seeded state.
+#
+# Reseeds the database, rebuilds the document store and the template directory exactly
+# as they ship, forgets the read-behaviour bookkeeping the share links keep, and prints a
+# one-line digest of the state that is meant to be constant. Run it twice: the digest
+# must match, and if it does not, something is still holding state from the last run.
+#
+# It talks to the loopback operations listener rather than to a route on the service
+# port, so it cannot be driven by a visitor.
+set -eu
+
+ADDR="${PORTAL_CONTROL_ADDR:-127.0.0.1:9310}"
+
+if ! out=$(curl -fsS -m 120 -X POST "http://${ADDR}/ops/reset"); then
+    echo "state-reset: the operations listener at ${ADDR} did not complete the reset" >&2
+    exit 1
+fi
+
+case "$out" in
+    state\ *) printf '%s\n' "$out" ;;
+    *) echo "state-reset: unexpected reply: $out" >&2; exit 1 ;;
+esac

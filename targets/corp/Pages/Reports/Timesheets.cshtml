@@ -1,0 +1,38 @@
+@page "/reports/timesheets"
+@{
+    ViewData["Title"] = "Timesheet export";
+}
+
+<nav class="breadcrumbs"><a href="/">Home</a> / <a href="/reports">Reports</a> / Timesheet export</nav>
+
+<h1>Timesheet export</h1>
+
+<div class="panel">
+    <p class="meta">The export streams as it reads, so a large range starts arriving straight away. Choose how the figures are folded.</p>
+    <div class="form-row">
+        <label for="group">Group by</label>
+        <select id="group">
+            <option value="week">Week</option>
+            <option value="cost-centre">Cost centre</option>
+            <option value="employee">Employee</option>
+        </select>
+    </div>
+    <p><button id="run" class="btn btn-primary" type="button">Run the export</button></p>
+    <pre id="out" class="panel"></pre>
+</div>
+
+<p class="meta">Back to <a href="/reports">reports</a>.</p>
+
+@section Scripts {
+<script>
+(function () {
+    var run = document.getElementById('run');
+    run.addEventListener('click', function () {
+        var group = document.getElementById('group').value;
+        fetch('/api/reports/timesheets?group=' + encodeURIComponent(group))
+            .then(function (r) { return r.text(); })
+            .then(function (t) { document.getElementById('out').textContent = t.slice(0, 4000); });
+    });
+})();
+</script>
+}

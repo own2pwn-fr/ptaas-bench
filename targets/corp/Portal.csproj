@@ -1,0 +1,52 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <!--
+    Meridian Portal - the staff and partner portal for Meridian Castings Limited.
+
+    Razor Pages for the pages people read, a small JSON surface for the screens that
+    talk to the back office, and PostgreSQL underneath. Package versions are pinned
+    exactly: this is deployed from a mirror and a floating version would change what
+    ships without changing anything in this repository.
+  -->
+
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <LangVersion>13.0</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>Portal</RootNamespace>
+    <AssemblyName>Portal</AssemblyName>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Npgsql" Version="9.0.2" />
+    <!-- Kept for the saved workspace layout, which round-trips widget subclasses. -->
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\sdk\dotnet\Internal.Telemetry\Internal.Telemetry.csproj" />
+  </ItemGroup>
+
+  <!--
+    The release checks, the route inventory and the operations script live beside the
+    project because that is where anyone looking for them expects them. They are not
+    part of the service and must not be laid down in the image: an image carries what
+    the process needs and nothing that merely describes it.
+  -->
+  <ItemGroup>
+    <Content Remove="routes.yaml" />
+    <Content Remove="bench-credentials.yaml" />
+    <Content Remove="selftest.py" />
+    <Content Remove="state-reset" />
+    <Content Remove="Dockerfile" />
+    <Content Remove="metadata\**" />
+    <None Remove="routes.yaml" />
+    <None Remove="bench-credentials.yaml" />
+    <None Remove="selftest.py" />
+    <None Remove="metadata\**" />
+  </ItemGroup>
+
+</Project>

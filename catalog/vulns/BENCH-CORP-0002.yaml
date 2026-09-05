@@ -1,0 +1,40 @@
+id: BENCH-CORP-0002
+title: Employee profile form binds fields the form never renders
+app: corp
+component: web
+class: mass_assignment
+severity: high
+entrypoint:
+  method: POST
+  path: /account/profile
+  auth: user
+  param: approvalLimit
+  param_in: body
+  default_value: null
+  content_type: application/x-www-form-urlencoded
+discovery:
+  render: server-template
+  reachable_from:
+  - /account
+  - /account/profile
+  requires:
+  - form-submit
+  difficulty: 2
+oracle:
+  kind: state
+  condition: The profile page binds the whole employee record from the form, so a posted field that the
+    page does not render is still bound and saved. The sink compares the persisted row against the row
+    as it was before the update and fires only when a property outside the editable set (approval limit,
+    cost centre, directory role) actually changed value in the database, and the caller does not hold
+    the administrative role. Posting the field with the value it already had changes nothing and does
+    not fire.
+  poc: POST /account/profile with the session cookie of a signed-in employee and displayName=Helen+Abassi&telephone=0114+496+2210&approvalLimit=500000
+  signal: corp.binder.overpost_applied
+tags:
+- form
+- authenticated
+- state
+introduced: '2026-09-05'
+decoy_note: The page was scaffolded from the entity, so the model it binds is the entity. The approval
+  limit was added to that entity a year later by the finance integration and nobody went back to narrow
+  the binding.

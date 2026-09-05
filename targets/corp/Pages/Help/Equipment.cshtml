@@ -1,0 +1,36 @@
+@page "/help/equipment"
+@{
+    ViewData["Title"] = "Equipment requests";
+}
+
+<p class="breadcrumbs"><a href="/">Home</a> &raquo; <a href="/help">Help</a> &raquo; Equipment</p>
+
+<h1>Equipment requests</h1>
+
+<p>Use the form below to request a laptop, mobile phone, or workshop personal protective equipment. Requests for specialist tooling or measuring equipment should instead go through your department manager, as these usually require a budget approval.</p>
+
+<form class="equipment-form" method="post" action="/help/equipment">
+    <div class="form-row">
+        <label for="eq-name">Full name</label>
+        <input id="eq-name" name="name" type="text" autocomplete="name" required>
+    </div>
+    <div class="form-row">
+        <label for="eq-site">Site</label>
+        <select id="eq-site" name="site">
+            <option value="sheffield">Sheffield</option>
+            <option value="wrexham">Wrexham</option>
+            <option value="poznan">Poznan</option>
+        </select>
+    </div>
+    <div class="form-row">
+        <label for="eq-item">Item requested</label>
+        <input id="eq-item" name="item" type="text" required>
+    </div>
+    <div class="form-row">
+        <label for="eq-reason">Reason for request</label>
+        <textarea id="eq-reason" name="reason" rows="4"></textarea>
+    </div>
+    <button class="btn btn-primary" type="submit">Submit request</button>
+</form>
+
+<p>New starters should read our <a href="/help/onboarding">onboarding guidance</a> first, since standard equipment is usually arranged automatically ahead of your start date. Questions about an existing request can go through the <a href="/help/directory">staff directory</a>.</p>

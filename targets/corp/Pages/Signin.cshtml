@@ -1,0 +1,33 @@
+@page "/signin"
+@model Portal.Pages.SigninModel
+@{
+    ViewData["Title"] = "Sign in";
+}
+
+<nav class="breadcrumbs"><a href="/">Home</a> / Sign in</nav>
+
+<h1>Sign in to Meridian Portal</h1>
+
+<div class="panel">
+    <p class="meta">Use your Meridian Castings account. If you work at Wrexham or Poznan and cannot sign in, contact the service desk on extension 2440.</p>
+
+    @if (Model.Failed)
+    {
+        <p class="notice">Those details did not match an account.</p>
+    }
+
+    <form method="post" class="form">
+        <input type="hidden" name="returnUrl" value="@Model.ReturnUrl" />
+        <div class="form-row">
+            <label for="email">Work e-mail address</label>
+            <input id="email" name="email" type="email" autocomplete="username" required />
+        </div>
+        <div class="form-row">
+            <label for="password">Password</label>
+            <input id="password" name="password" type="password" autocomplete="current-password" required />
+        </div>
+        <button class="btn btn-primary" type="submit">Sign in</button>
+    </form>
+</div>
+
+<p class="meta">Trouble signing in? See <a href="/help">the help centre</a> or read the <a href="/legal/privacy">privacy notice</a>.</p>

@@ -1,0 +1,39 @@
+id: BENCH-CORP-0013
+title: Outbound link interstitial follows any address it is handed
+app: corp
+component: web
+class: open_redirect
+severity: medium
+entrypoint:
+  method: GET
+  path: /go
+  auth: none
+  param: to
+  param_in: query
+  default_value: https://www.partner-supply.example/
+discovery:
+  render: server-template
+  reachable_from:
+  - /
+  - /newsroom
+  - /newsroom/archive
+  - /suppliers
+  requires: []
+  difficulty: 1
+oracle:
+  kind: state
+  condition: Every outbound link on the site is written as a link through this page so that the communications
+    desk can count clicks without a third-party script, and the address is used as given with no test
+    that it is local. The sink fires when a redirect response was actually issued whose location has a
+    host other than the portal's own. A relative address, an empty one, or one that stays on this host
+    does not fire it.
+  poc: GET /go?to=https://partner-supply.example/collect
+  signal: corp.links.follow.offsite_redirect
+tags:
+- anonymous
+- redirect
+introduced: '2026-09-05'
+decoy_note: An interstitial on outbound links is how the communications desk counts clicks without putting
+  a third-party script on every page, so a location that leaves this host is exactly what the page is
+  for. The sign-in page's own return address, which looks like the same thing, is restricted to local
+  paths.

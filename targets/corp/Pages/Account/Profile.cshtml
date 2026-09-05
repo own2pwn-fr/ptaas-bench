@@ -1,0 +1,47 @@
+@page "/account/profile"
+@model Portal.Pages.Account.ProfileModel
+@{
+    ViewData["Title"] = "Your details";
+}
+
+<nav class="breadcrumbs"><a href="/">Home</a> / <a href="/account">Your account</a> / Your details</nav>
+
+<h1>Your details</h1>
+
+@if (Model.Saved)
+{
+    <p class="notice">Your details have been saved.</p>
+}
+@if (Model.Closed)
+{
+    <p class="notice">This account has been closed.</p>
+}
+
+<div class="panel">
+    <form method="post" class="form">
+        <div class="form-row">
+            <label for="displayName">Name</label>
+            <input id="displayName" name="displayName" value="@Model.User.DisplayName" required />
+        </div>
+        <div class="form-row">
+            <label for="nickname">Nickname shown to colleagues</label>
+            <input id="nickname" name="nickname" value="@Model.User.Nickname" maxlength="32" />
+        </div>
+        <div class="form-row">
+            <label for="telephone">Telephone</label>
+            <input id="telephone" name="telephone" value="@Model.User.Telephone" />
+        </div>
+        <div class="form-row">
+            <label for="site">Site</label>
+            <select id="site" name="site">
+                <option value="sheffield">Sheffield</option>
+                <option value="wrexham">Wrexham</option>
+                <option value="poznan">Poznan</option>
+            </select>
+        </div>
+        <button class="btn btn-primary" type="submit">Save</button>
+    </form>
+</div>
+
+<p class="meta">Your cost centre, approval limit and directory role are maintained by the directory team. Contact them on extension 2440 to change one.</p>
+<p class="meta">Back to <a href="/account">your account</a>.</p>

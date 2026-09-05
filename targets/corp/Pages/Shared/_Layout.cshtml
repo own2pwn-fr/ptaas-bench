@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>@ViewData["Title"] - Meridian Portal</title>
+    <link rel="icon" href="/assets/mark.svg" type="image/svg+xml">
+    <link rel="stylesheet" href="/assets/site.css">
+</head>
+<body>
+    <header class="masthead">
+        <div class="wrap masthead-inner">
+            <a class="wordmark" href="/">Meridian<span>Portal</span></a>
+            <button class="navtoggle" type="button" aria-label="Toggle navigation" aria-expanded="false">Menu</button>
+            <nav class="mainnav" aria-label="Primary">
+                <a href="/about">About</a>
+                <a href="/products">Products</a>
+                <a href="/quality">Quality</a>
+                <a href="/suppliers">Suppliers</a>
+                <a href="/newsroom">Newsroom</a>
+                <a href="/careers">Careers</a>
+                <a href="/help">Help</a>
+                <a href="/contact">Contact</a>
+            </nav>
+            <a class="signin" href="/signin">Sign in</a>
+        </div>
+    </header>
+
+    <main class="wrap">
+        @RenderBody()
+    </main>
+
+    <footer class="footer">
+        <div class="wrap footer-grid">
+            <div class="footer-col">
+                <h3>Company</h3>
+                <ul>
+                    <li><a href="/about">About Meridian Castings</a></li>
+                    <li><a href="/leadership">Leadership</a></li>
+                    <li><a href="/offices">Our sites</a></li>
+                    <li><a href="/history">Our history</a></li>
+                    <li><a href="/investors">Investors</a></li>
+                </ul>
+            </div>
+            <div class="footer-col">
+                <h3>Products</h3>
+                <ul>
+                    <li><a href="/products">Product overview</a></li>
+                    <li><a href="/products/castings">Castings</a></li>
+                    <li><a href="/products/machining">Machining</a></li>
+                    <li><a href="/products/finishing">Finishing</a></li>
+                    <li><a href="/products/tooling">Tooling</a></li>
+                </ul>
+            </div>
+            <div class="footer-col">
+                <h3>Quality</h3>
+                <ul>
+                    <li><a href="/quality">Quality management</a></li>
+                    <li><a href="/certifications">Certifications</a></li>
+                    <li><a href="/sustainability">Sustainability</a></li>
+                </ul>
+            </div>
+            <div class="footer-col">
+                <h3>Suppliers</h3>
+                <ul>
+                    <li><a href="/suppliers">Supplier portal</a></li>
+                    <li><a href="/suppliers/terms">Terms of supply</a></li>
+                    <li><a href="/suppliers/onboarding">Supplier onboarding</a></li>
+                </ul>
+            </div>
+            <div class="footer-col">
+                <h3>News &amp; careers</h3>
+                <ul>
+                    <li><a href="/newsroom">Newsroom</a></li>
+                    <li><a href="/newsroom/archive">Newsroom archive</a></li>
+                    <li><a href="/careers">Careers</a></li>
+                    <li><a href="/careers/openings">Current openings</a></li>
+                    <li><a href="/careers/graduates">Graduate programme</a></li>
+                </ul>
+            </div>
+            <div class="footer-col">
+                <h3>Support</h3>
+                <ul>
+                    <li><a href="/help">Help centre</a></li>
+                    <li><a href="/help/directory">Staff directory</a></li>
+                    <li><a href="/help/onboarding">New starter onboarding</a></li>
+                    <li><a href="/help/equipment">Equipment requests</a></li>
+                    <li><a href="/contact">Contact us</a></li>
+                </ul>
+            </div>
+            <div class="footer-col">
+                <h3>Legal</h3>
+                <ul>
+                    <li><a href="/legal/privacy">Privacy notice</a></li>
+                    <li><a href="/legal/terms">Terms of use</a></li>
+                    <li><a href="/legal/cookies">Cookie policy</a></li>
+                    <li><a href="/accessibility">Accessibility statement</a></li>
+                    <li><a href="/sitemap">Site map</a></li>
+                </ul>
+            </div>
+        </div>
+        <div class="wrap footer-bottom">
+            <p>Meridian Castings Limited, Riverside Way, Attercliffe, Sheffield, S9 2FL, United Kingdom.</p>
+            <p>© 2026 Meridian Castings Limited. Registered in England and Wales, company number 00841766.</p>
+        </div>
+    </footer>
+
+    <div id="consent" class="consent" hidden>
+        <div class="consent-inner">
+            <p>We use a small number of cookies to keep the portal working correctly and to understand how it is used. See our <a href="/legal/cookies">cookie policy</a> for details.</p>
+            <div class="consent-actions">
+                <button id="consent-manage" class="btn" type="button">Manage preferences</button>
+                <button id="consent-accept" class="btn btn-primary" type="button">Accept</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        (function () {
+            var payload = {
+                path: window.location.pathname,
+                referrer: document.referrer || null,
+                ts: new Date().toISOString()
+            };
+            try {
+                fetch('/api/telemetry/pageview', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload),
+                    keepalive: true
+                });
+            } catch (e) {
+                /* first-party telemetry is best-effort and must never break the page */
+            }
+        })();
+    </script>
+    <script src="/assets/site.js" defer></script>
+    @await RenderSectionAsync("Scripts", required: false)
+</body>
+</html>

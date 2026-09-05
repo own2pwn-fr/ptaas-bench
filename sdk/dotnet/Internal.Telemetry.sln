@@ -1,0 +1,27 @@
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.11.35222.181
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Internal.Telemetry", "Internal.Telemetry\Internal.Telemetry.csproj", "{6F3B1A21-6B7C-4C2E-9B31-2E0A4C7D5511}"
+EndProject
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Internal.Telemetry.Tests", "Internal.Telemetry.Tests\Internal.Telemetry.Tests.csproj", "{7C4D2B32-7C8D-4D3F-8C42-3F1B5D8E6622}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{6F3B1A21-6B7C-4C2E-9B31-2E0A4C7D5511}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{6F3B1A21-6B7C-4C2E-9B31-2E0A4C7D5511}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{6F3B1A21-6B7C-4C2E-9B31-2E0A4C7D5511}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{6F3B1A21-6B7C-4C2E-9B31-2E0A4C7D5511}.Release|Any CPU.Build.0 = Release|Any CPU
+		{7C4D2B32-7C8D-4D3F-8C42-3F1B5D8E6622}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{7C4D2B32-7C8D-4D3F-8C42-3F1B5D8E6622}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{7C4D2B32-7C8D-4D3F-8C42-3F1B5D8E6622}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{7C4D2B32-7C8D-4D3F-8C42-3F1B5D8E6622}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+EndGlobal

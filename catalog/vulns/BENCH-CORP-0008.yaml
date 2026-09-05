@@ -1,0 +1,43 @@
+id: BENCH-CORP-0008
+title: Integration health probe fetches whatever endpoint it is given
+app: corp
+component: api
+class: ssrf_metadata
+severity: critical
+entrypoint:
+  method: POST
+  path: /api/integrations/probe
+  auth: admin
+  param: endpoint
+  param_in: json
+  default_value: https://api.partner-supply.example/health
+  content_type: application/json
+discovery:
+  render: api-only
+  reachable_from:
+  - /admin/integrations
+  requires:
+  - form-submit
+  - multi-step-flow
+  difficulty: 4
+oracle:
+  kind: sink
+  condition: 'The probe issues a GET to the supplied endpoint with no destination policy. The sink sits
+    on the connection callback of the client that made the request, so it sees the address the socket
+    actually connected to: it fires when that address is inside the link-local range that carries the
+    host''s instance metadata AND a response was received, i.e. the fetch left and was answered. Submitting
+    a link-local URL that never connects scores exercise only.'
+  poc: POST /api/integrations/probe with the administrator's session cookie and {"endpoint":"http://169.254.169.254/latest/meta-data/iam/security-credentials/portal-app-role"}
+  signal: corp.integrations.probe.link_local_reached
+tags:
+- rest
+- authenticated
+- admin
+introduced: '2026-09-05'
+decoy_note: 'Checking a partner endpoint from the portal itself is what the integrations screen is for;
+  the allow list was dropped when a partner moved behind a content network. NOTE ON PROVABILITY: this
+  estate has no cloud provider, so the deployment stands up a small responder on the conventional link-local
+  address as part of the portal''s own compose fragment, serving an ordinary instance metadata tree. That
+  was chosen over pointing the flaw at an internal name the egress resolver answers, because the canonical
+  probe every operator already sends is the link-local one, and a flaw that cannot be proven with the
+  request people actually make is worse than no flaw.'

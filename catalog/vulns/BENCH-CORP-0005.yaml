@@ -1,0 +1,39 @@
+id: BENCH-CORP-0005
+title: Render profile is interpolated into the request sent to the converter
+app: corp
+component: api
+class: header_injection
+severity: medium
+entrypoint:
+  method: POST
+  path: /api/documents/{id}/render
+  auth: user
+  param: profile
+  param_in: json
+  default_value: print-a4
+  content_type: application/json
+discovery:
+  render: api-only
+  reachable_from:
+  - /documents
+  requires:
+  - form-submit
+  difficulty: 4
+oracle:
+  kind: sink
+  condition: 'The portal speaks to its document converter over a cut-down HTTP dialect whose request is
+    built by string concatenation, and the render profile goes into a header field of that request. The
+    sink is in the converter''s own reader: it fires when the header block it parsed contains a field
+    the portal''s client never emits, i.e. the value crossed the field boundary and became structure.
+    A profile carrying control characters that the client rejects, or that arrive escaped, does not fire
+    it. The injected fields are echoed back in the render diagnostics, so the effect is observable to
+    the caller as well.'
+  poc: 'POST /api/documents/8801/render with the session cookie of a signed-in employee and {"profile":"print-a4\r\nX-Spool-Priority:
+    0"}'
+  signal: corp.render.header.field_injected
+tags:
+- rest
+- authenticated
+introduced: '2026-09-05'
+decoy_note: The converter is a decade-old internal daemon that speaks something close to, but not quite,
+  HTTP/1.0, which is why the portal writes its requests by hand instead of using an HTTP client.

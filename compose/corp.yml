@@ -1,0 +1,193 @@
+# Meridian Portal: the corporate staff and partner portal, its database, and the
+# instance metadata service of the host it believes it runs on.
+#
+# Relative paths resolve against this file's directory (compose/), per the `include`
+# semantics of the Compose specification.
+#
+# WHY THE VERSIONS ARE PINNED
+# ---------------------------
+# This estate deploys from a mirror, and a floating tag changes what ships without
+# changing anything in this repository. Digests are not written here because this
+# fragment was authored offline; at first bring-up, record
+# `docker image inspect --format '{{index .RepoDigests 0}}'` for each image and replace
+# the tag with image@sha256:.... Until then the tags are exact, never `latest`, never a
+# floating minor.
+#
+# NAMES
+# -----
+# The host names below are the company's own and are resolvable by anything on the same
+# network, so they are a statement about what this is. They follow CORP_SITE_DOMAIN, so
+# a deployment can move them without touching this file.
+
+x-site-domain: &site-domain ${CORP_SITE_DOMAIN:-meridian-castings.net}
+
+volumes:
+  corp-store:
+  corp-db-data:
+
+services:
+
+  # ---------------------------------------------------------------------------
+  # The portal itself. Dual-homed: it serves the customer-facing network and
+  # reports inward to the observability stack, which is the ordinary shape for a
+  # service in this estate.
+  # ---------------------------------------------------------------------------
+  corp-portal:
+    build:
+      context: ..
+      dockerfile: targets/corp/Dockerfile
+    container_name: corp-portal
+    hostname: portal
+    profiles: [targets, corp]
+    environment:
+      # Reads as an ordinary self-hosted collector, because that is what it is.
+      TELEMETRY_SERVICE: corp
+      TELEMETRY_ENDPOINT: http://otel-collector:8900
+      # The estate's own range. Traffic from the deployment checks and the release
+      # verification arrives from there and is recorded as generated rather than
+      # organic. Decided on the connection address and on nothing else.
+      TELEMETRY_SYNTHETIC_CIDRS: "10.77.0.0/24"
+
+      PORTAL_PORT: "80"
+      PORTAL_CONTROL_PORT: "9310"
+      PORTAL_CONVERTER_PORT: "9311"
+      PORTAL_DATABASE: "Host=corp-db;Port=5432;Database=portal;Username=portal;Password=portal;Include Error Detail=true"
+      PORTAL_UPLOADS: /var/lib/portal/uploads
+      PORTAL_TEMPLATES: /var/lib/portal/templates
+
+      SITE_DOMAIN: *site-domain
+      # Seeded content - document names, nicknames, share and badge keys, package
+      # digests - is derived from this. Two deployments with different seeds share no
+      # strings. Logins and passwords are stable by design; the service desk holds them.
+      DEPLOY_SEED: ${DEPLOY_SEED:-}
+    volumes:
+      - corp-store:/var/lib/portal
+    # The portal answers on 80 while running as an unprivileged user. Lowering the floor
+    # for this network namespace is preferable to a file capability on the runtime host,
+    # which the process would then carry for every socket it ever opens. If a daemon
+    # refuses the sysctl, the alternative is `cap_add: ["NET_BIND_SERVICE"]` plus a
+    # setcap on the runtime in the image.
+    sysctls:
+      net.ipv4.ip_unprivileged_port_start: "0"
+    networks:
+      bench-public:
+        aliases:
+          - portal.${CORP_SITE_DOMAIN:-meridian-castings.net}
+          - www.${CORP_SITE_DOMAIN:-meridian-castings.net}
+          - ${CORP_SITE_DOMAIN:-meridian-castings.net}
+      bench-internal:
+        aliases: [portal]
+      corp-metadata:
+    # The resolver for the customer-facing network. It answers every name and is what
+    # makes an outbound lookup this service is talked into observable at all.
+    dns: ["10.88.0.5"]
+    # Ports are NOT published. The customer-facing network has no route to the host by
+    # design; publishing would put this container on a developer's loopback and give
+    # anything that took the container a way back out. See the `dev` profile below.
+    depends_on:
+      corp-db: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:9310/ops/health"]
+      interval: 10s
+      timeout: 5s
+      start_period: 40s
+      retries: 8
+
+  corp-db:
+    image: postgres:17.2-alpine
+    container_name: corp-db
+    hostname: portal-db
+    profiles: [targets, corp]
+    environment:
+      POSTGRES_USER: portal
+      POSTGRES_PASSWORD: portal
+      POSTGRES_DB: portal
+    volumes:
+      - corp-db-data:/var/lib/postgresql/data
+    networks:
+      bench-internal:
+        aliases: [corp-db]
+    # The resolver on the network this container can actually reach. Pinning the
+    # customer-facing address here would leave it with no resolver at all: it is not on
+    # that network, so it could not resolve the portal and the stack would not come up.
+    dns: ["10.77.0.5"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U portal -d portal"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  # ---------------------------------------------------------------------------
+  # The instance metadata service of the host the portal runs on.
+  #
+  # It answers the conventional link-local address on a network of its own, which is
+  # what a service running on a cloud instance sees. Nothing else in the estate is
+  # attached to that network, so it is reachable from the portal and from nowhere else.
+  #
+  # If a daemon refuses a link-local subnet - some storage drivers and some
+  # userns-remapped daemons do - move `corp-metadata` to an ordinary private range and
+  # give this container the address the portal is configured against; the portal reads
+  # the address from the connected socket, so anything in 169.254.0.0/16 is recognised.
+  # ---------------------------------------------------------------------------
+  corp-imds:
+    image: nginx:1.27.3-alpine
+    container_name: corp-imds
+    hostname: metadata
+    profiles: [targets, corp]
+    volumes:
+      - ../targets/corp/metadata/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ../targets/corp/metadata/latest:/srv/metadata/latest:ro
+    networks:
+      corp-metadata:
+        ipv4_address: 169.254.169.254
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1/latest/meta-data/instance-id >/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+
+  # ---------------------------------------------------------------------------
+  # Local development only, never during a measured run: `--profile dev`.
+  #
+  # It publishes the portal on the developer's machine, which is exactly the route the
+  # sealed networks exist to remove. Bringing it up during a run would let a compromised
+  # container reach the host, and would let host traffic reach the portal without
+  # passing the client accounting.
+  # ---------------------------------------------------------------------------
+  corp-devtap:
+    image: nginx:1.27.3-alpine
+    container_name: corp-devtap
+    profiles: [dev]
+    volumes:
+      - ../targets/corp/metadata/devtap.conf:/etc/nginx/nginx.conf:ro
+    ports:
+      - "8280:80"
+    networks: [bench-internal, corp-dev]
+    depends_on: [corp-portal]
+
+# Mirrors docker-compose.yml exactly so that `include` merges the two definitions rather
+# than conflicting with them.
+networks:
+  bench-public:
+    name: bench-public
+    internal: true
+    ipam:
+      config:
+        - subnet: 10.88.0.0/24
+  bench-internal:
+    name: bench-internal
+    internal: true
+    ipam:
+      config:
+        - subnet: 10.77.0.0/24
+  # The instance's own management range. Internal, like the rest, and attached to
+  # exactly two containers.
+  corp-metadata:
+    name: corp-metadata
+    internal: true
+    ipam:
+      config:
+        - subnet: 169.254.169.0/24
+  # Used by the dev tap alone, and the only non-internal network in this fragment.
+  corp-dev:
+    name: corp-dev

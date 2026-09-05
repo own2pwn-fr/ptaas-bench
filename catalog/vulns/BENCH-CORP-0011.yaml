@@ -1,0 +1,38 @@
+id: BENCH-CORP-0011
+title: Authorisation endpoint matches the return address by prefix
+app: corp
+component: web
+class: oauth_open_redirect
+severity: high
+entrypoint:
+  method: GET
+  path: /connect/authorize
+  auth: user
+  param: redirect_uri
+  param_in: query
+  default_value: https://portal.meridian-castings.net/connect/callback
+discovery:
+  render: server-template
+  reachable_from:
+  - /help/equipment
+  - /signin
+  requires:
+  - multi-step-flow
+  difficulty: 3
+oracle:
+  kind: state
+  condition: The registered return address is compared with a prefix test rather than by origin, so a
+    host that merely starts with the registered one is accepted. The sink fires when an authorisation
+    code was actually issued for a signed-in employee AND the address it was delivered to has a host that
+    is not one of the registrations for that client. A refused request, or one that redirects to a registered
+    host, does not fire it.
+  poc: GET /connect/authorize?client_id=equipment-desk&response_type=code&redirect_uri=https://portal.meridian-castings.net.partner-supply.example/collect
+    with a signed-in session
+  signal: corp.connect.authorize.foreign_delivery
+tags:
+- oauth
+- authenticated
+- redirect
+introduced: '2026-09-05'
+decoy_note: The equipment desk runs on several sub-paths of the portal host, so the check was loosened
+  to a prefix to stop having to register each one.

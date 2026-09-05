@@ -1,0 +1,36 @@
+id: BENCH-CORP-0015
+title: Timesheet aggregation faults after the response has started
+app: corp
+component: api
+class: unhandled_exception
+severity: medium
+entrypoint:
+  method: GET
+  path: /api/reports/timesheets
+  auth: user
+  param: group
+  param_in: query
+  default_value: week
+discovery:
+  render: api-only
+  reachable_from:
+  - /reports
+  requires: []
+  difficulty: 3
+oracle:
+  kind: artifact
+  condition: Rows are written to the response a page at a time and the grouping key is applied to each
+    page once it has been flushed, so an unsupported key faults after a response that has already begun.
+    Because the response has started, the error handler cannot replace it and the client keeps whatever
+    was flushed. The sink fires when the exception escaped AND rows belonging to cost centres outside
+    the caller's own had already been written to the socket. A fault before the first page does not fire
+    it.
+  poc: GET /api/reports/timesheets?group=site%3Aunknown with the session cookie of a signed-in employee
+  signal: corp.reports.timesheets.partial_disclosure
+tags:
+- rest
+- authenticated
+- disclosure
+introduced: '2026-09-05'
+decoy_note: Streaming was added when the export grew past the response buffer, and the grouping key was
+  left free-form because the reporting team wanted to add keys without a deployment.

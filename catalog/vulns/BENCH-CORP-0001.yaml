@@ -1,0 +1,39 @@
+id: BENCH-CORP-0001
+title: Saved workspace layout is deserialised with type names honoured
+app: corp
+component: api
+class: deser_dotnet
+severity: critical
+entrypoint:
+  method: POST
+  path: /api/workspace/layout
+  auth: user
+  param: state
+  param_in: json
+  default_value: eyJjb2x1bW5zIjozLCJ0aWxlcyI6WyJhcHByb3ZhbHMiLCJvcmRlcnMiXX0=
+  content_type: application/json
+discovery:
+  render: server-template
+  reachable_from:
+  - /workspace
+  requires:
+  - form-submit
+  difficulty: 3
+oracle:
+  kind: sink
+  condition: 'The layout blob is base64-decoded and deserialised with type names honoured, so the document
+    chooses which classes are constructed. The sink runs AFTER deserialisation has returned and walks
+    the object graph it produced: it fires only when an instance whose type lives outside the portal''s
+    own assembly actually exists in that graph. A document that merely names a type which fails to resolve,
+    or that is rejected before construction, scores exercise and never fires.'
+  poc: POST /api/workspace/layout with the session cookie of a signed-in employee and {"state":"<base64
+    of {\"$type\":\"System.Collections.Generic.List`1[[System.String, System.Private.CoreLib]], System.Private.CoreLib\",\"$values\":[\"a\"]}>"}
+  signal: corp.workspace.layout.type_binding
+tags:
+- rest
+- json
+- authenticated
+introduced: '2026-09-05'
+decoy_note: The dashboard was extended with custom tile classes contributed by two other teams, and round-tripping
+  those subclasses through the saved layout is exactly what the type-name setting is for. Nobody revisited
+  it when the layout started being accepted from the browser rather than written by the server.

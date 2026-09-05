@@ -1,0 +1,51 @@
+@page "/admin/templates"
+@model Portal.Pages.Admin.AdminPageModel
+@{
+    ViewData["Title"] = "Templates";
+}
+
+<nav class="breadcrumbs"><a href="/">Home</a> / <a href="/admin">Administration</a> / Templates</nav>
+
+<h1>Document templates</h1>
+
+<div class="panel">
+    <p class="meta">Templates are plain text with placeholders in double braces. The operations team also browse this directory over the office share.</p>
+    <div class="form-row">
+        <label for="name">Name</label>
+        <input id="name" value="despatch-note" />
+    </div>
+    <div class="form-row">
+        <label for="body">Body</label>
+        <textarea id="body" rows="10" spellcheck="false">Despatch note for {{order}} - {{site}}</textarea>
+    </div>
+    <p>
+        <button id="load" class="btn" type="button">Load</button>
+        <button id="save" class="btn btn-primary" type="button">Save</button>
+    </p>
+    <pre id="out" class="panel"></pre>
+</div>
+
+<p class="meta">Back to <a href="/admin">administration</a>.</p>
+
+@section Scripts {
+<script>
+(function () {
+    var name = document.getElementById('name');
+    var body = document.getElementById('body');
+    var out = document.getElementById('out');
+    document.getElementById('load').addEventListener('click', function () {
+        fetch('/api/templates/' + encodeURIComponent(name.value))
+            .then(function (r) { return r.text(); })
+            .then(function (t) { body.value = t; });
+    });
+    document.getElementById('save').addEventListener('click', function () {
+        fetch('/api/templates/' + encodeURIComponent(name.value), {
+            method: 'PUT',
+            headers: { 'Content-Type': 'text/plain' },
+            body: body.value
+        }).then(function (r) { return r.text(); })
+          .then(function (t) { out.textContent = t; });
+    });
+})();
+</script>
+}

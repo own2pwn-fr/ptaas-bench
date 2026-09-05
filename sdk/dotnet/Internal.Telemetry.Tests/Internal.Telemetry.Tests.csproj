@@ -1,0 +1,33 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Unit tests. This project never ships inside a container, which is why it is the one
+    place in the tree where the platform's own words are allowed to be written down: the
+    word list the vocabulary check enforces has to live somewhere.
+  -->
+
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <LangVersion>13.0</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+    <RootNamespace>Internal.Telemetry.Tests</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.12.0" />
+    <PackageReference Include="xunit" Version="2.9.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Internal.Telemetry\Internal.Telemetry.csproj" />
+  </ItemGroup>
+
+</Project>

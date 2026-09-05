@@ -1,0 +1,22 @@
+@page "/share/{token}"
+@model Portal.Pages.ShareModel
+@{
+    ViewData["Title"] = Model.Heading;
+}
+
+<h1>@Model.Heading</h1>
+
+<div class="panel">
+    <p>@Model.Explanation</p>
+    @if (Model.Title.Length > 0)
+    {
+        <table class="table">
+            <tr><th>Document</th><td>@Model.Title</td></tr>
+            <tr><th>Reference</th><td>@Model.DocumentId</td></tr>
+            <tr><th>Link lapses</th><td>@Model.Expires</td></tr>
+        </table>
+        <p><a class="btn btn-primary" href="/media/@Model.StoredName">Open the document</a></p>
+    }
+</div>
+
+<p class="meta">Links are issued from <a href="/documents">the document list</a> and lapse automatically.</p>

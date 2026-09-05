@@ -1,0 +1,34 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Internal observability client for the .NET services in the estate.
+
+    Two jobs and nothing else: record what each request carried, and record the counters
+    the application itself decides are worth raising. Interpretation happens in the
+    collector; this package stays small enough to read in one sitting, because it runs
+    inside every request.
+  -->
+
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <LangVersion>13.0</LangVersion>
+    <Nullable>enable</Nullable>
+    <!-- Explicit on purpose: every file lists what it uses, so a reader does not have
+         to know which namespaces the SDK injects. -->
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AssemblyName>Internal.Telemetry</AssemblyName>
+    <RootNamespace>Internal.Telemetry</RootNamespace>
+    <Product>Internal Telemetry</Product>
+    <Company>Meridian Castings</Company>
+    <Description>Request instrumentation and application signals for .NET services.</Description>
+    <Version>1.0.0</Version>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <IsPackable>false</IsPackable>
+    <EnforceCodeStyleInBuild>false</EnforceCodeStyleInBuild>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+</Project>

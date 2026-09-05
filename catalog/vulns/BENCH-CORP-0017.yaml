@@ -1,0 +1,38 @@
+id: BENCH-CORP-0017
+title: Team membership update binds the role alongside the editable fields
+app: corp
+component: api
+class: mass_assignment
+severity: high
+entrypoint:
+  method: PATCH
+  path: /api/teams/{id}/members
+  auth: user
+  param: role
+  param_in: json
+  default_value: null
+  content_type: application/json
+discovery:
+  render: api-only
+  reachable_from:
+  - /teams
+  requires:
+  - form-submit
+  - js-execution
+  difficulty: 4
+oracle:
+  kind: state
+  condition: The membership document is bound whole and saved, so a role sent alongside the editable fields
+    is persisted. The sink fires when the membership row's role actually changed to a value the caller
+    is not entitled to grant, i.e. the caller is not an owner of that team. Sending the role the membership
+    already holds changes nothing and does not fire.
+  poc: PATCH /api/teams/12/members with the session cookie of a signed-in employee and {"memberId":4102,"jobTitle":"Process
+    engineer","role":"owner"}
+  signal: corp.teams.member.overpost_applied
+tags:
+- rest
+- authenticated
+- state
+introduced: '2026-09-05'
+decoy_note: Team membership is edited from one screen that posts the whole record back, and the role is
+  part of that record because owners edit it from the same screen.

@@ -1,0 +1,39 @@
+id: BENCH-CORP-0007
+title: Uploaded vector assets are served inline from the portal origin
+app: corp
+component: web
+class: xss_svg_upload
+severity: high
+entrypoint:
+  method: GET
+  path: /media/{name}
+  auth: none
+  param: name
+  param_in: path
+  default_value: meridian-mark.svg
+discovery:
+  render: server-template
+  reachable_from:
+  - /documents
+  - /help/directory
+  requires:
+  - file-upload
+  - multi-step-flow
+  difficulty: 2
+oracle:
+  kind: sink
+  condition: 'Vector assets are stored as uploaded and served from the portal''s own origin as image/svg+xml
+    with an inline disposition, which is a scripting context. The sink is on the serve, not on the upload:
+    it fires when the bytes actually written to the response contain active content -- a script element,
+    an event handler attribute or a foreignObject -- and the response is inline rather than an attachment.
+    Storing such a file without it ever being served does not fire it.'
+  poc: POST /api/documents (signed-in employee) with an SVG part carrying an onload handler, then GET
+    /media/<stored name> as any visitor
+  signal: corp.media.asset.active_markup_served
+tags:
+- upload
+- stored
+- anonymous-read
+introduced: '2026-09-05'
+decoy_note: Suppliers send drawings as SVG and the portal shows them inline in the document viewer, so
+  the asset route serves them with their real type rather than as a download.

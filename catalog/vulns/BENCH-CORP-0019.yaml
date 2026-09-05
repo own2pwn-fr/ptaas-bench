@@ -1,0 +1,36 @@
+id: BENCH-CORP-0019
+title: Profile form honours a method field that changes what it does
+app: corp
+component: web
+class: method_override
+severity: high
+entrypoint:
+  method: POST
+  path: /account/profile
+  auth: user
+  param: _method
+  param_in: body
+  default_value: null
+  content_type: application/x-www-form-urlencoded
+discovery:
+  render: server-template
+  reachable_from:
+  - /account/profile
+  requires:
+  - form-submit
+  difficulty: 2
+oracle:
+  kind: state
+  condition: The same override that the header carries is also read from a form field, and it is applied
+    after the authorisation decision. The sink fires when a destructive operation completed on a verb
+    the caller was never authorised for, i.e. the account was actually closed by a request that was admitted
+    as an ordinary profile save. A form field naming the verb the request already has does not fire it.
+  poc: POST /account/profile with a signed-in session and _method=DELETE&displayName=Helen+Abassi
+  signal: corp.profile.method.override_applied
+tags:
+- form
+- authenticated
+- state
+introduced: '2026-09-05'
+decoy_note: The form field was added at the same time as the header, for browsers that cannot send the
+  other verbs from a plain form, and it reads from the same place in the pipeline.

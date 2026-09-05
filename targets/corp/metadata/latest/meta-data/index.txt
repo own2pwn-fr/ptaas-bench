@@ -1,0 +1,11 @@
+ami-id
+hostname
+iam/
+instance-id
+instance-type
+local-hostname
+local-ipv4
+mac
+placement/
+public-hostname
+security-groups

@@ -1,0 +1,38 @@
+id: BENCH-CORP-0010
+title: Share link decryption answers differently for padding and for integrity
+app: corp
+component: api
+class: padding_oracle
+severity: high
+entrypoint:
+  method: GET
+  path: /share/{token}
+  auth: none
+  param: token
+  param_in: path
+  default_value: null
+discovery:
+  render: server-template
+  reachable_from:
+  - /documents
+  requires:
+  - multi-step-flow
+  difficulty: 3
+oracle:
+  kind: differential
+  condition: 'The share token is decrypted in chained block mode and its padding is stripped before its
+    authentication tag is checked, so a padding failure and an integrity failure are two different answers.
+    The sink does not fire on a single malformed token: it fires when one peer has received BOTH answers
+    for tokens that share a final ciphertext block and differ in the block before it, which is the exact
+    condition under which one plaintext byte has been determined. The counter is raised once per state
+    reset, on the request that completes the pair.'
+  poc: Take a valid share token, then request /share/<token> repeatedly with the penultimate block varied
+    until the answer changes from the invalid-link page to the expired-link page
+  signal: corp.share.token.padding_distinguished
+tags:
+- crypto
+- anonymous
+- differential
+introduced: '2026-09-05'
+decoy_note: Share links were built before the portal had an authenticated share list; the two error pages
+  are different because product asked for a friendlier message when a link has simply aged out.

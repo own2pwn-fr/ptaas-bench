@@ -1,0 +1,11 @@
+@page "/connect/authorize"
+@model Portal.Pages.Connect.AuthorizeModel
+@{
+    ViewData["Title"] = "Connect an application";
+}
+
+<h1>Connect an application</h1>
+<div class="panel">
+    <p>@Model.Message</p>
+    <p><a class="btn" href="/account">Back to your account</a></p>
+</div>

@@ -1,0 +1,7 @@
+User-agent: *
+Disallow: /account/
+Disallow: /admin/
+Disallow: /api/internal/
+Allow: /
+
+Sitemap: https://portal.meridian-castings.net/sitemap.xml

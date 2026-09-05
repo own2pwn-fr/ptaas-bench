@@ -1,0 +1,31 @@
+@page "/admin/integrations"
+@model Portal.Pages.Admin.AdminPageModel
+@{
+    ViewData["Title"] = "Integrations";
+}
+
+<nav class="breadcrumbs"><a href="/">Home</a> / <a href="/admin">Administration</a> / Integrations</nav>
+
+<h1>Integrations</h1>
+
+<div class="panel">
+    <p class="meta">Checks the endpoint from the portal itself, which is the only way to tell "the partner is down" from "the partner is down for us".</p>
+    <form method="post" action="/api/integrations/probe" class="form">
+        <div class="form-row">
+            <label for="endpoint">Endpoint</label>
+            <input id="endpoint" name="endpoint" value="https://api.partner-supply.example/health" />
+        </div>
+        <button class="btn btn-primary" type="submit">Check it</button>
+    </form>
+</div>
+
+<div class="panel">
+    <h2>Registered integrations</h2>
+    <ul>
+        <li>partner-supply &mdash; https://api.partner-supply.example/health</li>
+        <li>payroll &mdash; https://feeds.payroll-bureau.example/status</li>
+        <li>shift-board &mdash; https://shifts.meridian-castings.net/health</li>
+    </ul>
+</div>
+
+<p class="meta">Back to <a href="/admin">administration</a>.</p>

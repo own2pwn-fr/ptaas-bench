@@ -1,0 +1,12 @@
+@page "/signout"
+@model Portal.Pages.SignoutModel
+@{
+    ViewData["Title"] = "Signed out";
+}
+
+<h1>You are signed out</h1>
+<div class="panel">
+    <p>Your session on this device has ended. Close the browser if you are on a shared machine.</p>
+    <p><a class="btn btn-primary" href="/signin">Sign in again</a></p>
+</div>
+<p class="meta">Back to <a href="/">the home page</a> or <a href="/help">the help centre</a>.</p>

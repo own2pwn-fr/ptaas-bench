@@ -1,0 +1,11 @@
+@page "/reports/export"
+@model Portal.Pages.Reports.ExportModel
+@{
+    ViewData["Title"] = "Download";
+}
+
+<h1>Download</h1>
+<div class="panel">
+    <p>Your download of @Model.Rows rows in @Model.Format is being prepared and will start on its own.</p>
+    <p><a class="btn" href="/reports">Back to reports</a></p>
+</div>

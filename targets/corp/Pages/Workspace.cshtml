@@ -1,0 +1,49 @@
+@page "/workspace"
+@model Portal.Pages.WorkspaceModel
+@{
+    ViewData["Title"] = "Workspace";
+}
+
+<nav class="breadcrumbs"><a href="/">Home</a> / Workspace</nav>
+
+<h1>Your workspace</h1>
+
+<p class="meta">Arranged for @Model.DisplayName. Drag a tile to move it; the arrangement is saved for this account.</p>
+
+<div class="cards">
+    @foreach (var tile in Model.Tiles)
+    {
+        <div class="card">
+            <h3>@tile</h3>
+            <p class="meta">Tile width @Model.WidthOf(tile) of @Model.Columns.</p>
+        </div>
+    }
+</div>
+
+<div class="panel">
+    <h2>Shortcuts</h2>
+    <p><button id="save-layout" class="btn" type="button" data-state="@Model.EncodedState">Save this arrangement</button></p>
+    <ul>
+        <li><a href="/documents">Documents</a></li>
+        <li><a href="/approvals">Approvals</a></li>
+        <li><a href="/teams">Teams</a></li>
+        <li><a href="/reports">Reports</a></li>
+        <li><a href="/account">Your account</a></li>
+    </ul>
+</div>
+
+@section Scripts {
+<script>
+(function () {
+    var save = document.getElementById('save-layout');
+    if (!save) { return; }
+    save.addEventListener('click', function () {
+        fetch('/api/workspace/layout', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ state: save.getAttribute('data-state') })
+        });
+    });
+})();
+</script>
+}

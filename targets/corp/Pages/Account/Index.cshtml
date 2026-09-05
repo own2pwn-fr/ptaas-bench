@@ -1,0 +1,29 @@
+@page "/account"
+@model Portal.Pages.Account.IndexModel
+@{
+    ViewData["Title"] = "Your account";
+}
+
+<nav class="breadcrumbs"><a href="/">Home</a> / Your account</nav>
+
+<h1>Your account</h1>
+
+<div class="panel">
+    <table class="table">
+        <tr><th>Name</th><td>@Model.User.DisplayName</td></tr>
+        <tr><th>Work e-mail</th><td>@Model.User.Email</td></tr>
+        <tr><th>Nickname</th><td>@Model.User.Nickname</td></tr>
+        <tr><th>Telephone</th><td>@Model.User.Telephone</td></tr>
+        <tr><th>Site</th><td>@Model.User.Site</td></tr>
+        <tr><th>Cost centre</th><td>@Model.User.CostCentre</td></tr>
+        <tr><th>Approval limit</th><td>@Model.User.ApprovalLimit</td></tr>
+        <tr><th>Directory role</th><td>@Model.User.DirectoryRole</td></tr>
+    </table>
+</div>
+
+<p>
+    <a class="btn btn-primary" href="/account/profile">Edit your details</a>
+    <a class="btn" href="/signout">Sign out</a>
+</p>
+
+<p class="meta">See also <a href="/workspace">your workspace</a>, <a href="/documents">documents</a> and <a href="/approvals">approvals</a>.</p>

@@ -1,0 +1,47 @@
+@page "/documents"
+@model Portal.Pages.Documents.IndexModel
+@{
+    ViewData["Title"] = "Documents";
+}
+
+<nav class="breadcrumbs"><a href="/">Home</a> / Documents</nav>
+
+<h1>Documents</h1>
+
+<p class="meta">Everything the sites have filed here, newest first. Drawings are shown in place; other documents open in the viewer.</p>
+
+<div class="panel">
+    <h2>Add a document</h2>
+    <form method="post" enctype="multipart/form-data" action="/api/documents" class="form">
+        <div class="form-row">
+            <label for="title">Title</label>
+            <input id="title" name="title" required />
+        </div>
+        <div class="form-row">
+            <label for="name">File name to file it under</label>
+            <input id="name" name="name" value="site-plan.pdf" required />
+        </div>
+        <div class="form-row">
+            <label for="file">File</label>
+            <input id="file" name="file" type="file" required />
+        </div>
+        <button class="btn btn-primary" type="submit">File it</button>
+    </form>
+</div>
+
+<table class="table">
+    <tr><th>Reference</th><th>Title</th><th>Cost centre</th><th>Filed</th><th>Share</th></tr>
+    @foreach (var row in Model.Rows)
+    {
+        <tr>
+            <td>@row.Id</td>
+            <td><a href="/media/@row.StoredName">@row.Title</a></td>
+            <td>@row.CostCentre</td>
+            <td>@row.Created</td>
+            <td><a href="/share/@row.ShareToken">link</a></td>
+        </tr>
+    }
+</table>
+
+<p class="meta">The company mark is filed here too: <a href="/media/meridian-mark.svg">meridian-mark.svg</a>.</p>
+<p class="meta">Back to <a href="/workspace">your workspace</a>.</p>

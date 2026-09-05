@@ -1,0 +1,37 @@
+id: BENCH-CORP-0004
+title: Approval decision is authorised on one verb and dispatched on another
+app: corp
+component: api
+class: method_override
+severity: high
+entrypoint:
+  method: POST
+  path: /api/approvals/{id}
+  auth: user
+  param: X-HTTP-Method-Override
+  param_in: header
+  default_value: null
+discovery:
+  render: api-only
+  reachable_from:
+  - /approvals
+  requires:
+  - custom-header
+  difficulty: 4
+oracle:
+  kind: state
+  condition: The override header is applied to the request method AFTER the authorisation filter has already
+    decided on the original verb. The sink fires when a state-changing operation completed on a verb that
+    differs from the one the authorisation decision was taken on, and the caller would have been refused
+    on the dispatched verb. Sending the header on a request whose two verbs are authorised identically
+    does not fire it.
+  poc: 'POST /api/approvals/8841 with the session cookie of a signed-in employee, X-HTTP-Method-Override:
+    DELETE and an empty body'
+  signal: corp.approvals.method.override_applied
+tags:
+- rest
+- authenticated
+- state
+introduced: '2026-09-05'
+decoy_note: The override header was added for a partner whose network appliance strips PUT and DELETE.
+  It was wired into the pipeline where it was easiest to add rather than before authorisation.
