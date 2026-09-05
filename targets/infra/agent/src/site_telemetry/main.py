@@ -34,7 +34,8 @@ class Estate:
     def __init__(self) -> None:
         self.telemetry = emit.start(service=os.environ.get("TELEMETRY_SERVICE", "infra"))
         self.state = deployment.SeededState()
-        self.counters = evidence.Counters(self.state, settings.sites_root, self.report)
+        self.counters = evidence.Counters(self.state, settings.sites_root, self.report,
+                                          site_domain=settings.site_domain)
         self.access = None
         self.taps: list = []
         self.lock = threading.Lock()
@@ -89,7 +90,8 @@ class Estate:
         from .httplog import AccessLog
         from .store_taps import KeyValueTap, RecordsTap, SearchTap
 
-        self.access = AccessLog(settings.access_log, self.counters, settings.poll_interval)
+        self.access = AccessLog(settings.access_log, self.counters, settings.poll_interval,
+                                site_domain=settings.site_domain)
         self.access.start()
         self.taps = [
             KeyValueTap("cache", settings.cache_host, settings.cache_port, self.counters,

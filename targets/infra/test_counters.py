@@ -34,7 +34,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT / "agent" / "src"))
 
-from site_telemetry import evidence, httplog                        # noqa: E402
+from site_telemetry import evidence, httplog, vhosts                # noqa: E402
 from site_telemetry.seed.run import SeededState                     # noqa: E402
 from site_telemetry.store_taps import unquote_arguments             # noqa: E402
 
@@ -88,7 +88,7 @@ class Recorder:
 def counters() -> tuple[evidence.Counters, Recorder]:
     root, state = estate()
     recorder = Recorder()
-    counter = evidence.Counters(state, root, recorder)
+    counter = evidence.Counters(state, root, recorder, site_domain="northlakefab.com")
     counter.reload(state, log_floor=100, at=1000.0)
     return counter, recorder
 
@@ -319,6 +319,57 @@ def test_the_command_stream_is_split_the_way_the_store_wrote_it():
         ["GET", "nlf_cache:page:index"]
     assert unquote_arguments('"SET" "k" "a b\\x00c"') == ["SET", "k", "a b\x00c"]
     assert unquote_arguments('"scan" "0" "COUNT" "100"') == ["scan", "0", "COUNT", "100"]
+
+
+# ---------------------------------------------------------------------------
+# which site answered
+# ---------------------------------------------------------------------------
+
+def test_a_name_is_resolved_to_the_site_that_claims_it():
+    resolve = vhosts.resolve
+    for name in ("www.northlakefab.com", "WWW.NorthlakeFab.com.", "www.northlakefab.com:80",
+                 "northlakefab.com", "infra-web", "web01"):
+        assert resolve(name, "northlakefab.com") == "www", name
+    for name in ("static.northlakefab.com", "assets.northlakefab.com:8080"):
+        assert resolve(name, "northlakefab.com") == "static", name
+    for name in ("docs.northlakefab.com", "handbook.northlakefab.com"):
+        assert resolve(name, "northlakefab.com") == "docs", name
+
+
+def test_a_name_no_site_claims_is_left_unresolved():
+    """The first site answers anything unrecognised, but that is a fact about the
+    configuration; asserting it on the record would be indistinguishable, downstream,
+    from having observed it."""
+    for name in ("", None, "10.88.0.4", "[2001:db8::1]:80", "partner-cdn.test",
+                 "elsewhere.example"):
+        assert vhosts.resolve(name, "northlakefab.com") is None, name
+    # The document root, on the other hand, always answers: the bytes came from
+    # somewhere, and for an unrecognised name they came from the public site.
+    assert vhosts.document_root("10.88.0.4", "northlakefab.com") == "www"
+
+
+def test_the_record_carries_the_site_and_otherwise_the_librarys_own_shape():
+    """The reader builds its own request record so it can add the site that answered.
+    If the library's shape moves, this fails rather than the two drifting apart."""
+    from site_telemetry import emit
+
+    captured = []
+    client = emit.start(service="infra", sender=lambda path, batch: captured.extend(batch),
+                        synthetic_cidrs=("10.77.0.0/24",))
+    client.record_request(method="GET", route="/", path="/", status=200,
+                          peer_ip="10.88.0.9", client_ip="10.88.0.9",
+                          user_agent="curl", request_id="a")
+    emit.record_request(method="GET", route="/", path="/", status=200, peer="10.88.0.9",
+                        user_agent="curl", identifier="b", host="static")
+    emit.record_request(method="GET", route="/", path="/", status=200, peer="10.88.0.9",
+                        user_agent="curl", identifier="c")
+    client.flush(2.0)
+    library, with_host, without_host = captured
+    assert set(with_host) == set(library) | {"host"}, (
+        f"library: {sorted(set(library))}, reader: {sorted(set(with_host))}")
+    assert with_host["host"] == "static"
+    assert "host" not in without_host
+    assert without_host["peer_ip"] == "10.88.0.9" and without_host["synthetic"] is False
 
 
 # ---------------------------------------------------------------------------

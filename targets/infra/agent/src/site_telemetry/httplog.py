@@ -27,7 +27,7 @@ import urllib.parse
 
 from telemetry_agent import describe_param
 
-from . import emit
+from . import emit, vhosts
 
 # Fields, in the order the server writes them. The last field is free text, so the split
 # is bounded and everything after the ninth separator belongs to it.
@@ -157,11 +157,13 @@ class AccessLog(threading.Thread):
 
     daemon = True
 
-    def __init__(self, path: str, counters, interval: float = 0.25) -> None:
+    def __init__(self, path: str, counters, interval: float = 0.25,
+                 site_domain: str | None = None) -> None:
         super().__init__(name="access-log")
         self.follower = Follower(path)
         self.counters = counters
         self.interval = interval
+        self.site_domain = site_domain
         self.stopping = threading.Event()
         self.processed = 0
         # The first open starts at the end of the file: lines already in it describe a
@@ -208,6 +210,10 @@ class AccessLog(threading.Thread):
             params=params,
             user_agent=record["agent"],
             identifier=identifier,
+            # Which of the three sites answered. The same path is a leak on one of them
+            # and a correctly refused request on the others, so a record that does not
+            # say which one credits all three.
+            host=vhosts.resolve(record["host"], self.site_domain),
         )
         self.counters.web_response(
             peer=record["peer"],

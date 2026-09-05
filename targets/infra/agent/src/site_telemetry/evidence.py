@@ -33,6 +33,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Callable
 
+from . import vhosts
+
 MEDIA_LISTING = "infra.media.index.enumerated"
 SITE_REPOSITORY = "infra.deploy.repo.object_served"
 ENVIRONMENT_FILE = "infra.deploy.env.secret_served"
@@ -63,10 +65,12 @@ class _Halves:
 class Counters:
     """Thread-safe: four readers feed it, one deployment routine resets it."""
 
-    def __init__(self, state, sites_root: str, report: Reporter) -> None:
+    def __init__(self, state, sites_root: str, report: Reporter,
+                 site_domain: str | None = None) -> None:
         self.lock = threading.Lock()
         self.report = report
         self.sites_root = sites_root
+        self.site_domain = site_domain
         self.state = state
         self.log_floor = 0
         self.time_floor = 0.0
@@ -100,12 +104,8 @@ class Counters:
     # ------------------------------------------------------------------ sizes
 
     def _root_for(self, host: str) -> str:
-        name = (host or "").split(":")[0].lower()
-        if name.startswith("static.") or name.startswith("assets."):
-            return os.path.join(self.sites_root, "static")
-        if name.startswith("docs."):
-            return os.path.join(self.sites_root, "docs")
-        return os.path.join(self.sites_root, "www")
+        """The document root the bytes came from, decided the way the server decides it."""
+        return os.path.join(self.sites_root, vhosts.document_root(host, self.site_domain))
 
     def size_on_disk(self, host: str, path: str) -> int | None:
         key = f"{host}|{path}"

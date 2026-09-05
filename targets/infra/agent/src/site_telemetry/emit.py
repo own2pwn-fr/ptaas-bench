@@ -15,6 +15,7 @@ here the client is whoever is looking at us.
 
 from __future__ import annotations
 
+import time
 import uuid
 from contextlib import contextmanager
 from typing import Any, Iterator, Mapping
@@ -59,20 +60,37 @@ def observed(peer: str, route: str | None = None, identifier: str | None = None,
 
 def record_request(*, method: str, route: str, path: str, status: int | None,
                    peer: str, params=(), user_agent: str = "",
-                   identifier: str | None = None) -> None:
+                   identifier: str | None = None, host: str | None = None) -> None:
+    """Export one request record.
+
+    Built here rather than handed to ``TelemetryClient.record_request`` for one reason:
+    this estate serves several sites from one server, so a record has to say which of
+    them answered, and an in-process middleware -- which is what that method was written
+    for -- never has to, because a process is one site. The shape is otherwise the
+    library's own, and a test holds the two together.
+    """
     telemetry = get_telemetry()
-    telemetry.record_request(
-        method=method,
-        route=route,
-        path=path,
-        status=status,
-        params=list(params),
-        client_ip=peer,
-        user_agent=user_agent,
-        request_id=identifier or request_id(),
-        synthetic=telemetry.is_synthetic_peer(peer),
-        peer_ip=peer,
-    )
+    record = {
+        "type": "http_request",
+        "app": telemetry.config.service,
+        "ts": time.time(),
+        "synthetic": telemetry.is_synthetic_peer(peer),
+        "peer_ip": peer,
+        "method": method,
+        "route": route,
+        "path": path,
+        "status": status,
+        "auth_subject": None,
+        "client_ip": peer,
+        "user_agent": user_agent or "",
+        "params": list(params),
+        "request_id": identifier or request_id(),
+    }
+    # Absent rather than guessed: a name none of the sites claims is served by the first
+    # one, which is a fact about the configuration and not about the visitor.
+    if host:
+        record["host"] = host
+    telemetry.emit(record)
 
 
 def signal(name: str, attributes: Mapping[str, Any], *, peer: str,
