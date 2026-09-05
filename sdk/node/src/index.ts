@@ -25,6 +25,10 @@ export type {
   WebSocketFrame,
 } from "./client.js";
 export type { ResolvedConfig, TelemetryOptions } from "./config.js";
+// Exported so a non-HTTP entry point — a socket server, a queue consumer — can put the
+// same request-scoped facts in scope for whatever it invokes.
+export { currentContext, runInContext } from "./context.js";
+export type { RequestContext } from "./context.js";
 export { telemetryMiddleware } from "./middleware.js";
 export type { MiddlewareOptions } from "./middleware.js";
 export { observe, rawValue, sha256, truncateSample, SAMPLE_MAX_CHARS } from "./attributes.js";

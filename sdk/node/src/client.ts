@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 
 import { flattenInto, observe, rawValue } from "./attributes.js";
 import { resolveConfig, type ResolvedConfig, type TelemetryOptions } from "./config.js";
+import { currentContext } from "./context.js";
 import { Transport, type TransportStats } from "./transport.js";
 import {
   SIGNAL_NAME_PATTERN,
@@ -47,6 +48,8 @@ export interface WebSocketFrame {
   messageType?: string;
   authSubject?: string | null;
   clientIp?: string;
+  /** Socket peer of the upgrade request. Never a value taken from a header. */
+  peerIp?: string;
   synthetic?: boolean;
 }
 
@@ -62,6 +65,8 @@ export interface EgressDeclaration {
   param?: string;
   /** Correlation id; generated when omitted, and returned. */
   requestId?: string;
+  /** Socket peer, when the caller is not running inside an instrumented request. */
+  peerIp?: string;
   synthetic?: boolean;
 }
 
@@ -110,6 +115,16 @@ export class TelemetryClient {
     try {
       if (!event.app) event.app = this.config.service;
       if (event.ts === undefined) event.ts = Date.now() / 1000;
+      // Events raised inside a handler inherit the request they belong to, so a
+      // counter incremented three call frames down still says who provoked it.
+      // Explicit values win: the middleware has read the socket directly.
+      const context = currentContext();
+      if (context) {
+        if (event.peer_ip === undefined && context.peerIp !== undefined) {
+          event.peer_ip = context.peerIp;
+        }
+        if (event.synthetic === undefined && context.synthetic) event.synthetic = true;
+      }
       this.transport.enqueue(event);
     } catch {
       // Unreachable in practice; kept because "never throws" is a property this class
@@ -189,7 +204,10 @@ export class TelemetryClient {
       };
       if (declaration.route) correlation.route = declaration.route;
       if (declaration.param) correlation.param = declaration.param;
-      if (declaration.synthetic) correlation.synthetic = true;
+      const context = currentContext();
+      const peerIp = declaration.peerIp ?? context?.peerIp;
+      if (peerIp) correlation.peer_ip = peerIp;
+      if (declaration.synthetic ?? context?.synthetic) correlation.synthetic = true;
       this.transport.dispatchCorrelation(correlation);
     } catch {
       // Same contract as everything else here: a missing data point, never a failure.
@@ -264,6 +282,7 @@ export class TelemetryClient {
       params: attributes,
       ...(frame.authSubject !== undefined ? { auth_subject: frame.authSubject } : {}),
       ...(frame.clientIp ? { client_ip: frame.clientIp } : {}),
+      ...(frame.peerIp ? { peer_ip: frame.peerIp } : {}),
       ...(frame.synthetic ? { synthetic: true } : {}),
     } satisfies HttpRequestEvent);
   }

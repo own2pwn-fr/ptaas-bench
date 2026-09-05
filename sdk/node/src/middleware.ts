@@ -1,9 +1,11 @@
 import { TELEMETRY_REQUEST_STATE, type RequestState, type TelemetryClient } from "./client.js";
+import { runInContext, type RequestContext } from "./context.js";
 import {
   clientIp,
   collectAttributes,
   headerValue,
   isSynthetic,
+  peerAddress,
   type RequestLike,
 } from "./request.js";
 import { composeRoute, watchRoute } from "./route.js";
@@ -77,6 +79,7 @@ export function telemetryMiddleware(options: MiddlewareOptions = {}) {
     // chain synchronously, so wrapping it would both swallow the application's own
     // errors and risk a second next() from the catch clause.
     let client: TelemetryClient | null = null;
+    let context: RequestContext | null = null;
     try {
       const candidate = options.client ?? getDefaultClient();
       if (candidate.enabled && !(ignore && ignore(req))) client = candidate;
@@ -93,6 +96,11 @@ export function telemetryMiddleware(options: MiddlewareOptions = {}) {
 
       const state: RequestState = { extraAttributes: [] };
       request[TELEMETRY_REQUEST_STATE] = state;
+
+      // Read once, here, from the socket. Everything downstream — this event, any
+      // counter raised inside the handler, any outbound declaration — reports this
+      // same address, so there is exactly one place where it could be got wrong.
+      context = { peerIp: peerAddress(request), synthetic: isSynthetic(request, active.config) };
 
       const readRoute = watchRoute(request as never);
       let lateParams: Record<string, unknown> | null = null;
@@ -123,9 +131,10 @@ export function telemetryMiddleware(options: MiddlewareOptions = {}) {
           };
           const ip = clientIp(request);
           if (ip) event.client_ip = ip;
+          if (context?.peerIp) event.peer_ip = context.peerIp;
           const ua = headerValue(request, "user-agent");
           if (ua) event.user_agent = ua;
-          if (isSynthetic(request, active.config)) event.synthetic = true;
+          if (context?.synthetic) event.synthetic = true;
 
           active.emit(event);
         } catch {
@@ -158,7 +167,10 @@ export function telemetryMiddleware(options: MiddlewareOptions = {}) {
       // Falling through to next() is the only acceptable failure mode.
     }
 
-    return next();
+    // Still exactly one call to next(), still outside every try. runInContext passes
+    // the return value through and rethrows, so the application's error handling is
+    // reached in the same way and at the same point as without it.
+    return context === null ? next() : runInContext(context, next);
   };
 }
 

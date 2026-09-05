@@ -41,6 +41,15 @@ export interface EventBase {
   app: string;
   ts?: number;
   /**
+   * Address of the peer that opened the connection, straight from the socket.
+   *
+   * Distinct from `client_ip` on purpose. `client_ip` honours `trust proxy` and so is
+   * ultimately whatever `X-Forwarded-For` said, which any caller can write; it is kept
+   * because it is usually the address a human wants to see, but it is description, not
+   * evidence. Anything that decides how an event is treated reads `peer_ip`.
+   */
+  peer_ip?: string;
+  /**
    * Traffic from the platform's own synthetic monitoring probes rather than from a
    * real client. Recorded, but kept out of the service-level statistics: uptime probes
    * would otherwise dominate the request mix of a quiet endpoint.
@@ -95,6 +104,8 @@ export type TelemetryEvent = HttpRequestEvent | SignalEvent | NoteEvent | OobEve
 export interface EgressCorrelation {
   app: string;
   ts?: number;
+  /** Socket peer of the request that caused the outbound call. Never a header value. */
+  peer_ip?: string;
   signal: string;
   destination_host: string;
   route?: string;
