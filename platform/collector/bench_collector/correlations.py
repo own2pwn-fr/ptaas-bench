@@ -20,6 +20,7 @@ bug reachable by the subject of the benchmark.
 
 from __future__ import annotations
 
+import asyncio
 import time
 import uuid
 from collections import OrderedDict
@@ -37,6 +38,9 @@ class CorrelationRegistry:
         # which compares it against the timestamps of its own observations.
         self.clock: Clock = clock or time.time
         self._entries: OrderedDict[str, dict[str, Any]] = OrderedDict()
+        # Woken on every registration, so a sinkhole that observed the callback first
+        # can wait for the hint instead of losing the join. See wait_for.
+        self._arrival = asyncio.Event()
         self.registered = 0
         self.expired = 0
         self.overflowed = 0
@@ -54,6 +58,8 @@ class CorrelationRegistry:
         self._evict(now)
         self._entries[entry["correlation_id"]] = entry
         self.registered += 1
+        self._arrival.set()
+        self._arrival = asyncio.Event()
         while len(self._entries) > self.max_entries:
             # Oldest first: a hint that has been pending longest is the least likely
             # to still be waiting for its callback.
@@ -68,6 +74,35 @@ class CorrelationRegistry:
             wanted = destination_host.strip().rstrip(".").lower()
             entries = [entry for entry in entries if _host_matches(entry, wanted)]
         return entries
+
+    async def wait_for(self, destination_host: str | None, timeout: float) -> list[dict[str, Any]]:
+        """Pending hints for a host, waiting up to ``timeout`` for one to be registered.
+
+        Ordering between a hint and the callback it describes is not guaranteed: the
+        SDK dispatches each hint immediately on its own connection precisely because
+        the DNS lookup follows within microseconds, and either can win. Whichever
+        arrives second has to complete the join, so the sinkhole that arrives first
+        waits here rather than concluding the callback was unattributable.
+
+        This is an optimisation for live attribution, not the system of record. Both
+        sides also land in the run's event stream with their own seq, so the
+        authoritative join is done offline by the scorer, where arrival order does not
+        matter at all.
+        """
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + max(timeout, 0.0)
+        while True:
+            matches = self.pending(destination_host)
+            if matches or timeout <= 0:
+                return matches
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                return []
+            arrival = self._arrival
+            try:
+                await asyncio.wait_for(arrival.wait(), remaining)
+            except TimeoutError:
+                return self.pending(destination_host)
 
     def get(self, correlation_id: str) -> dict[str, Any] | None:
         self._evict(self.clock())

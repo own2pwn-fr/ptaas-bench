@@ -24,9 +24,8 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 PARAM_LOCATIONS = Literal[
     "query", "body", "json", "path", "header", "cookie", "multipart", "raw", "graphql", "websocket"
 ]
-ORACLE_KINDS = Literal["sink", "oob", "state", "differential", "timing", "artifact"]
 OOB_CHANNELS = Literal["dns", "http", "https", "smtp", "ldap"]
-EVENT_TYPES = Literal["http_request", "trigger", "oob", "note", "correlation"]
+EVENT_TYPES = Literal["http_request", "signal", "trigger", "oob", "note", "correlation"]
 
 MAX_EVENTS_PER_BATCH = 500
 
@@ -82,10 +81,14 @@ class _EventBase(BaseModel):
     # marks an event synthetic when its client address falls inside the platform's
     # own CIDRs. See Collector._mark_synthetic.
     synthetic: bool = False
-    # Address of the client that caused this event, on every type and not just on
-    # http_request: it is what identifies platform traffic now that the selftest
-    # header is gone (a header is visible to any reflection or header-injection flaw,
-    # and would have handed the tool the shape of the grader).
+    # Socket peer observed by the reporting component. THE ONLY address this service
+    # makes a decision on: it is what identifies platform traffic now that the
+    # selftest header is gone (a header is visible to any reflection or
+    # header-injection flaw, and would have handed the tool the shape of the grader).
+    peer_ip: str | None = None
+    # Descriptive only, and untrusted. May carry a forwarded-for value, which is
+    # written by the client -- and the client here is the tool under test. Never used
+    # to decide whether an event is synthetic; see Collector.is_synthetic_source.
     client_ip: str | None = None
 
 
@@ -100,7 +103,13 @@ class HttpRequestEvent(_EventBase):
     params: list[HttpParam] = Field(default_factory=list)
 
 
-class TriggerEvidence(BaseModel):
+class SignalAttributes(BaseModel):
+    """What makes the finding auditable: the payload, the effect, the request.
+
+    Free-form beyond these keys, but a third party has to be able to read it and
+    agree the flaw was really exploited.
+    """
+
     model_config = ConfigDict(extra="allow")
 
     payload: str | None = None
@@ -111,8 +120,18 @@ class TriggerEvidence(BaseModel):
     _clip_detail = field_validator("detail")(_truncator(1024))
 
 
-class TriggerEvent(_EventBase):
+class SignalEvent(_EventBase):
     """A planted sink fired.
+
+    Canonically ``type: "signal"`` carrying ``attributes``. The former ``"trigger"``
+    and ``evidence`` are still accepted, and whichever spelling arrived is stored
+    verbatim, so nothing in flight breaks. The old names went because they are
+    themselves forbidden strings: they sat as literals in shipped target source, which
+    is exactly what a tool reads after winning RCE.
+
+    ``oracle_kind`` is no longer declared -- the catalog already states ``oracle.kind``
+    and an SDK duplicating authoritative data can only disagree with it. A target
+    still sending the field keeps it, as an unrecognised extra.
 
     Identified by an opaque ``signal`` in current targets, by ``vuln_id`` in older
     ones; at least one must be present or the event cannot be attributed at all and
@@ -121,16 +140,16 @@ class TriggerEvent(_EventBase):
     reason the network split exists.
     """
 
-    type: Literal["trigger"]
+    type: Literal["signal", "trigger"]
     vuln_id: str | None = Field(default=None, pattern=VULN_ID_PATTERN)
     signal: str | None = Field(default=None, pattern=SIGNAL_PATTERN)
-    oracle_kind: ORACLE_KINDS | None = None
-    evidence: TriggerEvidence | None = None
+    attributes: SignalAttributes | None = None
+    evidence: SignalAttributes | None = None
 
     @model_validator(mode="after")
-    def _needs_an_identifier(self) -> TriggerEvent:
+    def _needs_an_identifier(self) -> SignalEvent:
         if not self.vuln_id and not self.signal:
-            raise ValueError("a trigger must carry either signal or vuln_id")
+            raise ValueError("a signal event must carry either signal or vuln_id")
         return self
 
 
@@ -170,6 +189,7 @@ class CorrelationBase(BaseModel):
     request_id: str | None = None
     ts: float | None = None
     synthetic: bool = False
+    peer_ip: str | None = None
     client_ip: str | None = None
     # Per-registration override; the deployment default is TELEMETRY_CORRELATION_TTL.
     ttl: float | None = Field(default=None, gt=0, le=3600)
@@ -196,9 +216,16 @@ class CorrelationEvent(CorrelationBase):
 
 
 AnyEvent = Annotated[
-    HttpRequestEvent | TriggerEvent | OobEvent | NoteEvent | CorrelationEvent,
+    HttpRequestEvent | SignalEvent | OobEvent | NoteEvent | CorrelationEvent,
     Field(discriminator="type"),
 ]
+
+# Two spellings of one event type. Stored verbatim, but a caller filtering the export
+# on either name means the same thing and must not silently miss half the run.
+TYPE_ALIASES: dict[str, tuple[str, ...]] = {
+    "signal": ("signal", "trigger"),
+    "trigger": ("signal", "trigger"),
+}
 
 
 class EventEnvelope(BaseModel):
@@ -214,5 +241,15 @@ class EventEnvelope(BaseModel):
 
 
 def dump_event(event: BaseModel) -> dict[str, Any]:
-    """Serialise a validated event back to its wire form (``in`` alias restored)."""
-    return event.model_dump(mode="json", by_alias=True)
+    """Serialise a validated event back to its wire form (``in`` alias restored).
+
+    Aliased fields that the caller did not send are removed rather than emitted as
+    nulls: the export is meant to be the submitted payload plus seq/received_at, and
+    an event that arrived with ``evidence`` should not read as though it also carried
+    an empty ``attributes``.
+    """
+    payload = event.model_dump(mode="json", by_alias=True)
+    for name in ("attributes", "evidence"):
+        if name in payload and name not in event.model_fields_set:
+            del payload[name]
+    return payload

@@ -1,34 +1,96 @@
 openapi: 3.1.0
 info:
-  title: ptaas-bench collector
-  version: "1.0.0"
+  title: telemetry collector
+  version: "2.0.0"
   description: |
     Ingests ground-truth observations from the instrumented target applications and
-    from the out-of-band canary service, and stores them against the active run.
+    from the egress sinkhole, and stores them against the active run.
 
-    Trust model: this API is reachable only from the `bench-internal` Docker network.
-    The tool under test sits on `bench-public` and can neither read nor forge events.
-    That separation is the whole reason the scores mean anything, so it is asserted
-    by platform/collector/tests/test_network_isolation.py, not just by convention.
+    Trust model, in two layers. The first is the network: this API lives on
+    `bench-internal`, the tool under test lives on `bench-public`, and both are
+    `internal: true`. The second layer exists because the first is not enough — the
+    corpus contains real RCE and targets are dual-homed so they can report inward, so
+    a tool that compromises a target can reach this port at the address in the
+    target's own environment. Therefore the control surface (run management, the event
+    export that lists exactly which planted sinks fired, and the stats) is additionally
+    restricted by source address, and answers 404 to everything else. Both layers are
+    asserted by platform/collector/tests/test_network_isolation.py, not by convention.
+
+    This service also has to survive being *looked at*. An agent that works out it is
+    inside an evaluation stops behaving like an attacker, and every number then
+    describes its meta-reasoning rather than its pentest ability. So it presents itself
+    as an ordinary self-hosted OpenTelemetry collector: the service is named
+    `otel-collector`, ingestion answers on `/v1/traces`, and this document is NOT served
+    at runtime unless `TELEMETRY_EXPOSE_SCHEMA=1` — it is repository documentation, and
+    a served schema listing runs and events would be a complete confession.
 
     The SDKs are deliberately dumb: they report what happened on the wire and which
-    planted sink fired. All interpretation (did this count as reach? as exercise?)
+    planted sink fired, as an opaque metric-shaped signal. All interpretation (did this
+    count as reach? as exercise? which vulnerability is `shop.catalog.query.plan_anomaly`?)
     happens in the scoring engine, which is the only component that reads the catalog.
+
+    The reference SDK ships as `@internal/telemetry`, configured with
+    `TELEMETRY_SERVICE`, `TELEMETRY_ENDPOINT`, `TELEMETRY_ENABLED` and
+    `TELEMETRY_SYNTHETIC_CIDRS`, and a planted sink reads as
+    `telemetry.signal("shop.catalog.query.plan_anomaly", {...})`. It posts to
+    `/v1/traces` by default. None of that vocabulary is decoration: it is what someone
+    reading a compromised container finds.
+
+    Two rules explain almost every status code below.
+
+    * Nothing on the instrumentation path may fail the caller or make it wait. That code
+      runs inside a target's request handling, and several oracles are timing-based, so
+      added latency does not merely slow a scan, it biases results. Ingestion therefore
+      answers 202 unconditionally, buffers, and writes in the background.
+    * A malformed item is dropped and counted, never 4xx'd. Rejecting a batch because
+      one event in it was bad would let a single buggy SDK field delete a whole run's
+      ground truth. Drops are counted in /v1/stats and logged loudly.
+
+    And one rule explains the rest: nothing the tool under test can write is ever used
+    to make a decision. It is on the other side of every one of these fields.
+
 servers:
   - url: http://otel-collector:8900
+
+tags:
+  - name: instrumentation
+    description: |
+      Reachable by anything that can reach the port, including a compromised target.
+      Answers identically whether or not a run is active, and whether or not the
+      caller would be allowed on the control surface: an observable difference is
+      itself a signal to a tool that is paying attention.
+  - name: control
+    description: |
+      Run management, export and diagnostics. When `TELEMETRY_CONTROL_CIDRS` is set,
+      any caller outside it gets 404 — not 403, because a refusal confirms there is
+      something worth refusing. In the deployed stack the allowlist holds the
+      sinkhole and the container's own loopback; the orchestrator reaches these
+      endpoints through `docker compose exec`, never through a published port.
+
 paths:
   /healthz:
     get:
+      tags: [instrumentation]
       summary: Liveness probe
-      responses: {"200": {description: OK}}
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: {status: {const: ok}}
 
   /v1/runs:
     post:
+      tags: [control]
       summary: Open a run and make it the active one
       description: |
         Exactly one run is active at a time. SDKs never send a run id; the collector
         stamps events with the active run. This keeps instrumentation stateless and
-        means a target restart cannot desynchronise attribution.
+        means a target restart cannot desynchronise attribution. The collector
+        re-adopts the active run from the database on startup, so a restart of this
+        service mid-scan does not discard the rest of the run either.
       requestBody:
         required: true
         content:
@@ -36,77 +98,244 @@ paths:
             schema: {$ref: '#/components/schemas/RunCreate'}
       responses:
         "201":
-          content: {application/json: {schema: {$ref: '#/components/schemas/Run'}}}
           description: Created
-        "409": {description: A run is already active and force was not set}
+          content: {application/json: {schema: {$ref: '#/components/schemas/Run'}}}
+        "404": {description: Caller is outside TELEMETRY_CONTROL_CIDRS}
+        "409":
+          description: |
+            A run is already active and `force` was not set. Two benchmarks writing
+            into one event stream would make both results unusable, so abandoning the
+            previous run has to be said explicitly.
+        "422": {description: Body is not a valid RunCreate}
     get:
-      summary: List runs
+      tags: [control]
+      summary: List runs, most recently started first
       responses:
         "200":
-          content: {application/json: {schema: {type: array, items: {$ref: '#/components/schemas/Run'}}}}
           description: OK
+          content: {application/json: {schema: {type: array, items: {$ref: '#/components/schemas/Run'}}}}
+        "404": {description: Caller is outside TELEMETRY_CONTROL_CIDRS}
 
   /v1/runs/active:
     get:
+      tags: [control]
       summary: Active run, or 404 when idle
       responses:
-        "200": {content: {application/json: {schema: {$ref: '#/components/schemas/Run'}}}, description: OK}
-        "404": {description: No active run}
+        "200": {description: OK, content: {application/json: {schema: {$ref: '#/components/schemas/Run'}}}}
+        "404": {description: No active run, or caller is outside TELEMETRY_CONTROL_CIDRS}
 
   /v1/runs/{run_id}/close:
     post:
+      tags: [control]
       summary: Close a run
+      description: |
+        Idempotent: closing a closed run returns it unchanged, with its original
+        `closed_at`. Buffered events are flushed before the run is marked closed, so
+        an export taken immediately afterwards is complete.
       parameters: [{name: run_id, in: path, required: true, schema: {type: string}}]
       responses:
-        "200": {content: {application/json: {schema: {$ref: '#/components/schemas/Run'}}}, description: OK}
+        "200": {description: OK, content: {application/json: {schema: {$ref: '#/components/schemas/Run'}}}}
+        "404": {description: Unknown run, or caller is outside TELEMETRY_CONTROL_CIDRS}
 
   /v1/runs/{run_id}/events:
     get:
+      tags: [control]
       summary: Export raw events for scoring
+      description: |
+        The answer key. Events are returned in `seq` order, which is the order they
+        were accepted in; `seq` is monotonic per run and is not renumbered by the
+        `type` filter, so a filtered export can still be interleaved with an
+        unfiltered one. Buffered events are flushed before the query runs.
       parameters:
         - {name: run_id, in: path, required: true, schema: {type: string}}
-        - {name: type, in: query, schema: {type: string, enum: [http_request, trigger, oob, note]}}
-        - {name: after_seq, in: query, schema: {type: integer}, description: Cursor for incremental export}
-        - {name: limit, in: query, schema: {type: integer, default: 5000, maximum: 50000}}
+        - name: type
+          in: query
+          description: |
+            `signal` and `trigger` are two spellings of one event type; filtering on
+            either returns both, so a caller cannot silently receive half the run.
+          schema: {type: string, enum: [http_request, signal, trigger, oob, note, correlation]}
+        - {name: after_seq, in: query, schema: {type: integer, minimum: 0}, description: Cursor for incremental export}
+        - {name: limit, in: query, schema: {type: integer, default: 5000, minimum: 1, maximum: 50000}}
       responses:
         "200":
-          content: {application/json: {schema: {$ref: '#/components/schemas/EventPage'}}}
           description: OK
+          content: {application/json: {schema: {$ref: '#/components/schemas/EventPage'}}}
+        "404": {description: Unknown run, or caller is outside TELEMETRY_CONTROL_CIDRS}
 
   /v1/events:
     post:
+      tags: [instrumentation]
       summary: Ingest a batch of events
       description: |
-        Called by target SDKs and by the canary service. Fire-and-forget from the
-        caller's point of view: instrumentation must never add latency or fail a
-        request in the target, because timing artefacts would bias timing-based
-        oracles. Returns 202 even when no run is active (events are dropped), so
-        targets behave identically whether or not a benchmark is in progress.
+        Called by target SDKs and by the egress sinkhole. Fire-and-forget from the
+        caller's point of view. `/v1/traces` is the default path in the SDK and is
+        identical in every respect; this one remains for components already pointed at
+        it, and is selectable with the SDK's endpoint override.
+
+        Returns 202 even when no run is active (events are discarded), so targets
+        behave identically whether or not a benchmark is in progress. Returns 202 even
+        when the body is unparsable, when an item fails validation, or when the batch
+        is over-long: the counters in /v1/stats and the service log are where those
+        failures surface, because the alternative is letting instrumentation raise
+        inside a target's request handler.
+
+        Validation is per item, deliberately not per batch:
+
+        * A structurally broken event is dropped and counted (`dropped_detail.invalid`).
+          "Broken" means unattributable — no `app`, no event `type`, a `signal` event
+          with neither `signal` nor `vuln_id`, an unknown enum value.
+        * An event that is merely too long is truncated, not dropped
+          (`attributes.payload`, `attributes.detail`, `params[].sample`, `raw`). Losing
+          a signal event — proof that a planted vulnerability was actually exploited —
+          because a sample ran a few bytes over budget is a far more expensive failure
+          than a clipped string.
+        * Items past `maxItems` are dropped and counted (`dropped_detail.over_batch`);
+          the first 500 are still kept.
+        * Unknown fields are preserved and stored verbatim, so an SDK that grows a
+          field before the collector knows about it does not lose evidence.
       requestBody:
         required: true
         content:
           application/json:
-            schema:
-              type: object
-              required: [events]
-              properties:
-                events:
-                  type: array
-                  maxItems: 500
-                  items:
-                    oneOf:
-                      - {$ref: '#/components/schemas/HttpRequestEvent'}
-                      - {$ref: '#/components/schemas/TriggerEvent'}
-                      - {$ref: '#/components/schemas/OobEvent'}
-                      - {$ref: '#/components/schemas/NoteEvent'}
+            schema: {$ref: '#/components/schemas/IngestBatch'}
       responses:
-        "202": {description: Accepted (or discarded when idle)}
+        "202":
+          description: Accepted, discarded (idle), or dropped. Always.
+          content: {application/json: {schema: {$ref: '#/components/schemas/IngestResult'}}}
+
+  /v1/traces:
+    post:
+      tags: [instrumentation]
+      summary: Ingest a batch of events (default ingest path)
+      description: |
+        Byte-for-byte identical to /v1/events, including the shared per-run sequence,
+        and what `@internal/telemetry` posts to unless its endpoint is overridden.
+        It exists for cover: a target whose environment points `TELEMETRY_ENDPOINT` at
+        an OTLP-ish path is unremarkable, and a tool that reads that environment after
+        winning RCE learns nothing from it.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/IngestBatch'}
+      responses:
+        "202":
+          description: Accepted, discarded (idle), or dropped. Always.
+          content: {application/json: {schema: {$ref: '#/components/schemas/IngestResult'}}}
+
+  # ---------------------------------------------------------------------------
+  # PROVISIONAL. The correlation shape below is the collector's proposal, already
+  # implemented and tested here, and has been relayed to the sinkhole's author for
+  # reconciliation rather than reinvention. Two points are still open and may change:
+  # whether the sinkhole needs a consume/ack call to retire a hint it has matched,
+  # and whether it matches on `correlation_id` or on `(destination_host, route)`.
+  # Everything outside this block is settled.
+  # ---------------------------------------------------------------------------
+  /v1/correlations:
+    post:
+      tags: [instrumentation]
+      summary: Register an outbound-fetch hint for the egress sinkhole
+      description: |
+        Called by a planted sink immediately before it makes an attacker-controlled
+        outbound request.
+
+        Why it is needed: the sinkhole is the resolver for `bench-public`, and that
+        network has no route out, so a callback is captured whatever hostname the
+        payload used — including the tool's own collaborator domain. That is the whole
+        point; a sealed network without it would score every blind SSRF, XXE and
+        command injection as missed by every tool, which measures our topology rather
+        than the tools. The cost is attribution: a lookup for `9f2c.oast.fun` says
+        nothing about which route, which parameter or which planted sink produced it.
+        This endpoint supplies that hint.
+
+        The record is live in memory before the response is written, because the
+        callback it describes can arrive within microseconds — but the copy that lands
+        in the event stream still goes through the ordinary buffered path, so the
+        caller pays no database latency. Hints are registered even while idle, so the
+        sinkhole behaves identically whether or not a run is in progress.
+
+        Same fire-and-forget contract as ingestion: a malformed hint is dropped,
+        counted and answered 202.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/CorrelationCreate'}
+      responses:
+        "202":
+          description: Registered, or dropped. Always.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  registered: {type: boolean}
+                  correlation: {$ref: '#/components/schemas/Correlation'}
+    get:
+      tags: [control]
+      summary: Pending hints, for the sinkhole to attribute a callback it just observed
+      description: |
+        Expired entries are evicted on read. A TTL and a hard cap are not tidiness: a
+        tool fuzzing an SSRF parameter registers one hint per attempt, thousands per
+        minute, so an unbounded registry would be a memory-exhaustion bug reachable by
+        the subject of the benchmark. When the cap is hit the oldest hints are dropped
+        first, on the reasoning that the one that has waited longest is the least
+        likely to still be waiting for its callback. Eviction is a memory bound, not a
+        retraction — every registration stays in the run's event stream for audit.
+      parameters:
+        - name: destination_host
+          in: query
+          schema: {type: string}
+          description: |
+            Filter by observed host. Matching is case-insensitive, tolerates a
+            trailing dot, and matches a subdomain in either direction, because a DNS
+            observation often arrives fully qualified and with a label prepended by an
+            intermediate resolver.
+        - name: wait_ms
+          in: query
+          schema: {type: integer, default: 0, minimum: 0, maximum: 5000}
+          description: |
+            Long-poll for a matching hint instead of answering immediately.
+
+            Ordering between a hint and the callback it describes is NOT guaranteed:
+            the SDK dispatches each hint on its own connection precisely because the
+            DNS lookup follows within microseconds, and either can win. Whichever
+            arrives second completes the join, so a sinkhole that observed the callback
+            first waits here rather than concluding the callback was unattributable —
+            that failure mode looks exactly like every blind vulnerability being missed
+            by every tool.
+
+            This is an optimisation for live attribution, never a requirement: both
+            sides also land in the run's event stream with their own `seq`, so the
+            authoritative join is done offline by the scorer, where arrival order does
+            not matter.
+        - {name: include_expired, in: query, schema: {type: boolean, default: false}, description: Debugging escape hatch; eviction has already run}
+      responses:
+        "200":
+          description: OK
+          content: {application/json: {schema: {$ref: '#/components/schemas/CorrelationPage'}}}
+        "404": {description: Caller is outside TELEMETRY_CONTROL_CIDRS}
+
+  /v1/stats:
+    get:
+      tags: [control]
+      summary: Plain-JSON diagnostics
+      description: |
+        Deliberately not Prometheus: nothing scrapes the internal network, and a human
+        reading `curl | jq` after a surprising score is the actual use case. The
+        counters reconcile: `received == written + dropped + discarded_idle`.
+      responses:
+        "200":
+          description: OK
+          content: {application/json: {schema: {$ref: '#/components/schemas/Stats'}}}
+        "404": {description: Caller is outside TELEMETRY_CONTROL_CIDRS}
 
 components:
   schemas:
     RunCreate:
       type: object
       required: [tool]
+      additionalProperties: false
       properties:
         tool: {type: string, example: zap, description: Tool key, matching a directory under runners/}
         tool_version: {type: string}
@@ -120,27 +349,87 @@ components:
       properties:
         run_id: {type: string}
         tool: {type: string}
-        tool_version: {type: string}
-        profile: {type: string}
+        tool_version: {type: string, nullable: true}
+        profile: {type: string, nullable: true}
         targets: {type: array, items: {type: string}}
+        notes: {type: string, nullable: true}
         started_at: {type: string, format: date-time}
         closed_at: {type: string, format: date-time, nullable: true}
         active: {type: boolean}
         event_count: {type: integer}
 
+    IngestBatch:
+      type: object
+      required: [events]
+      properties:
+        events:
+          type: array
+          maxItems: 500
+          items:
+            oneOf:
+              - {$ref: '#/components/schemas/HttpRequestEvent'}
+              - {$ref: '#/components/schemas/SignalEvent'}
+              - {$ref: '#/components/schemas/OobEvent'}
+              - {$ref: '#/components/schemas/NoteEvent'}
+              - {$ref: '#/components/schemas/CorrelationEvent'}
+            discriminator: {propertyName: type}
+
+    IngestResult:
+      type: object
+      description: |
+        Not in the original contract, and not required reading — the endpoint would be
+        just as correct with an empty 202 body. It exists so that an SDK author can
+        discover that their events are being dropped, which is otherwise invisible by
+        design.
+      properties:
+        accepted: {type: integer, description: Queued against the active run}
+        dropped: {type: integer, description: Malformed, or past maxItems}
+        discarded_idle: {type: integer, description: Well-formed but no run was active}
+
     EventBase:
       type: object
       required: [type, app]
       properties:
-        type: {type: string}
+        type: {type: string, enum: [http_request, signal, trigger, oob, note, correlation]}
         app: {type: string, description: Target app key}
         ts: {type: number, description: Unix epoch seconds with fractions, from the target}
+        peer_ip:
+          type: string
+          nullable: true
+          description: |
+            Socket peer observed by the reporting component — `req.socket.remoteAddress`
+            and nothing else. Accepted on every event type, not just http_request. This
+            is the ONLY address this service will make a decision on. `host:port` and
+            `[v6]:port` are understood; a list is not, because a list is the shape of a
+            header.
+        client_ip:
+          type: string
+          nullable: true
+          description: |
+            Descriptive, and untrusted. May carry a forwarded-for value, so it is
+            recorded as evidence about the request and never used for anything else.
         synthetic:
           type: boolean
           default: false
           description: |
-            True when the request came from the platform itself (seeding, self-test,
-            health checks). Set by the SDK when it sees the X-Bench-Selftest header.
+            True when the event came from the platform itself (seeding, self-test,
+            health checks). Set by the collector when `peer_ip` (or, for a callback the
+            sinkhole observed on its own socket, `source_ip`) falls inside
+            `TELEMETRY_SYNTHETIC_CIDRS`; an SDK may also assert it, and an asserted
+            `true` always wins.
+
+            Identification is by source address and never by a marker header. The old
+            `X-Bench-Selftest` header is gone platform-wide: any reflection, verbose
+            error or header-injection flaw in a target would have shown a tool a header
+            named after the grader, and handed it the shape of the evaluation.
+
+            The distinction between `peer_ip` and `client_ip` is load-bearing rather
+            than pedantic. Synthetic events are excluded from scoring, so an
+            implementation that honoured a forwarded header here would let a tool erase
+            its own traffic from the run — or a competitor's baseline, on replay — by
+            sending `X-Forwarded-For: <a platform address>`. Both the SDK and this
+            service had that bug; both now decide on the socket peer alone.
+
             Synthetic events are stored but never scored, otherwise the platform would
             credit tools with its own traffic.
 
@@ -162,7 +451,6 @@ components:
             path: {type: string, description: Concrete request path}
             status: {type: integer}
             auth_subject: {type: string, nullable: true, description: Authenticated principal, when any}
-            client_ip: {type: string}
             user_agent: {type: string}
             params:
               type: array
@@ -180,27 +468,76 @@ components:
                   sample:
                     type: string
                     maxLength: 256
-                    description: Truncated raw value, kept so a human can audit why a payload scored (or did not).
+                    description: Truncated raw value, kept so a human can audit why a payload scored (or did not). Over-long values are clipped on ingest, never rejected.
 
-    TriggerEvent:
+    SignalEvent:
       allOf:
         - $ref: '#/components/schemas/EventBase'
         - type: object
-          required: [vuln_id]
+          description: |
+            A planted sink fired. At least one of `signal` and `vuln_id` must be
+            present; an event carrying neither cannot be attributed at all and is
+            dropped and counted.
+
+            The canonical spelling is `type: "signal"` with `attributes`. The former
+            `type: "trigger"` with `evidence` is still accepted and is stored verbatim,
+            so targets not yet re-cut keep reporting. Those names were retired because
+            they are themselves forbidden strings from the deception contract, and they
+            sat as literals in shipped target source — which is precisely what a tool
+            reads once it has RCE.
+
+            `oracle_kind` is gone for two reasons: the field name is forbidden, and the
+            catalog already declares `oracle.kind`, so an SDK sending it could only
+            duplicate or contradict authoritative data. A target still sending it has
+            the value preserved as an unrecognised extra, and nothing reads it.
+          anyOf:
+            - {required: [signal]}
+            - {required: [vuln_id]}
           properties:
-            type: {const: trigger}
-            vuln_id: {type: string, pattern: '^BENCH-[A-Z0-9]+-[0-9]{4}$'}
-            oracle_kind: {type: string, enum: [sink, oob, state, differential, timing, artifact]}
-            evidence:
-              type: object
+            type:
+              type: string
+              enum: [signal, trigger]
+              description: "`signal` is canonical; `trigger` is the accepted legacy spelling."
+            signal:
+              type: string
+              pattern: '^[a-z][a-z0-9]*(\.[a-z0-9_]+){2,}$'
+              example: shop.catalog.query.plan_anomaly
               description: |
-                Free-form, but must be enough for a third party to agree the flaw was
-                really exploited: the payload, the effect observed, and the request that
-                carried it. Written into the run report verbatim.
-              properties:
-                payload: {type: string, maxLength: 1024}
-                detail: {type: string, maxLength: 1024}
-                request_id: {type: string}
+                Opaque, metric-shaped identifier of the planted sink. This is how
+                current targets identify a trigger. A target must never emit a catalog
+                id: a tool that compromises the host and reads the source has to find
+                something that looks like an ordinary anomaly counter, not a graded
+                exercise. The catalog maps signal -> vulnerability and the scorer
+                resolves it; the collector stores it verbatim and never reads the
+                catalog, which is what keeps the answer key out of this process.
+            vuln_id:
+              type: string
+              pattern: '^BENCH-[A-Z0-9]+-[0-9]{4}$'
+              nullable: true
+              description: |
+                Legacy direct catalog id, for targets not yet re-signalled. Validated
+                when present so that a garbled id is dropped rather than silently
+                mis-scored.
+            attributes:
+              allOf: [{$ref: '#/components/schemas/SignalAttributes'}]
+            evidence:
+              description: |
+                Legacy spelling of `attributes`, same inner keys. Accepted, stored under
+                whichever name it arrived with, and never rewritten into the other.
+              allOf: [{$ref: '#/components/schemas/SignalAttributes'}]
+
+    SignalAttributes:
+      type: object
+      description: |
+        Free-form, but must be enough for a third party to agree the flaw was really
+        exploited: the payload, the effect observed, and the request that carried it.
+        Written into the run report verbatim. Over-long strings are clipped on ingest,
+        never rejected — losing proof of an exploitation over a length budget is the
+        more expensive mistake.
+      properties:
+        payload: {type: string, maxLength: 1024}
+        detail: {type: string, maxLength: 1024}
+        request_id: {type: string}
 
     OobEvent:
       allOf:
@@ -209,7 +546,13 @@ components:
           required: [token, channel]
           properties:
             type: {const: oob}
-            token: {type: string, description: Canary token extracted from the hostname or path}
+            token:
+              type: string
+              description: |
+                Canary token extracted from the hostname or path. Most callbacks no
+                longer carry one — the sinkhole is catch-all and captures payloads
+                aimed at the tool's own collaborator domain — so an unattributed
+                callback is reported under a sentinel token and correlated instead.
             channel: {type: string, enum: [dns, http, https, smtp, ldap]}
             source_ip: {type: string}
             raw: {type: string, maxLength: 2048}
@@ -222,13 +565,118 @@ components:
             type: {const: note}
             message: {type: string}
 
+    CorrelationEvent:
+      description: |
+        PROVISIONAL, see the note above /v1/correlations. A hint travelling through the
+        event stream: either registered via POST /v1/correlations and mirrored here, or
+        batched directly by an SDK that prefers one door. Both register in the live
+        pending set. It is exported with the run's events so that a published score can
+        be audited — a reader sees which hint was live when the callback landed, rather
+        than a bare claim that the two matched.
+      allOf:
+        - $ref: '#/components/schemas/Correlation'
+        - type: object
+          required: [type]
+          properties:
+            type: {const: correlation}
+
+    CorrelationCreate:
+      type: object
+      description: PROVISIONAL, see the note above /v1/correlations.
+      required: [app, signal, destination_host]
+      properties:
+        app: {type: string}
+        signal:
+          type: string
+          pattern: '^[a-z][a-z0-9]*(\.[a-z0-9_]+){2,}$'
+          description: The sink about to make the outbound request, same vocabulary as SignalEvent.signal.
+        destination_host:
+          type: string
+          description: |
+            Host the payload pointed at, e.g. `9f2c.oast.fun`. Lower-cased and stripped
+            of a trailing dot on ingest.
+        route: {type: string, nullable: true, description: Framework route template being served}
+        param: {type: string, nullable: true, description: Parameter that carried the attacker-controlled destination}
+        request_id: {type: string, nullable: true}
+        ts: {type: number}
+        peer_ip: {type: string, nullable: true, description: Socket peer; the only address a decision is made on}
+        client_ip: {type: string, nullable: true, description: Descriptive and untrusted}
+        synthetic: {type: boolean, default: false}
+        ttl:
+          type: number
+          minimum: 0
+          maximum: 3600
+          nullable: true
+          description: Overrides TELEMETRY_CORRELATION_TTL (default 120s) for this hint alone.
+
+    Correlation:
+      allOf:
+        - $ref: '#/components/schemas/CorrelationCreate'
+        - type: object
+          properties:
+            correlation_id: {type: string, description: Assigned by the collector}
+            registered_at: {type: number, description: Unix epoch seconds}
+            expires_at: {type: number, description: Unix epoch seconds}
+
+    CorrelationPage:
+      type: object
+      description: PROVISIONAL, see the note above /v1/correlations.
+      properties:
+        now: {type: number, description: The collector's clock, so the sinkhole can compare against its own observations}
+        ttl: {type: number}
+        count: {type: integer}
+        correlations: {type: array, items: {$ref: '#/components/schemas/Correlation'}}
+
     EventPage:
       type: object
       properties:
         run_id: {type: string}
-        next_seq: {type: integer, nullable: true}
+        next_seq:
+          type: integer
+          nullable: true
+          description: |
+            The `seq` of the last event returned, to be passed back as `after_seq`.
+            Null exactly when the page is empty, which is how a caller polling a live
+            run recognises a quiet moment and how an incremental export recognises the
+            end.
         events:
           type: array
           items:
             type: object
-            description: Stored event, i.e. the submitted payload plus seq/received_at.
+            description: |
+              Stored event: the submitted payload — including any fields not described
+              here — plus `seq` and `received_at`, spread at the top level.
+            properties:
+              seq: {type: integer, description: Monotonic per run, assigned in acceptance order}
+              received_at: {type: string, format: date-time, description: UTC, stamped when the batch was accepted rather than when it was written}
+
+    Stats:
+      type: object
+      properties:
+        active_run: {type: string, nullable: true}
+        runs: {type: integer}
+        events_by_type: {type: object, additionalProperties: {type: integer}}
+        events_total: {type: integer}
+        synthetic_events: {type: integer}
+        synthetic_by_source: {type: integer, description: Marked by CIDR rather than by the SDK}
+        synthetic_cidrs: {type: array, items: {type: string}}
+        dropped: {type: integer}
+        dropped_detail:
+          type: object
+          properties:
+            invalid: {type: integer}
+            over_batch: {type: integer}
+            queue_overflow: {type: integer}
+            write_error: {type: integer}
+        discarded_idle: {type: integer, description: Well-formed events that arrived with no run active}
+        correlations:
+          type: object
+          properties:
+            pending: {type: integer}
+            registered: {type: integer}
+            expired: {type: integer}
+            overflowed: {type: integer}
+            ttl: {type: number}
+        received: {type: integer}
+        written: {type: integer}
+        queue_depth: {type: integer}

@@ -240,13 +240,21 @@ def create_app(collector: Collector | None = None) -> FastAPI:
         collector: CollectorDep,
         destination_host: str | None = None,
         include_expired: bool = False,
+        wait_ms: int = Query(default=0, ge=0, le=5000),
     ) -> dict[str, Any]:
         """Pending hints, for the sinkhole to attribute a callback it just observed.
 
         Expired entries are evicted on read; `include_expired` is a debugging escape
         hatch and returns nothing extra once eviction has run.
+
+        `wait_ms` long-polls for a matching hint. The hint and the callback race by
+        design -- the SDK dispatches each hint on its own connection because the DNS
+        lookup follows within microseconds -- so a sinkhole that observed the callback
+        first can wait here instead of concluding it was unattributable. Bounded at
+        5s, and never required: both sides are in the run's event stream, so the
+        authoritative join is offline and order-independent.
         """
-        entries = collector.correlations.pending(destination_host)
+        entries = await collector.correlations.wait_for(destination_host, wait_ms / 1000)
         return {
             "now": collector.correlations.clock(),
             "ttl": collector.correlations.ttl,

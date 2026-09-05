@@ -9,6 +9,7 @@ sink registers the hint here first.
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import replace
 
 from tests.conftest import PLATFORM_IP, client_for, correlation
@@ -226,7 +227,98 @@ async def test_hints_register_while_idle_but_are_not_stored(client):
 
 async def test_platform_hints_are_marked_synthetic(client):
     run = await open_run(client)
-    await client.post("/v1/correlations", json=correlation(client_ip=PLATFORM_IP))
+    await client.post("/v1/correlations", json=correlation(peer_ip=PLATFORM_IP))
 
     stored = (await client.get(f"/v1/runs/{run['run_id']}/events")).json()["events"][0]
     assert stored["synthetic"] is True
+
+
+# ------------------------------------------------- the hint and the callback race
+
+
+async def test_sinkhole_can_wait_for_a_hint_that_has_not_arrived_yet(client):
+    """The SDK dispatches each hint immediately on its own connection because the DNS
+    lookup follows within microseconds; either can win. A sinkhole that observed the
+    callback first must be able to complete the join rather than conclude the callback
+    was unattributable -- that failure mode would show up as blind vulnerabilities
+    scoring as missed by every tool."""
+    await open_run(client)
+
+    waiter = asyncio.create_task(
+        client.get(
+            "/v1/correlations", params={"destination_host": "9f2c.oast.fun", "wait_ms": 2000}
+        )
+    )
+    await asyncio.sleep(0.05)  # the lookup lost the race: nothing is registered yet
+    assert not waiter.done()
+
+    await client.post("/v1/correlations", json=correlation())
+    page = (await waiter).json()
+    assert page["count"] == 1
+    assert page["correlations"][0]["destination_host"] == "9f2c.oast.fun"
+
+
+async def test_waiting_is_bounded_and_returns_empty(client):
+    await open_run(client)
+    page = (
+        await client.get("/v1/correlations", params={"destination_host": "nope.test", "wait_ms": 60})
+    ).json()
+    assert page["count"] == 0
+
+
+async def test_waiting_is_not_woken_by_an_unrelated_hint(client):
+    await open_run(client)
+    waiter = asyncio.create_task(
+        client.get("/v1/correlations", params={"destination_host": "wanted.test", "wait_ms": 1500})
+    )
+    await asyncio.sleep(0.05)
+
+    await client.post("/v1/correlations", json=correlation(destination_host="other.test"))
+    await asyncio.sleep(0.05)
+    assert not waiter.done()
+
+    await client.post("/v1/correlations", json=correlation(destination_host="wanted.test"))
+    page = (await waiter).json()
+    assert [entry["destination_host"] for entry in page["correlations"]] == ["wanted.test"]
+
+
+async def test_a_hint_that_arrives_first_needs_no_waiting(client):
+    await open_run(client)
+    await client.post("/v1/correlations", json=correlation())
+    page = (
+        await client.get(
+            "/v1/correlations", params={"destination_host": "9f2c.oast.fun", "wait_ms": 5000}
+        )
+    ).json()
+    assert page["count"] == 1
+
+
+async def test_both_sides_land_in_the_event_stream_whatever_the_order(client):
+    """The live pending set is an optimisation. The system of record is the event
+    stream, where the hint and the sinkhole's observation each carry their own seq, so
+    the authoritative join is offline and order-independent -- a live miss costs
+    nothing."""
+    run = await open_run(client)
+
+    # Deliberately the losing order: the callback is reported before the hint exists.
+    await client.post(
+        "/v1/events",
+        json={
+            "events": [
+                {
+                    "type": "oob",
+                    "app": "shopfront",
+                    "token": "unknown",
+                    "channel": "dns",
+                    "source_ip": "10.88.0.9",
+                    "raw": "9f2c.oast.fun A",
+                }
+            ]
+        },
+    )
+    await client.post("/v1/correlations", json=correlation())
+
+    events = (await client.get(f"/v1/runs/{run['run_id']}/events")).json()["events"]
+    assert [(event["type"], event["seq"]) for event in events] == [("oob", 1), ("correlation", 2)]
+    observed, hint = events
+    assert hint["destination_host"] in observed["raw"]

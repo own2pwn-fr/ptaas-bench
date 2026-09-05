@@ -78,7 +78,20 @@ def http_request_event(**overrides) -> dict:
     return event
 
 
-def trigger_event(**overrides) -> dict:
+def signal_event(**overrides) -> dict:
+    """The canonical wire shape emitted by @internal/telemetry."""
+    event = {
+        "type": "signal",
+        "app": "shopfront",
+        "signal": "shop.catalog.query.plan_anomaly",
+        "attributes": {"payload": "' OR 1=1--", "detail": "tautology reached the query planner"},
+    }
+    event.update(overrides)
+    return event
+
+
+def legacy_trigger_event(**overrides) -> dict:
+    """The superseded spelling, still in flight from targets not yet re-cut."""
     event = {
         "type": "trigger",
         "app": "shopfront",

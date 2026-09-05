@@ -14,6 +14,7 @@ from __future__ import annotations
 import ipaddress
 import logging
 import os
+from collections.abc import Mapping
 from dataclasses import dataclass
 
 log = logging.getLogger("bench.collector")
@@ -21,9 +22,9 @@ log = logging.getLogger("bench.collector")
 DEFAULT_CORRELATION_TTL = 120.0
 
 
-def _env(*names: str, default: str = "") -> str:
+def _env(env: Mapping[str, str], *names: str, default: str = "") -> str:
     for name in names:
-        value = os.environ.get(name)
+        value = env.get(name)
         if value not in (None, ""):
             return value
     return default
@@ -85,10 +86,18 @@ class Settings:
     service_name: str = "otel-collector"
 
 
-def load_settings() -> Settings:
+def load_settings(env: Mapping[str, str] | None = None) -> Settings:
+    """Build settings from a mapping, defaulting to the process environment.
+
+    Taking a mapping is not a convenience: it lets a test read the environment block
+    the deployed stack actually sets and assert that this program consumes it. A
+    renamed variable that nothing reads fails open and silently.
+    """
+    env = os.environ if env is None else env
     return Settings(
         database_url=_normalise_database_url(
             _env(
+                env,
                 "TELEMETRY_DATABASE_URL",
                 "BENCH_DATABASE_URL",
                 default="sqlite+aiosqlite:///./telemetry.db",
@@ -97,19 +106,20 @@ def load_settings() -> Settings:
         # A bounded queue is a safety valve, not a throttle: a target under a heavy
         # scan must never block on us, so an overflow drops events (and is counted)
         # instead of applying backpressure to the instrumented application.
-        queue_maxsize=int(_env("TELEMETRY_QUEUE_MAXSIZE", "BENCH_QUEUE_MAXSIZE", default="200000")),
-        write_batch=int(_env("TELEMETRY_WRITE_BATCH", "BENCH_WRITE_BATCH", default="500")),
-        sql_echo=_env("TELEMETRY_SQL_ECHO", "BENCH_SQL_ECHO").lower() in {"1", "true", "yes"},
-        synthetic_networks=parse_cidrs(_env("TELEMETRY_SYNTHETIC_CIDRS", "BENCH_SYNTHETIC_CIDRS")),
-        control_networks=parse_cidrs(_env("TELEMETRY_CONTROL_CIDRS", "BENCH_CONTROL_CIDRS")),
+        queue_maxsize=int(_env(env, "TELEMETRY_QUEUE_MAXSIZE", "BENCH_QUEUE_MAXSIZE", default="200000")),
+        write_batch=int(_env(env, "TELEMETRY_WRITE_BATCH", "BENCH_WRITE_BATCH", default="500")),
+        sql_echo=_env(env, "TELEMETRY_SQL_ECHO", "BENCH_SQL_ECHO").lower() in {"1", "true", "yes"},
+        synthetic_networks=parse_cidrs(_env(env, "TELEMETRY_SYNTHETIC_CIDRS", "BENCH_SYNTHETIC_CIDRS")),
+        control_networks=parse_cidrs(_env(env, "TELEMETRY_CONTROL_CIDRS", "BENCH_CONTROL_CIDRS")),
         correlation_ttl=float(
             _env(
+                env,
                 "TELEMETRY_CORRELATION_TTL",
                 "BENCH_CORRELATION_TTL",
                 default=str(DEFAULT_CORRELATION_TTL),
             )
         ),
-        correlation_max=int(_env("TELEMETRY_CORRELATION_MAX", default="20000")),
-        expose_schema=_env("TELEMETRY_EXPOSE_SCHEMA").lower() in {"1", "true", "yes"},
-        service_name=_env("TELEMETRY_SERVICE_NAME", default="otel-collector"),
+        correlation_max=int(_env(env, "TELEMETRY_CORRELATION_MAX", default="20000")),
+        expose_schema=_env(env, "TELEMETRY_EXPOSE_SCHEMA").lower() in {"1", "true", "yes"},
+        service_name=_env(env, "TELEMETRY_SERVICE_NAME", default="otel-collector"),
     )

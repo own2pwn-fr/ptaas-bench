@@ -36,7 +36,13 @@ from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async
 from .config import Settings
 from .correlations import CorrelationRegistry
 from .models import Base, Event, Run
-from .schemas import MAX_EVENTS_PER_BATCH, AnyEvent, CorrelationCreate, dump_event
+from .schemas import (
+    MAX_EVENTS_PER_BATCH,
+    TYPE_ALIASES,
+    AnyEvent,
+    CorrelationCreate,
+    dump_event,
+)
 
 log = logging.getLogger("bench.collector")
 
@@ -70,15 +76,24 @@ def _now() -> datetime:
 
 
 def parse_address(raw: Any) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:
-    """Best-effort address extraction from whatever an SDK put in the field.
+    """Parse one socket peer address. Deliberately refuses anything list-shaped.
 
-    Real deployments hand us ``1.2.3.4``, ``1.2.3.4:51234``, ``[::1]:80`` and
-    forwarded-for lists. Getting this wrong in either direction is expensive: a
-    missed match scores our own seeding traffic as if a tool had produced it.
+    An earlier version of this function took the first element of a comma-separated
+    list, which is the shape of an ``X-Forwarded-For`` header. That made the synthetic
+    rule spoofable by the subject of the benchmark: synthetic events are excluded from
+    scoring, so a tool sending ``X-Forwarded-For: 10.77.0.5`` could erase its own
+    traffic from the run. Forwarded values are attacker-controlled and are never a
+    basis for a decision here -- only an address a component observed on its own
+    socket is.
+
+    ``host:port`` and ``[v6]:port`` are still accepted: those are socket peers as
+    several runtimes render them, not claims made by a client.
     """
     if raw in (None, ""):
         return None
-    text = str(raw).split(",")[0].strip()
+    text = str(raw).strip()
+    if "," in text or " " in text:
+        return None
     if text.startswith("["):  # [::1]:80
         text = text[1:].split("]")[0]
     elif text.count(":") == 1:  # host:port, never bare IPv6
@@ -157,17 +172,26 @@ class Collector:
                 ).scalar()
                 self._seq[run.run_id] = int(last or 0)
 
+    # Only addresses a component read off its own socket. `client_ip` is excluded on
+    # purpose: it may legitimately carry a forwarded value, and a forwarded value is
+    # written by the client -- which here is the tool under test.
+    PEER_FIELDS = ("peer_ip", "source_ip")
+
     def is_synthetic_source(self, event: Any) -> bool:
         """True when the event was caused by the platform's own traffic.
 
         Identified by source address, never by a marker header: any reflection,
         verbose error or header-injection flaw in a target would have shown the tool
         a header named after the grader, and told it exactly what it was inside of.
+
+        The decision reads the socket peer alone. Synthetic events are excluded from
+        scoring, so anything the tool can influence here is a way for it to erase its
+        own traffic from the run -- or a competitor's, if the run is replayed.
         """
         if not self.settings.synthetic_networks:
             return False
         extra = event.model_extra or {}
-        for attr in ("client_ip", "source_ip"):
+        for attr in self.PEER_FIELDS:
             address = parse_address(getattr(event, attr, None) or extra.get(attr))
             if address is None:
                 continue
@@ -446,7 +470,9 @@ class Collector:
         await self.flush()
         stmt = select(Event).where(Event.run_id == run_id)
         if event_type is not None:
-            stmt = stmt.where(Event.type == event_type)
+            # "signal" and "trigger" are two spellings of one thing; filtering on
+            # either must not silently return half the run.
+            stmt = stmt.where(Event.type.in_(TYPE_ALIASES.get(event_type, (event_type,))))
         if after_seq is not None:
             stmt = stmt.where(Event.seq > after_seq)
         stmt = stmt.order_by(Event.seq).limit(limit)

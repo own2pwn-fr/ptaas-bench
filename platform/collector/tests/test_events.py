@@ -9,7 +9,8 @@ from tests.conftest import (
     TOOL_IP,
     client_for,
     http_request_event,
-    trigger_event,
+    legacy_trigger_event,
+    signal_event,
 )
 from tests.conftest import correlation as correlation_hint
 
@@ -37,16 +38,16 @@ async def test_events_are_accepted_and_discarded_while_idle(client):
 
 async def test_events_are_stamped_with_the_active_run(client):
     run = await open_run(client, targets=["shopfront"])
-    assert (await post_events(client, [http_request_event(), trigger_event()])).status_code == 202
+    assert (await post_events(client, [http_request_event(), signal_event()])).status_code == 202
 
     page = (await client.get(f"/v1/runs/{run['run_id']}/events")).json()
     assert page["run_id"] == run["run_id"]
-    assert [event["type"] for event in page["events"]] == ["http_request", "trigger"]
+    assert [event["type"] for event in page["events"]] == ["http_request", "signal"]
     assert all(event["received_at"] for event in page["events"])
     # The parameter location keeps its wire name, not the python-safe alias.
     assert page["events"][0]["params"][0]["in"] == "path"
     assert page["events"][1]["signal"] == "shop.catalog.query.plan_anomaly"
-    assert page["events"][1]["evidence"]["payload"] == "' OR 1=1--"
+    assert page["events"][1]["attributes"]["payload"] == "' OR 1=1--"
 
     listed = {run_row["run_id"]: run_row for run_row in (await client.get("/v1/runs")).json()}
     assert listed[run["run_id"]]["event_count"] == 2
@@ -104,7 +105,7 @@ async def test_type_filter(client):
         client,
         [
             http_request_event(),
-            trigger_event(),
+            signal_event(),
             {"type": "oob", "app": "shopfront", "token": "c0ffee", "channel": "dns", "source_ip": "10.0.0.9"},
             {"type": "note", "app": "shopfront", "message": "seeded"},
         ],
@@ -124,18 +125,18 @@ async def test_malformed_events_are_dropped_not_fatal(client):
         client,
         [
             http_request_event(),
-            {"type": "trigger", "app": "shopfront", "vuln_id": "not-a-bench-id"},  # bad pattern
+            {"type": "signal", "app": "shopfront", "vuln_id": "not-a-bench-id"},  # bad pattern
             {"type": "http_request", "method": "GET"},  # missing app and route
             {"type": "telepathy", "app": "shopfront"},  # unknown discriminator
             {"type": "oob", "app": "shopfront", "token": "x", "channel": "carrier-pigeon"},  # bad enum
-            trigger_event(),
+            signal_event(),
         ],
     )
     assert response.status_code == 202
     assert response.json() == {"accepted": 2, "dropped": 4, "discarded_idle": 0}
 
     page = (await client.get(f"/v1/runs/{run['run_id']}/events")).json()
-    assert [event["type"] for event in page["events"]] == ["http_request", "trigger"]
+    assert [event["type"] for event in page["events"]] == ["http_request", "signal"]
     assert [event["seq"] for event in page["events"]] == [1, 2]
 
     stats = (await client.get("/v1/stats")).json()
@@ -157,7 +158,7 @@ async def test_synthetic_flag_is_preserved(client):
     run = await open_run(client)
     await post_events(
         client,
-        [http_request_event(synthetic=True), http_request_event(), trigger_event(synthetic=True)],
+        [http_request_event(synthetic=True), http_request_event(), signal_event(synthetic=True)],
     )
 
     page = (await client.get(f"/v1/runs/{run['run_id']}/events")).json()
@@ -196,12 +197,12 @@ async def test_batch_over_the_documented_maximum_is_truncated(client):
 async def test_oversized_strings_are_clipped_rather_than_dropped(client):
     """A trigger is proof of exploitation; never lose one over a length budget."""
     run = await open_run(client)
-    await post_events(client, [trigger_event(evidence={"payload": "A" * 4000, "detail": "B" * 4000})])
+    await post_events(client, [signal_event(attributes={"payload": "A" * 4000, "detail": "B" * 4000})])
 
     page = (await client.get(f"/v1/runs/{run['run_id']}/events")).json()
     assert len(page["events"]) == 1
-    assert page["events"][0]["evidence"]["payload"] == "A" * 1024
-    assert page["events"][0]["evidence"]["detail"] == "B" * 1024
+    assert page["events"][0]["attributes"]["payload"] == "A" * 1024
+    assert page["events"][0]["attributes"]["detail"] == "B" * 1024
 
 
 async def test_unknown_sdk_fields_survive(client):
@@ -220,12 +221,12 @@ async def test_stats_counts_by_type(client):
         [
             http_request_event(),
             http_request_event(),
-            trigger_event(),
+            signal_event(),
             {"type": "note", "app": "shopfront", "message": "hello"},
         ],
     )
     stats = (await client.get("/v1/stats")).json()
-    assert stats["events_by_type"] == {"http_request": 2, "trigger": 1, "note": 1}
+    assert stats["events_by_type"] == {"http_request": 2, "signal": 1, "note": 1}
     assert stats["events_total"] == 4
     assert stats["active_run"] is not None
 
@@ -270,7 +271,7 @@ async def test_openapi_schema_is_generated(client):
 async def test_trigger_identified_by_signal_alone(client):
     """Current targets emit an opaque metric-shaped signal, never a catalog id."""
     run = await open_run(client)
-    await post_events(client, [trigger_event(signal="shop.checkout.coupon.negative_total")])
+    await post_events(client, [signal_event(signal="shop.checkout.coupon.negative_total")])
 
     stored = (await client.get(f"/v1/runs/{run['run_id']}/events")).json()["events"][0]
     assert stored["signal"] == "shop.checkout.coupon.negative_total"
@@ -280,7 +281,7 @@ async def test_trigger_identified_by_signal_alone(client):
 async def test_trigger_identified_by_vuln_id_alone_still_works(client):
     """Older targets have not been re-signalled yet; their runs must stay scoreable."""
     run = await open_run(client)
-    await post_events(client, [trigger_event(signal=None, vuln_id="BENCH-SHOP-0001")])
+    await post_events(client, [signal_event(signal=None, vuln_id="BENCH-SHOP-0001")])
 
     stored = (await client.get(f"/v1/runs/{run['run_id']}/events")).json()["events"][0]
     assert stored["vuln_id"] == "BENCH-SHOP-0001"
@@ -289,7 +290,7 @@ async def test_trigger_identified_by_vuln_id_alone_still_works(client):
 
 async def test_trigger_may_carry_both(client):
     run = await open_run(client)
-    await post_events(client, [trigger_event(vuln_id="BENCH-SHOP-0001")])
+    await post_events(client, [signal_event(vuln_id="BENCH-SHOP-0001")])
 
     stored = (await client.get(f"/v1/runs/{run['run_id']}/events")).json()["events"][0]
     assert stored["vuln_id"] == "BENCH-SHOP-0001"
@@ -299,7 +300,7 @@ async def test_trigger_may_carry_both(client):
 async def test_trigger_without_any_identifier_is_dropped(client):
     """Unattributable is worse than absent: it would skew ground truth silently."""
     run = await open_run(client)
-    response = await post_events(client, [trigger_event(signal=None), trigger_event()])
+    response = await post_events(client, [signal_event(signal=None), signal_event()])
     assert response.json() == {"accepted": 1, "dropped": 1, "discarded_idle": 0}
 
     page = (await client.get(f"/v1/runs/{run['run_id']}/events")).json()
@@ -315,7 +316,7 @@ async def test_malformed_signals_are_dropped(client):
         "1shop.catalog.anomaly",   # leading digit
         "shop.catalog.query-plan", # hyphen is not allowed inside a segment
     ]
-    response = await post_events(client, [trigger_event(signal=signal) for signal in bad])
+    response = await post_events(client, [signal_event(signal=signal) for signal in bad])
     assert response.json()["dropped"] == len(bad)
     assert (await client.get(f"/v1/runs/{run['run_id']}/events")).json()["events"] == []
 
@@ -325,7 +326,7 @@ async def test_signals_are_stored_verbatim_and_never_resolved(client, collector)
     scorer's job, and keeping the answer key out of this process is half the reason
     the network split exists."""
     run = await open_run(client)
-    await post_events(client, [trigger_event(signal="edge.session.cookie.replay_accepted")])
+    await post_events(client, [signal_event(signal="edge.session.cookie.replay_accepted")])
 
     stored = (await client.get(f"/v1/runs/{run['run_id']}/events")).json()["events"][0]
     assert stored["signal"] == "edge.session.cookie.replay_accepted"
@@ -339,12 +340,12 @@ async def test_traces_is_an_alias_of_events(client):
     """A target pointed at an OTLP-ish path is unremarkable; one pointed at a
     collector named after the benchmark tells the tool what it is inside of."""
     run = await open_run(client)
-    response = await client.post("/v1/traces", json={"events": [http_request_event(), trigger_event()]})
+    response = await client.post("/v1/traces", json={"events": [http_request_event(), signal_event()]})
     assert response.status_code == 202
     assert response.json()["accepted"] == 2
 
     page = (await client.get(f"/v1/runs/{run['run_id']}/events")).json()
-    assert [event["type"] for event in page["events"]] == ["http_request", "trigger"]
+    assert [event["type"] for event in page["events"]] == ["http_request", "signal"]
 
 
 async def test_traces_and_events_share_one_sequence(client):
@@ -375,10 +376,10 @@ async def test_platform_traffic_is_marked_synthetic_by_source(client):
     await post_events(
         client,
         [
-            http_request_event(client_ip=PLATFORM_IP),
-            http_request_event(client_ip=TOOL_IP),
-            http_request_event(client_ip=f"{PLATFORM_IP}:51234"),
-            trigger_event(client_ip=PLATFORM_IP),
+            http_request_event(peer_ip=PLATFORM_IP),
+            http_request_event(peer_ip=TOOL_IP),
+            http_request_event(peer_ip=f"{PLATFORM_IP}:51234"),
+            signal_event(peer_ip=PLATFORM_IP),
             {"type": "oob", "app": "edge", "token": "abc", "channel": "dns", "source_ip": PLATFORM_IP},
         ],
     )
@@ -394,7 +395,7 @@ async def test_sdk_flag_still_overrides(client):
     """An SDK that knows better wins: it may see platform traffic arriving through a
     proxy, where the address we get is the proxy's."""
     run = await open_run(client)
-    await post_events(client, [http_request_event(client_ip=TOOL_IP, synthetic=True)])
+    await post_events(client, [http_request_event(peer_ip=TOOL_IP, synthetic=True)])
 
     events = (await client.get(f"/v1/runs/{run['run_id']}/events")).json()["events"]
     assert events[0]["synthetic"] is True
@@ -407,14 +408,44 @@ async def test_unparsable_or_absent_addresses_are_not_synthetic(client):
         client,
         [
             http_request_event(),
-            http_request_event(client_ip=""),
-            http_request_event(client_ip="not-an-address"),
-            http_request_event(client_ip="10.99.4.12, 192.0.2.1"),
+            http_request_event(peer_ip=""),
+            http_request_event(peer_ip="not-an-address"),
+            http_request_event(peer_ip="example.internal"),
         ],
     )
     events = (await client.get(f"/v1/runs/{run['run_id']}/events")).json()["events"]
-    # Only the forwarded-for list resolves: its first hop is the original client.
-    assert [event["synthetic"] for event in events] == [False, False, False, True]
+    assert [event["synthetic"] for event in events] == [False, False, False, False]
+
+
+async def test_a_claimed_address_can_never_make_traffic_synthetic(client):
+    """Regression: the synthetic rule was spoofable by the subject of the benchmark.
+
+    Synthetic events are excluded from scoring, so a tool that can talk its traffic
+    into being synthetic erases itself from its own run -- or erases a competitor's
+    baseline, if runs are replayed. Only the socket peer decides; a forwarded-for
+    value is written by the client, and here the client is the tool.
+    """
+    run = await open_run(client)
+    await post_events(
+        client,
+        [
+            # What a target's SDK produces when the tool sends
+            # `X-Forwarded-For: 10.99.4.12` -- alone, or first in a chain.
+            http_request_event(peer_ip=TOOL_IP, client_ip=PLATFORM_IP),
+            http_request_event(peer_ip=TOOL_IP, client_ip=f"{PLATFORM_IP}, {TOOL_IP}"),
+            http_request_event(client_ip=PLATFORM_IP),
+            signal_event(client_ip=PLATFORM_IP),
+            {"type": "oob", "app": "edge", "token": "a", "channel": "dns", "client_ip": PLATFORM_IP},
+            {"type": "correlation", "app": "shopfront", "signal": "shop.import.feed.remote_fetch",
+             "destination_host": "x.oast.fun", "client_ip": PLATFORM_IP},
+        ],
+    )
+
+    events = (await client.get(f"/v1/runs/{run['run_id']}/events")).json()["events"]
+    assert [event["synthetic"] for event in events] == [False] * 6
+    # The claim is still stored, because it is evidence about the request.
+    assert events[0]["client_ip"] == PLATFORM_IP
+    assert (await client.get("/v1/stats")).json()["synthetic_by_source"] == 0
 
 
 async def test_no_cidrs_configured_means_nothing_is_synthetic_by_source(settings):
@@ -473,3 +504,62 @@ async def test_control_surface_can_be_limited_by_source_address(settings):
 
 async def test_control_surface_is_open_when_unconfigured(client):
     assert (await client.get("/v1/stats")).status_code == 200
+
+
+# ------------------------------------------------------------------- wire shape
+
+
+async def test_legacy_trigger_spelling_is_still_accepted(client):
+    """`trigger` and `evidence` were themselves forbidden strings sitting as literals
+    in shipped target source. The names changed; targets not yet re-cut must keep
+    reporting, because a run scored on half its sinks is worse than no run."""
+    run = await open_run(client)
+    response = await post_events(client, [legacy_trigger_event(), signal_event()])
+    assert response.json()["accepted"] == 2
+
+    events = (await client.get(f"/v1/runs/{run['run_id']}/events")).json()["events"]
+    assert [event["type"] for event in events] == ["trigger", "signal"]
+    assert events[0]["evidence"]["payload"] == "' OR 1=1--"
+    assert events[1]["attributes"]["payload"] == "' OR 1=1--"
+    assert events[0]["signal"] == events[1]["signal"]
+
+
+async def test_each_spelling_is_stored_verbatim(client):
+    """Neither name is rewritten into the other: the export is meant to be what was
+    submitted, and an event that arrived with `evidence` must not read as though it
+    also carried an empty `attributes`."""
+    run = await open_run(client)
+    await post_events(client, [legacy_trigger_event(), signal_event()])
+
+    events = (await client.get(f"/v1/runs/{run['run_id']}/events")).json()["events"]
+    assert "attributes" not in events[0]
+    assert "evidence" not in events[1]
+
+
+async def test_either_spelling_filters_the_export_to_both(client):
+    """One event type with two names; a scorer filtering on either must not silently
+    get half the run."""
+    run = await open_run(client)
+    await post_events(client, [legacy_trigger_event(), signal_event(), http_request_event()])
+
+    for wanted in ("signal", "trigger"):
+        page = (
+            await client.get(f"/v1/runs/{run['run_id']}/events", params={"type": wanted})
+        ).json()
+        assert [event["seq"] for event in page["events"]] == [1, 2], wanted
+
+
+async def test_dropped_oracle_kind_is_preserved_as_an_unknown_field(client):
+    """The catalog already declares oracle.kind, so the SDK no longer sends it. A
+    target still doing so must not lose the value -- nor have it endorsed."""
+    run = await open_run(client)
+    await post_events(client, [legacy_trigger_event()])
+
+    stored = (await client.get(f"/v1/runs/{run['run_id']}/events")).json()["events"][0]
+    assert stored["oracle_kind"] == "sink"
+
+
+async def test_signal_events_count_under_their_own_name(client):
+    await open_run(client)
+    await post_events(client, [signal_event(), legacy_trigger_event()])
+    assert (await client.get("/v1/stats")).json()["events_by_type"] == {"signal": 1, "trigger": 1}

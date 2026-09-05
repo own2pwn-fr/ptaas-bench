@@ -18,16 +18,22 @@ network configuration with it.
 
 from __future__ import annotations
 
+import ipaddress
+import re
 from pathlib import Path
 
 import pytest
 import yaml
 
+from bench_collector.config import load_settings, parse_cidrs
+
 REPO_ROOT = Path(__file__).resolve().parents[3]
 COMPOSE_FILE = REPO_ROOT / "docker-compose.yml"
 COLLECTOR_BUILD = "./platform/collector"
+SINKHOLE_BUILD = "./platform/oob"
 INTERNAL_NETWORK = "bench-internal"
 PUBLIC_NETWORK = "bench-public"
+COLLECTOR_PORT = 8900
 
 # From targets/target-contract.yaml, section `deception`. Anything a tool can observe
 # -- and a container name on its own network is observable -- must not announce that
@@ -64,14 +70,34 @@ def build_context(service: dict) -> str | None:
     return build
 
 
-def collector_service(compose: dict) -> tuple[str, dict]:
+def service_by_build(compose: dict, context: str) -> tuple[str, dict]:
     matches = [
         (name, service)
         for name, service in compose["services"].items()
-        if build_context(service) == COLLECTOR_BUILD
+        if build_context(service) == context
     ]
-    assert len(matches) == 1, f"expected exactly one {COLLECTOR_BUILD} service, found {matches}"
+    assert len(matches) == 1, f"expected exactly one {context} service, found {matches}"
     return matches[0]
+
+
+def collector_service(compose: dict) -> tuple[str, dict]:
+    return service_by_build(compose, COLLECTOR_BUILD)
+
+
+def pinned_address(service: dict, network: str) -> str | None:
+    networks = service.get("networks")
+    if isinstance(networks, dict) and isinstance(networks.get(network), dict):
+        return networks[network].get("ipv4_address")
+    return None
+
+
+def environment(service: dict) -> dict[str, str]:
+    """Normalise both compose spellings of `environment`."""
+    env = service.get("environment") or {}
+    if isinstance(env, list):
+        pairs = [item.split("=", 1) for item in env]
+        return {key: value for key, *rest in pairs for value in (rest or [""])}
+    return {key: "" if value is None else str(value) for key, value in env.items()}
 
 
 def test_bench_internal_is_declared_internal(compose):
@@ -81,6 +107,14 @@ def test_bench_internal_is_declared_internal(compose):
         "bench-internal must be `internal: true`; without it the scanner's network "
         "can route to the collector and read or forge ground truth"
     )
+
+
+def test_bench_public_is_internal_too(compose):
+    """No route out is what makes blind vulnerabilities measurable rather than merely
+    unreachable: a callback to the tool's own collaborator domain cannot leave, so the
+    sinkhole captures it. It also takes the host gateway away from a compromised
+    target."""
+    assert compose["networks"][PUBLIC_NETWORK].get("internal") is True
 
 
 def test_collector_is_attached_only_to_bench_internal(compose):
@@ -117,10 +151,74 @@ def test_collector_database_is_also_isolated(compose):
         assert not database.get("ports")
 
 
-def test_public_network_is_not_internal(compose):
-    """Sanity check on the other half: the tool under test needs its own network,
-    and a benchmark where nothing is reachable would pass every isolation test."""
-    assert compose["networks"][PUBLIC_NETWORK].get("internal") is not True
+def test_networks_are_separate_and_fixed(compose):
+    """Two distinct networks with pinned subnets. Fixed addressing is load-bearing:
+    the collector's control allowlist and the targets' `dns:` pin are written against
+    these addresses, and a benchmark where the two networks collapsed into one would
+    pass every other assertion here."""
+    subnets = {
+        name: compose["networks"][name]["ipam"]["config"][0]["subnet"]
+        for name in (INTERNAL_NETWORK, PUBLIC_NETWORK)
+    }
+    assert subnets[INTERNAL_NETWORK] != subnets[PUBLIC_NETWORK]
+    internal = ipaddress.ip_network(subnets[INTERNAL_NETWORK])
+    public = ipaddress.ip_network(subnets[PUBLIC_NETWORK])
+    assert not internal.overlaps(public), subnets
+
+
+def test_control_allowlist_matches_the_sinkholes_pinned_address(compose):
+    """The control surface -- run management and the event export that lists exactly
+    which planted sinks fired -- is allowlisted by address. If the sinkhole is
+    renumbered and this is not, the platform either locks out its own sinkhole or,
+    far worse, hands the allowlisted address to whichever container claims it next.
+    """
+    _, collector = collector_service(compose)
+    _, sinkhole = service_by_build(compose, SINKHOLE_BUILD)
+    sinkhole_address = pinned_address(sinkhole, INTERNAL_NETWORK)
+    assert sinkhole_address, "the sinkhole must have a pinned address to be allowlisted"
+
+    internal = ipaddress.ip_network(compose["networks"][INTERNAL_NETWORK]["ipam"]["config"][0]["subnet"])
+    assert ipaddress.ip_address(sinkhole_address) in internal
+
+    env = environment(collector)
+    control = parse_cidrs(env["TELEMETRY_CONTROL_CIDRS"])
+    assert control, "the control surface must be restricted by source address"
+    routable = [network for network in control if not network.network_address.is_loopback]
+    assert [str(network) for network in routable] == [f"{sinkhole_address}/32"], (
+        "only the sinkhole (and the container's own loopback, which is how the "
+        "orchestrator reaches it through `docker compose exec`) may reach the answer key"
+    )
+
+    # Platform traffic is recognised by source address now that the selftest header is
+    # gone; the same pin has to identify it.
+    synthetic = parse_cidrs(env["TELEMETRY_SYNTHETIC_CIDRS"])
+    assert [str(network) for network in synthetic] == [f"{sinkhole_address}/32"]
+
+
+def test_collector_reads_the_environment_the_stack_gives_it(compose):
+    """Cross-check the deployed configuration against the program that consumes it: a
+    renamed variable that nothing reads fails open and silently."""
+    _, collector = collector_service(compose)
+    env = environment(collector)
+    assert not any(key.startswith("BENCH_") for key in env), sorted(env)
+
+    settings = load_settings(env)
+    assert settings.database_url.startswith("postgresql+asyncpg://")
+    assert settings.control_networks and settings.synthetic_networks
+    assert settings.expose_schema is False, "the API description must not be published"
+
+
+def test_orchestrator_reaches_the_control_plane_without_a_published_port(compose):
+    """`docker compose exec` rather than a published port, so the invariant that the
+    collector publishes nothing stays absolute."""
+    _, collector = collector_service(compose)
+    control = parse_cidrs(environment(collector)["TELEMETRY_CONTROL_CIDRS"])
+    assert any(network.network_address.is_loopback for network in control)
+    for service in compose["services"].values():
+        for mapping in service.get("ports") or []:
+            assert str(COLLECTOR_PORT) not in str(mapping), (
+                f"port {COLLECTOR_PORT} must never be published: {mapping}"
+            )
 
 
 def test_services_on_the_public_network_are_not_named_after_the_benchmark(compose):
@@ -134,6 +232,28 @@ def test_services_on_the_public_network_are_not_named_after_the_benchmark(compos
             assert not any(marker in value.lower() for marker in FORBIDDEN_MARKERS), (
                 f"service {name!r} exposes {value!r} on the tool's network"
             )
+
+
+def test_default_project_name_is_unremarkable(compose):
+    """Container names derive from it, they appear in /etc/hostname inside every
+    target, and Docker's embedded DNS resolves them on the tool's own network."""
+    raw = str(compose["name"])
+    match = re.fullmatch(r"\$\{[A-Za-z_][A-Za-z0-9_]*:-([^}]+)\}", raw)
+    default = match.group(1) if match else raw
+    assert default, raw
+    assert not any(marker in default.lower() for marker in FORBIDDEN_MARKERS), default
+
+
+def test_no_compose_fragment_reopens_an_internal_network():
+    """Fragments re-declare the shared networks so that `include` merges instead of
+    conflicting. Omitting a key is harmless -- the merge keeps the base value -- but
+    setting `internal: false` would quietly reconnect the tool's network to the world
+    and make every blind-vulnerability score meaningless."""
+    for fragment in sorted((REPO_ROOT / "compose").glob("*.yml")):
+        document = yaml.safe_load(fragment.read_text()) or {}
+        for name, network in (document.get("networks") or {}).items():
+            if name in (INTERNAL_NETWORK, PUBLIC_NETWORK) and isinstance(network, dict):
+                assert network.get("internal") is not False, f"{fragment} reopens {name}"
 
 
 def test_no_compose_fragment_redefines_the_collector():
