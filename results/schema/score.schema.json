@@ -1,0 +1,234 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/own2pwn-fr/ptaas-bench/results/schema/score.schema.json",
+  "title": "ptaas-bench score document",
+  "description": "Output of `bench score` for exactly one run of one tool, and the only input of `bench report`. This is a contract: runners archive these documents, third parties recompute tables from them, so a field is only ever added, never repurposed. Every recall is a fraction in [0,1] or null; null means 'no planted vulnerability was applicable in this bucket', which is deliberately distinct from 0 ('applicable and missed'). The three axes are independent by design: reach = the endpoint was touched, exercise = the injection point carried a non-default value, trigger = the in-app oracle fired. `exercise` is null for vulnerabilities with no parameter and is then excluded from every denominator.",
+  "type": "object",
+  "required": ["schema_version", "generated_at", "run", "catalog", "events", "metrics", "chains", "vulns", "warnings"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {"type": "string", "description": "Semver of this document format. Major bump = breaking change for report/runners."},
+    "generated_at": {"type": "string", "description": "UTC ISO-8601 timestamp of scoring, not of the run."},
+
+    "run": {
+      "type": "object",
+      "description": "Run metadata as recorded by the collector, copied verbatim so the score is self-describing.",
+      "required": ["tool"],
+      "properties": {
+        "run_id": {"type": ["string", "null"]},
+        "tool": {"type": "string"},
+        "tool_version": {"type": ["string", "null"]},
+        "profile": {"type": ["string", "null"]},
+        "targets": {"type": "array", "items": {"type": "string"}},
+        "started_at": {"type": ["string", "null"]},
+        "closed_at": {"type": ["string", "null"]},
+        "notes": {"type": ["string", "null"]}
+      }
+    },
+
+    "catalog": {
+      "type": "object",
+      "description": "Which ground truth this score was computed against. `digest` fingerprints the scored fields of every catalog entry; two scores are only comparable when their digests match.",
+      "required": ["vulns_total", "vulns_in_scope", "digest"],
+      "properties": {
+        "vulns_total": {"type": "integer"},
+        "vulns_in_scope": {"type": "integer", "description": "Vulnerabilities belonging to the apps in scope for this run. This is the denominator of `metrics.overall`."},
+        "digest": {"type": "string"},
+        "errors": {"type": "integer"},
+        "warnings": {"type": "integer"}
+      }
+    },
+
+    "events": {
+      "type": "object",
+      "description": "Raw event counts of the run before synthetic filtering, keyed by event type, plus `synthetic` and `total`.",
+      "additionalProperties": {"type": "integer"}
+    },
+
+    "legend": {
+      "type": "object",
+      "description": "Taxonomy labels captured at scoring time so a report can be rendered from this file alone, years later, without the catalog revision that produced it.",
+      "properties": {
+        "owasp": {"type": "object", "additionalProperties": {"type": "object", "additionalProperties": {"type": "string"}}},
+        "families": {"type": "array", "items": {"type": "string"}},
+        "class_labels": {"type": "object", "additionalProperties": {"type": "string"}}
+      }
+    },
+
+    "metrics": {
+      "type": "object",
+      "description": "Aggregated recall. Every leaf is a Metric.",
+      "required": ["overall", "by_app", "by_owasp", "by_family", "by_class", "by_severity", "by_render", "by_difficulty", "by_auth", "by_requires"],
+      "properties": {
+        "overall": {"$ref": "#/$defs/metric"},
+        "by_app": {"$ref": "#/$defs/metricMap"},
+        "by_owasp": {
+          "type": "object",
+          "description": "Edition -> category code (A01..A10) -> Metric. All three editions are always present.",
+          "additionalProperties": {"$ref": "#/$defs/metricMap"}
+        },
+        "by_family": {"$ref": "#/$defs/metricMap"},
+        "by_class": {"$ref": "#/$defs/metricMap"},
+        "by_severity": {"$ref": "#/$defs/metricMap"},
+        "by_render": {"$ref": "#/$defs/metricMap", "description": "discovery.render. The headline of the benchmark: recall collapsing from static-html to spa-*."},
+        "by_difficulty": {"$ref": "#/$defs/metricMap", "description": "discovery.difficulty, 1..5, keys are stringified integers."},
+        "by_auth": {"$ref": "#/$defs/metricMap", "description": "entrypoint.auth: none / user / admin / other-user."},
+        "by_requires": {"$ref": "#/$defs/metricMap", "description": "One bucket per discovery.requires capability; a vulnerability appears in several buckets, so these counts do not sum to the total."},
+        "by_component": {"$ref": "#/$defs/metricMap"}
+      }
+    },
+
+    "chains": {
+      "type": "object",
+      "description": "Chained-exploitation statistics derived from requires_prereq.",
+      "required": ["max_depth", "by_depth"],
+      "properties": {
+        "max_depth": {"type": "integer", "description": "Longest prerequisite chain present in the scoped catalog (0 = no chains)."},
+        "depth_histogram": {"type": "object", "additionalProperties": {"type": "integer"}},
+        "by_depth": {"$ref": "#/$defs/metricMap"},
+        "chained_vulns": {"type": "integer"},
+        "chains_completed": {"type": "integer", "description": "Vulnerabilities that triggered while every transitive prerequisite also triggered."},
+        "chains_broken": {
+          "type": "array",
+          "description": "Triggered while a prerequisite never did. Either the chain is not a real chain, or a prerequisite oracle failed; surfaced, never silently repaired.",
+          "items": {
+            "type": "object",
+            "properties": {
+              "vuln_id": {"type": "string"},
+              "missing_prereqs": {"type": "array", "items": {"type": "string"}}
+            }
+          }
+        }
+      }
+    },
+
+    "vulns": {
+      "type": "array",
+      "description": "Per-vulnerability outcome, sorted by id. Carries the catalog attributes used by every breakdown so the report never needs the catalog.",
+      "items": {"$ref": "#/$defs/vulnOutcome"}
+    },
+
+    "findings": {
+      "description": "Precision analysis, present only when a normalised findings file was supplied. Matching rules are documented in platform/benchctl/src/benchctl/findings.py.",
+      "oneOf": [{"type": "null"}, {"$ref": "#/$defs/findingsBlock"}]
+    },
+
+    "warnings": {
+      "type": "array",
+      "description": "Instrumentation anomalies, i.e. platform problems rather than tool problems (a trigger with no matching request means an SDK under-reported).",
+      "items": {
+        "type": "object",
+        "required": ["code", "message"],
+        "properties": {
+          "code": {"type": "string", "enum": ["trigger-without-reach", "trigger-without-exercise", "unknown-trigger-id", "unknown-oob-token"]},
+          "vuln_id": {"type": ["string", "null"]},
+          "message": {"type": "string"}
+        }
+      }
+    }
+  },
+
+  "$defs": {
+    "axis": {
+      "type": "object",
+      "required": ["hit", "applicable", "recall"],
+      "additionalProperties": false,
+      "properties": {
+        "hit": {"type": "integer", "minimum": 0},
+        "applicable": {"type": "integer", "minimum": 0, "description": "Denominator. Excludes not-applicable cases (exercise on a parameter-less vulnerability)."},
+        "recall": {"type": ["number", "null"], "minimum": 0, "maximum": 1, "description": "hit/applicable, or null when applicable is 0."}
+      }
+    },
+    "metric": {
+      "type": "object",
+      "required": ["vulns", "reach", "exercise", "trigger"],
+      "additionalProperties": false,
+      "properties": {
+        "vulns": {"type": "integer", "minimum": 0},
+        "reach": {"$ref": "#/$defs/axis"},
+        "exercise": {"$ref": "#/$defs/axis"},
+        "trigger": {"$ref": "#/$defs/axis"}
+      }
+    },
+    "metricMap": {"type": "object", "additionalProperties": {"$ref": "#/$defs/metric"}},
+
+    "vulnOutcome": {
+      "type": "object",
+      "required": ["id", "app", "class", "reach", "exercise", "trigger"],
+      "properties": {
+        "id": {"type": "string"},
+        "title": {"type": "string"},
+        "app": {"type": "string"},
+        "component": {"type": "string"},
+        "class": {"type": "string"},
+        "family": {"type": ["string", "null"]},
+        "severity": {"type": "string"},
+        "cwe": {"type": "array", "items": {"type": "integer"}},
+        "owasp": {"type": "object", "additionalProperties": {"type": "string"}},
+        "method": {"type": "string"},
+        "route": {"type": "string", "description": "Normalised route template, the form used for reach matching."},
+        "param": {"type": ["string", "null"]},
+        "param_in": {"type": "string"},
+        "auth": {"type": "string"},
+        "render": {"type": ["string", "null"]},
+        "difficulty": {"type": ["integer", "null"]},
+        "requires": {"type": "array", "items": {"type": "string"}},
+        "oracle_kind": {"type": "string"},
+        "requires_prereq": {"type": "array", "items": {"type": "string"}},
+        "vuln_id": {"type": "string"},
+        "reach": {"type": "boolean"},
+        "exercise": {"type": ["boolean", "null"], "description": "null = not applicable (the entrypoint declares no parameter)."},
+        "trigger": {"type": "boolean"},
+        "reach_events": {"type": "integer"},
+        "trigger_events": {"type": "integer"},
+        "reach_inferred": {"type": "boolean", "description": "True when reach was credited from a trigger because no request event was observed."},
+        "first_reach_ts": {"type": ["number", "null"]},
+        "first_trigger_ts": {"type": ["number", "null"]},
+        "exercise_sample": {"type": ["string", "null"], "description": "Truncated payload that credited exercise, kept so a human can audit the verdict."},
+        "trigger_source": {"type": ["string", "null"], "enum": ["trigger-event", "oob", null]},
+        "evidence": {"type": "object"}
+      }
+    },
+
+    "findingsBlock": {
+      "type": "object",
+      "required": ["total", "by_verdict", "true_positives", "false_positives", "precision"],
+      "properties": {
+        "total": {"type": "integer"},
+        "by_verdict": {"type": "object", "additionalProperties": {"type": "integer"}},
+        "true_positives": {"type": "integer"},
+        "false_positives": {"type": "integer"},
+        "duplicates": {"type": "integer"},
+        "ambiguous": {"type": "integer", "description": "Findings matching a catalog location but not its class or parameter. Counted neither as TP nor FP by `precision`."},
+        "ambiguous_breakdown": {"type": "object", "additionalProperties": {"type": "integer"}},
+        "precision": {"type": ["number", "null"], "description": "TP / (TP + FP)."},
+        "precision_conservative": {"type": ["number", "null"], "description": "TP / (TP + FP + ambiguous)."},
+        "duplicate_ratio": {"type": ["number", "null"]},
+        "vulns_reported": {"type": "array", "items": {"type": "string"}},
+        "triggered_not_reported": {"type": "array", "items": {"type": "string"}},
+        "reported_not_triggered": {"type": "array", "items": {"type": "string"}},
+        "false_positive_list": {"type": "array", "items": {"$ref": "#/$defs/finding"}},
+        "ambiguous_list": {"type": "array", "items": {"$ref": "#/$defs/finding"}},
+        "findings": {"type": "array", "items": {"$ref": "#/$defs/finding"}}
+      }
+    },
+    "finding": {
+      "type": "object",
+      "required": ["verdict"],
+      "properties": {
+        "tool": {"type": ["string", "null"]},
+        "url": {"type": "string"},
+        "method": {"type": ["string", "null"]},
+        "param": {"type": ["string", "null"]},
+        "cwe": {"type": "array", "items": {"type": "integer"}},
+        "name": {"type": ["string", "null"]},
+        "severity": {"type": ["string", "null"]},
+        "confidence": {"type": ["string", "null"]},
+        "app": {"type": ["string", "null"]},
+        "verdict": {"type": "string", "enum": ["true-positive", "false-positive", "duplicate", "location-match, param-mismatch", "location-match, class-mismatch", "location-match, class-unknown"]},
+        "matched_vuln": {"type": ["string", "null"]},
+        "reason": {"type": "string"}
+      }
+    }
+  }
+}
