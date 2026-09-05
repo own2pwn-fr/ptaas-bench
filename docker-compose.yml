@@ -42,7 +42,7 @@ services:
       timeout: 3s
       retries: 20
 
-  collector:
+  otel-collector:
     build: ./platform/collector
     environment:
       BENCH_DATABASE_URL: postgresql://bench:bench@collector-db:5432/bench
@@ -55,14 +55,20 @@ services:
       timeout: 3s
       retries: 20
 
-  # Out-of-band canary. Deliberately dual-homed: targets must be able to *fail* to
-  # reach it (that is what makes blind SSRF blind), while the tool must be able to
-  # reach it so that its own payloads can point at it.
-  oob:
+  # Egress sinkhole. It is the DNS resolver and the only reachable destination for
+  # bench-public, so every outbound lookup or connection a target is tricked into making
+  # lands here, whatever hostname the payload used. Dual-homed because it must answer the
+  # targets and the tool while reporting inward to the collector.
+  resolver:
     build: ./platform/oob
     environment:
-      BENCH_COLLECTOR_URL: http://collector:8900
-      BENCH_OOB_DOMAIN: oob.bench.local
+      TELEMETRY_ENDPOINT: http://otel-collector:8900
+      # Owned zone, kept only for statically-tokenised callbacks. The sinkhole is
+      # catch-all: it is the resolver for bench-public, so a tool that points a payload
+      # at its own collaborator domain is captured just the same. Without that, a sealed
+      # network would score every blind SSRF, XXE and command injection as missed by
+      # every tool — a property of our topology, not of the tools.
+      SINKHOLE_ZONE: telemetry-edge.net
     networks: [bench-internal, bench-public]
     depends_on:
-      collector: {condition: service_healthy}
+      otel-collector: {condition: service_healthy}

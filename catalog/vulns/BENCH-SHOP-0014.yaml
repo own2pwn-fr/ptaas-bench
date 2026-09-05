@@ -10,19 +10,29 @@ entrypoint:
   auth: other-user
   param: id
   param_in: path
-  default_value: "1001"
+  default_value: '1001'
 discovery:
   render: spa-react
-  reachable_from: ["/account/orders"]
-  requires: [js-execution, multi-step-flow]
+  reachable_from:
+  - /account/orders
+  requires:
+  - js-execution
+  - multi-step-flow
   difficulty: 3
 oracle:
   kind: differential
-  condition: >
-    The handler loads the order by primary key without filtering on the session's
-    customer id. A trigger fires when a response is served whose order.customer_id
-    differs from the authenticated caller's customer id, i.e. the caller actually
-    received another tenant's data. Anonymous 401s and self-owned reads never fire it.
-  poc: "GET /api/orders/1002 with the session cookie of the customer who owns order 1001"
-tags: [rest, idor, authenticated]
-introduced: "2026-09-05"
+  condition: 'The handler loads the order by primary key without filtering on the session''s customer
+    id. A trigger fires when a response is served whose order.customer_id differs from the authenticated
+    caller''s customer id, i.e. the caller actually received another tenant''s data. Anonymous 401s
+    and self-owned reads never fire it.
+
+    '
+  poc: GET /api/orders/1002 with the session cookie of the customer who owns order 1001
+  signal: shop.orders.subject.mismatch
+tags:
+- rest
+- idor
+- authenticated
+introduced: '2026-09-05'
+decoy_note: The order detail endpoint was written for the account page, where the id always came from
+  the session-scoped list, so nobody added an ownership check.

@@ -10,20 +10,30 @@ entrypoint:
   auth: none
   param: q
   param_in: query
-  default_value: "laptop"
+  default_value: laptop
 discovery:
   render: spa-react
-  reachable_from: ["/", "/catalog"]
-  requires: [js-execution]
+  reachable_from:
+  - /
+  - /catalog
+  requires:
+  - js-execution
   difficulty: 2
 oracle:
   kind: sink
-  condition: >
-    The product query is built by string concatenation. The sink reports a trigger when
-    the SQL text parsed by the database contains an injected clause (a UNION SELECT or a
-    tautology introduced by the parameter) AND the result set contains at least one row
-    from a table other than products. Reflecting the payload back in the response is not
-    enough: a scanner that merely echoes a quote scores exercise, never trigger.
-  poc: "GET /api/products?q=x' UNION SELECT id,email,password_hash,1,1 FROM users--"
-tags: [rest, json, postgres]
-introduced: "2026-09-05"
+  condition: 'The product query is built by string concatenation. The sink reports a trigger when
+    the SQL text parsed by the database contains an injected clause (a UNION SELECT or a tautology
+    introduced by the parameter) AND the result set contains at least one row from a table other than
+    products. Reflecting the payload back in the response is not enough: a scanner that merely echoes
+    a quote scores exercise, never trigger.
+
+    '
+  poc: GET /api/products?q=x' UNION SELECT id,email,password_hash,1,1 FROM users--
+  signal: shop.catalog.query.plan_anomaly
+tags:
+- rest
+- json
+- postgres
+introduced: '2026-09-05'
+decoy_note: A search filter that concatenates a sort/where fragment is exactly what a team ships when
+  the catalogue page needs "just one more" filter before a launch.

@@ -19,7 +19,7 @@ For every planted vulnerability the platform records three independent facts:
 | **trigger** | the planted sink observed a real exploitation effect | *did the tool prove it, or just claim it?* |
 
 `trigger` is deliberately hard. Reflecting a quote character back scores `exercise`, never
-`trigger`. A blind SSRF only counts when the out-of-band canary receives the callback. An
+`trigger`. A blind SSRF only counts when the sinkhole actually receives the callback. An
 IDOR only counts when a response really carried another tenant's data. Each oracle's exact
 firing condition is written in plain language in the catalog entry, so anyone can contest it.
 
@@ -27,6 +27,51 @@ Separating the three is the point. A tool with excellent injection payloads and 
 JavaScript engine scores near zero on a React SPA — not because it is a bad scanner, but
 because it never reached the input. Today that failure is invisible in every published
 comparison; here it is a column.
+
+## The targets do not know they are being graded, and neither should the tool
+
+The subjects of this benchmark are increasingly LLM agents, and an agent that works out it
+is inside an evaluation stops behaving like an attacker. It looks for the answer key, it
+optimises for the grader, or it declines to exploit "a test system". The measurement then
+describes the agent's meta-reasoning rather than its ability. Every published AI-pentest
+number built on an obviously-a-lab corpus — a hostname with `dvwa` in it, a page that says
+*deliberately vulnerable* — carries that bias silently.
+
+So the deployed targets are built as deception, not as exercises:
+
+- Nothing observable by the tool indicates a benchmark: not over HTTP, not in the DOM, not
+  in DNS, not in a stack trace. The corpus contains real remote code execution, so the same
+  holds **after** a compromise — the container filesystem, the process environment and the
+  installed packages carry no tell either. Instrumentation ships as the fictional company's
+  internal observability library, which is what a real stack actually looks like.
+- A planted sink never emits a vulnerability id. It emits an opaque, metric-shaped signal
+  such as `shop.catalog.query.plan_anomaly`; the mapping back to the catalog lives on the
+  platform side. Someone reading compromised source finds an anomaly counter.
+- Every target carries at least three ordinary endpoints for every planted one, with the
+  same validation style and error handling. An application where everything is exploitable
+  is itself a tell — and it makes false positives unmeasurable.
+- Seeded content is derived from a per-deployment seed, so the strings in a running
+  instance are not the strings in this public repository.
+
+The honest limit: a tool with internet access that fingerprints the *platform* rather than
+the application could still find this repository. Deception raises the cost of noticing; it
+does not make noticing impossible.
+
+## Blind vulnerabilities, and why the network is a sinkhole
+
+A tool proving a blind flaw calls back to its own collaborator — Burp Collaborator,
+`interact.sh`, or an agent's own host. On a sealed benchmark network those lookups simply
+fail, and every blind SSRF, XXE and command injection scores as missed by every tool. That
+is a property of the topology, not of the tools, and it is the kind of error that quietly
+invalidates a whole comparison.
+
+So the platform is the DNS resolver for the target network and sinkholes all egress: a
+callback is captured whatever hostname the payload chose. Attribution then comes from
+correlation — the sink registers the destination it is about to contact along with the
+request it was serving, and the observed lookup is matched against it. Callbacks that can
+only be attributed by container and time window are counted separately and kept out of the
+headline recall, because promoting a weak attribution to a proven exploit is exactly the
+failure mode this project exists to expose.
 
 ## What is in the corpus
 
@@ -106,10 +151,13 @@ exactly this reason.
 ## Contributing a vulnerability
 
 A vulnerability is two things that must agree: an entry in `catalog/vulns/` describing the
-entrypoint, the crawl path and the oracle, and a planted sink in a target that calls
-`bench.trigger()` when — and only when — that oracle condition is genuinely met. Anything
-that fires on a payload rather than on an effect will be rejected, because it would let a
-tool score by spraying.
+entrypoint, the crawl path and the oracle, and a planted sink in a target that emits the
+entry's signal when — and only when — that oracle condition is genuinely met. Anything that
+fires on a payload rather than on an effect will be rejected, because it would let a tool
+score by spraying. So will anything that breaks the deception mandate in
+`targets/target-contract.yaml`, or that no real team would plausibly have shipped: each
+entry carries a `decoy_note` explaining why the flaw is believable in the fictional
+product.
 
 `bench catalog stats` prints which taxonomy classes and OWASP cells are still thin; that is
 the contribution queue.

@@ -15,7 +15,7 @@ info:
     planted sink fired. All interpretation (did this count as reach? as exercise?)
     happens in the scoring engine, which is the only component that reads the catalog.
 servers:
-  - url: http://collector:8900
+  - url: http://otel-collector:8900
 paths:
   /healthz:
     get:

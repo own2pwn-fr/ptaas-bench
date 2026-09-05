@@ -4,7 +4,15 @@
   "title": "ptaas-bench vulnerability catalog entry",
   "description": "Ground truth for one planted vulnerability. One YAML file per vulnerability under catalog/vulns/. Every field here is consumed by the scoring engine; nothing is decorative. `entrypoint` drives crawl-recall scoring, `param` drives exercise (fuzz) scoring, and `oracle` documents the in-app trigger that proves exploitation.",
   "type": "object",
-  "required": ["id", "title", "app", "class", "severity", "entrypoint", "oracle"],
+  "required": [
+    "id",
+    "title",
+    "app",
+    "class",
+    "severity",
+    "entrypoint",
+    "oracle"
+  ],
   "additionalProperties": false,
   "properties": {
     "id": {
@@ -12,14 +20,24 @@
       "pattern": "^BENCH-[A-Z0-9]+-[0-9]{4}$",
       "description": "Stable identifier, e.g. BENCH-SHOP-0001. Emitted verbatim by bench.trigger() in the target code; never renumber."
     },
-    "title": {"type": "string", "minLength": 8},
+    "title": {
+      "type": "string",
+      "minLength": 8
+    },
     "app": {
       "type": "string",
       "description": "Target application key, matching a directory under targets/."
     },
     "component": {
       "type": "string",
-      "enum": ["web", "api", "edge", "worker", "db", "infra"],
+      "enum": [
+        "web",
+        "api",
+        "edge",
+        "worker",
+        "db",
+        "infra"
+      ],
       "default": "api"
     },
     "class": {
@@ -28,7 +46,10 @@
     },
     "cwe": {
       "type": "array",
-      "items": {"type": "integer", "minimum": 1},
+      "items": {
+        "type": "integer",
+        "minimum": 1
+      },
       "description": "Overrides the class default when this instance is more specific."
     },
     "owasp": {
@@ -36,43 +57,100 @@
       "description": "Overrides taxonomy defaults. Keys are Top 10 editions.",
       "additionalProperties": false,
       "properties": {
-        "2017": {"type": "string", "pattern": "^A(0[1-9]|10)$"},
-        "2021": {"type": "string", "pattern": "^A(0[1-9]|10)$"},
-        "2025": {"type": "string", "pattern": "^A(0[1-9]|10)$"}
+        "2017": {
+          "type": "string",
+          "pattern": "^A(0[1-9]|10)$"
+        },
+        "2021": {
+          "type": "string",
+          "pattern": "^A(0[1-9]|10)$"
+        },
+        "2025": {
+          "type": "string",
+          "pattern": "^A(0[1-9]|10)$"
+        }
       }
     },
-    "severity": {"type": "string", "enum": ["info", "low", "medium", "high", "critical"]},
+    "severity": {
+      "type": "string",
+      "enum": [
+        "info",
+        "low",
+        "medium",
+        "high",
+        "critical"
+      ]
+    },
     "entrypoint": {
       "type": "object",
       "description": "The single HTTP location a scanner must reach for this vulnerability to be in play. Scored as `reach`.",
-      "required": ["method", "path"],
+      "required": [
+        "method",
+        "path"
+      ],
       "additionalProperties": false,
       "properties": {
-        "method": {"type": "string", "enum": ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS", "TRACE"]},
+        "method": {
+          "type": "string",
+          "enum": [
+            "GET",
+            "POST",
+            "PUT",
+            "PATCH",
+            "DELETE",
+            "HEAD",
+            "OPTIONS",
+            "TRACE"
+          ]
+        },
         "path": {
           "type": "string",
           "description": "Server-side route template as registered by the framework, e.g. /api/orders/:id. Must match the route label the SDK reports, not a concrete URL."
         },
         "auth": {
           "type": "string",
-          "enum": ["none", "user", "admin", "other-user"],
+          "enum": [
+            "none",
+            "user",
+            "admin",
+            "other-user"
+          ],
           "default": "none",
           "description": "Credential level required to reach the entrypoint. `other-user` means the flaw is only provable from an account that does not own the resource."
         },
         "param": {
-          "type": ["string", "null"],
+          "type": [
+            "string",
+            "null"
+          ],
           "description": "Injection point name. Null for vulnerabilities with no parameter (e.g. exposed .git, TRACE enabled), which are then scored on reach+trigger only."
         },
         "param_in": {
           "type": "string",
-          "enum": ["query", "body", "json", "path", "header", "cookie", "multipart", "raw", "graphql", "websocket"],
+          "enum": [
+            "query",
+            "body",
+            "json",
+            "path",
+            "header",
+            "cookie",
+            "multipart",
+            "raw",
+            "graphql",
+            "websocket"
+          ],
           "default": "query"
         },
         "default_value": {
-          "type": ["string", "null"],
+          "type": [
+            "string",
+            "null"
+          ],
           "description": "Benign value the application itself uses. `exercise` is credited only when a tool sends something different, which is what separates a crawler from a scanner."
         },
-        "content_type": {"type": "string"}
+        "content_type": {
+          "type": "string"
+        }
       }
     },
     "discovery": {
@@ -82,21 +160,52 @@
       "properties": {
         "render": {
           "type": "string",
-          "enum": ["static-html", "server-template", "spa-react", "spa-angular", "spa-vue", "htmx", "api-only", "websocket", "non-http"],
+          "enum": [
+            "static-html",
+            "server-template",
+            "spa-react",
+            "spa-angular",
+            "spa-vue",
+            "htmx",
+            "api-only",
+            "websocket",
+            "non-http"
+          ],
           "description": "Rendering mode of the page exposing the entrypoint. The headline result of this benchmark is how recall collapses from static-html to SPA."
         },
         "reachable_from": {
           "type": "array",
-          "items": {"type": "string"},
+          "items": {
+            "type": "string"
+          },
           "description": "Paths that link to this entrypoint, forming the expected crawl graph."
         },
         "requires": {
           "type": "array",
-          "items": {"type": "string", "enum": ["js-execution", "form-submit", "multi-step-flow", "file-upload", "custom-header", "openapi-spec", "graphql-introspection", "sitemap", "robots", "wordlist", "state-change", "websocket", "http2"]},
+          "items": {
+            "type": "string",
+            "enum": [
+              "js-execution",
+              "form-submit",
+              "multi-step-flow",
+              "file-upload",
+              "custom-header",
+              "openapi-spec",
+              "graphql-introspection",
+              "sitemap",
+              "robots",
+              "wordlist",
+              "state-change",
+              "websocket",
+              "http2"
+            ]
+          },
           "description": "Capabilities a tool must have to get here at all."
         },
         "difficulty": {
-          "type": "integer", "minimum": 1, "maximum": 5,
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 5,
           "description": "1 = linked from the homepage in plain HTML. 5 = only reachable after a multi-step authenticated flow rendered client-side."
         }
       }
@@ -104,12 +213,22 @@
     "oracle": {
       "type": "object",
       "description": "How the platform proves the tool actually exploited the flaw rather than guessing it.",
-      "required": ["kind", "condition"],
+      "required": [
+        "kind",
+        "condition"
+      ],
       "additionalProperties": false,
       "properties": {
         "kind": {
           "type": "string",
-          "enum": ["sink", "oob", "state", "differential", "timing", "artifact"],
+          "enum": [
+            "sink",
+            "oob",
+            "state",
+            "differential",
+            "timing",
+            "artifact"
+          ],
           "description": "sink: the vulnerable sink observed attacker-controlled effect. oob: the canary service received a callback. state: a forbidden state change happened. differential: the response proves cross-tenant/unauthorized data. timing: an induced delay was observed. artifact: a file/record only reachable via the flaw was read."
         },
         "condition": {
@@ -117,17 +236,44 @@
           "minLength": 20,
           "description": "Plain-language statement of exactly what makes bench.trigger() fire, so the oracle is auditable by a third party reading the catalog alone."
         },
-        "poc": {"type": "string", "description": "A known-good request that fires the oracle. Verified by the self-test suite."},
-        "canary_token": {"type": "string", "description": "For kind=oob, the token embedded in the canary hostname/path."}
+        "poc": {
+          "type": "string",
+          "description": "A known-good request that fires the oracle. Verified by the self-test suite."
+        },
+        "canary_token": {
+          "type": "string",
+          "description": "Optional. Legacy static token for a callback aimed at our own zone. Most out-of-band oracles no longer need it: the egress sinkhole captures callbacks to whatever domain the tool chose, including its own collaborator, and attributes them by correlating the originating container and the request it was serving."
+        },
+        "signal": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9]*(\\.[a-z0-9_]+){2,}$",
+          "description": "Opaque, metric-shaped identifier emitted by the planted sink, e.g. shop.catalog.query.plan_anomaly. The target never emits a catalog id: a tool that compromises the host and reads the source must find something that looks like an ordinary anomaly counter, not a graded exercise. The scorer maps signal -> id, so signals must be unique across the whole catalog. Required for every oracle kind except pure oob, where the sinkhole attributes the callback instead."
+        }
       }
     },
     "requires_prereq": {
       "type": "array",
-      "items": {"type": "string"},
+      "items": {
+        "type": "string"
+      },
       "description": "Other BENCH ids that must be exploited first (chained vulnerabilities). Scored separately as chain depth."
     },
-    "tags": {"type": "array", "items": {"type": "string"}},
-    "introduced": {"type": "string", "format": "date"},
-    "notes": {"type": "string"}
+    "tags": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "introduced": {
+      "type": "string",
+      "format": "date"
+    },
+    "notes": {
+      "type": "string"
+    },
+    "decoy_note": {
+      "type": "string",
+      "description": "Why this flaw is plausible in the fictional product — the cover story. A planted vulnerability that no real team would ever ship is a tell, and reviewers use this field to reject implausible ones."
+    }
   }
 }
