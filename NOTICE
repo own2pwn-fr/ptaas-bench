@@ -1,0 +1,40 @@
+ptaas-bench
+Copyright 2026 own2pwn
+
+This product includes software developed as part of this project, licensed under the
+Apache License, Version 2.0 (see LICENSE).
+
+--------------------------------------------------------------------------------
+Third-party components redistributed in this repository
+--------------------------------------------------------------------------------
+
+The targets are deliberately vulnerable applications. Some of them vendor a
+third-party library so that the target builds and runs without reaching a package
+registry at image-build time. Those components are listed here with the licence they
+are distributed under; each retains whatever notice its licence requires.
+
+  Vue                3.5.13   MIT
+                     targets/blog/web/dist/assets/vue.global.prod-3.5.13.js
+                     Copyright (c) 2018-present Yuxi (Evan) You and Vue contributors.
+                     The upstream banner is retained verbatim in the file.
+
+  htmx               2.0.4    Zero-Clause BSD (0BSD)
+                     targets/intranet/hub/static/js/htmx.min.js
+                     0BSD grants use, copying, modification and distribution with no
+                     conditions and no attribution requirement. Listed here for
+                     inventory rather than obligation.
+
+Dependencies resolved at build time from a package registry — npm, PyPI, Maven
+Central, NuGet — are not redistributed here and are not listed. Their versions are
+pinned exactly in each target's manifest, deliberately: several planted flaws depend
+on a specific version behaving a specific way, and an unpinned dependency silently
+repairs the vulnerability it was chosen for.
+
+--------------------------------------------------------------------------------
+Tools benchmarked
+--------------------------------------------------------------------------------
+
+This repository ships drivers that invoke third-party scanners; it does not
+redistribute them. Each is pulled from its own upstream at run time under its own
+licence. Naming a tool here is not a claim of endorsement by, or affiliation with,
+its authors.

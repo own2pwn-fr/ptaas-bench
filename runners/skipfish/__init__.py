@@ -2,22 +2,23 @@
 
 Why skipfish and not Arachni, since the brief allowed either:
 
-1. **Licence.** Arachni ships under the Arachni Public Source License v1.0, which is
-   not OSI-approved and forbids use that involves "Commercialization", explicitly
-   including value-added services and SaaS. The only exemptions are a pen-tester's
-   manual toolkit and assessing your own systems. A public competitive benchmark
-   published by the vendor of a competing product is neither, and redistributing an
-   image or fixtures runs into the same clause. The consent address given in the
-   licence sits on a domain that now redirects to a storefront for the commercial
-   successor product. skipfish is Apache-2.0: no permission needed, fixtures
-   redistributable, no legal footnote under the results table.
+1. **Licence, as we read it.** Arachni ships under the Arachni Public Source License
+   v1.0, which is not OSI-approved and restricts use involving "Commercialization",
+   a term the licence defines to include value-added services and SaaS, with
+   exemptions for a pen-tester's own toolkit and for assessing your own systems. We
+   are not confident that a public competitive benchmark published by the vendor of a
+   competing product falls inside those exemptions, and redistributing an image or
+   fixtures raises the same question. We did not seek permission; we chose a tool
+   that does not require the analysis. This is our reading, not a legal opinion and
+   not a claim about the project or its authors. skipfish is Apache-2.0: nothing to
+   interpret, fixtures redistributable, no footnote under the results table.
 2. **Reproducible acquisition.** Arachni's repository is archived, it has no release
    assets, no upstream image and no distribution package; the only image carrying a
    current version is a single unsigned community build, amd64 only, with no
    published Dockerfile. skipfish is still packaged in Kali (2.10b-2kali8, accepted
    2025-12), so the image below is built from a maintained, multi-arch base with an
    auditable packaging trail.
-3. **We would have to cripple Arachni to run it.** 1.6.x hard-exits on a DOM scan
+3. **We would have to disable its browser to run it.** 1.6.x hard-exits on a DOM scan
    unless chromedriver matches its 2022 selenium pin, and the practical workaround is
    ``--browser-cluster-pool-size=0``, which disables all JavaScript coverage. On a
    deliberately SPA-heavy corpus, publishing numbers for a scanner with its browser
