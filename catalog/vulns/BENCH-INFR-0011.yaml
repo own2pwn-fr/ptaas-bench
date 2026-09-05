@@ -1,0 +1,49 @@
+id: BENCH-INFR-0011
+title: Subversion working copy under the recruitment micro-site
+app: infra
+component: infra
+class: exposed_vcs
+severity: high
+entrypoint:
+  method: GET
+  path: /careers/portal/.svn/**
+  auth: none
+  param: null
+  default_value: null
+discovery:
+  render: static-html
+  reachable_from:
+  - /careers.html
+  - /careers/portal/
+  requires:
+  - wordlist
+  difficulty: 4
+oracle:
+  kind: artifact
+  condition: >
+    The recruitment micro-site was delivered by an agency that still checks its work out
+    over Subversion, and the working copy administrative directory came with it, three
+    levels below the document root where the rule that would have blocked it was never
+    applied. A 200 on the format file or on the directory itself proves the directory is
+    there and is not counted. The counter moves the first time one client has been served
+    in full, with status 200, both the working-copy database that lists the files and
+    their content hashes and at least one pristine copy under it, which together are the
+    bytes of a tracked file. Either half alone, fetched any number of times, does not
+    complete it.
+  poc: 'GET /careers/portal/.svn/wc.db then GET /careers/portal/.svn/pristine/<first two hex>/<hash>.svn-base'
+  signal: infra.portal.repo.object_served
+notes: >
+  Written as the whole administrative directory for the same reason as the repository at
+  the document root: the database and the pristine copies under it are two steps of one
+  retrieval.
+tags:
+- static
+- apache
+- anonymous
+- source-disclosure
+- subversion
+introduced: '2026-09-05'
+decoy_note: >
+  The agency copied its working directory to the server over SFTP because that is how it
+  has always delivered, and the deny rule the estate applies to repository metadata was
+  written for the document root and never matched a path this deep.

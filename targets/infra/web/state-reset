@@ -1,0 +1,27 @@
+#!/bin/sh
+# Put this host back to the state it is deployed in.
+#
+# The document roots, the leftovers under them and every datastore the site uses are
+# written by the deployment routine, which runs on the operations network -- not here.
+# This host serves files; it does not own what it serves, and nothing that rebuilds an
+# estate belongs in a container that answers the public.
+#
+# So this is a thin client: ask the operations listener to run the deployment, and print
+# the digest it returns. Same estate, same digest. A different digest means something is
+# still holding state from the previous deployment, and figures taken either side of it
+# are not comparable.
+#
+# Run it twice if you want to be sure; it is idempotent by construction.
+set -eu
+
+ADDR="${OPS_ADDR:-telemetry:9902}"
+
+if ! out=$(wget -q -O - -T 600 "http://${ADDR}/deploy"); then
+    echo "state-reset: the operations listener at ${ADDR} did not complete the deployment" >&2
+    exit 1
+fi
+
+case "$out" in
+    state\ *) printf '%s\n' "$out" ;;
+    *) echo "state-reset: unexpected reply: $out" >&2; exit 1 ;;
+esac

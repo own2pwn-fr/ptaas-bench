@@ -3,3 +3,7 @@
 include:
   - edge.yml
   - shopfront.yml
+  - infra.yml
+  - intranet.yml
+  - corp.yml
+  - legacy.yml

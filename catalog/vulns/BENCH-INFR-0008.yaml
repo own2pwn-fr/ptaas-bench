@@ -1,0 +1,44 @@
+id: BENCH-INFR-0008
+title: Document store accepting unauthenticated queries
+app: infra
+component: db
+class: db_exposed
+severity: critical
+entrypoint:
+  method: GET
+  path: infra-mongo:27017
+  auth: none
+  param: null
+  default_value: null
+discovery:
+  render: non-http
+  reachable_from:
+  - /.env
+  requires: []
+  difficulty: 2
+oracle:
+  kind: artifact
+  condition: >
+    The document store was started without access control, so every database on it is
+    readable by anything that can open the port. A completed handshake, a server
+    description, or a build-information call proves reachability only and is not
+    counted. The counter moves when the store's own operation log shows that a client
+    outside the estate's address range ran either an enumeration that returned the names
+    of the databases or collections, or a query that returned at least one document. A
+    query matching nothing returns nothing and does not count.
+  poc: 'mongosh mongodb://infra-mongo:27017 --eval ''db.adminCommand({listDatabases:1})'' then a find() on a collection it names'
+  signal: infra.records.collection.read
+notes: >
+  Not an HTTP endpoint: the entrypoint is the socket the store answers on, written as
+  host and port with no scheme, because a scheme would be read as a URL and reduce the
+  whole address to a path.
+tags:
+- datastore
+- mongodb
+- anonymous
+- network
+introduced: '2026-09-05'
+decoy_note: >
+  It was brought up for a proof of concept that turned into production without ever
+  being handed to the operations team, and access control is off because that is what
+  the default configuration does when nobody edits it.

@@ -1,0 +1,43 @@
+id: BENCH-INFR-0004
+title: Internal API description published beside the marketing site
+app: infra
+component: infra
+class: swagger_exposed
+severity: low
+entrypoint:
+  method: GET
+  path: /api-docs/openapi.yaml
+  auth: none
+  param: null
+  default_value: null
+discovery:
+  render: static-html
+  reachable_from:
+  - /robots.txt
+  - /api-docs/
+  requires:
+  - robots
+  difficulty: 1
+oracle:
+  kind: artifact
+  condition: >
+    The description of the internal ordering and dispatch service, including the host
+    names it runs on and the operations that are supposed to be reachable only from the
+    works network, was published under the public site while a partner integration was
+    being tested. The counter moves when a GET returned 200 and wrote at least the byte
+    length of the document, so the caller holds the whole description rather than having
+    merely found the path. Reading the human-facing page at /api-docs/ does not move it,
+    nor does a HEAD, nor does the 401 the maintained copy of the same document returns
+    on the documentation host.
+  poc: GET /api-docs/openapi.yaml
+  signal: infra.api.spec.document_served
+tags:
+- static
+- apache
+- anonymous
+- api-description
+introduced: '2026-09-05'
+decoy_note: >
+  A partner needed the description during an integration, the quickest way to hand it
+  over was to drop it next to the website, and the temporary copy outlived the
+  integration by a year.

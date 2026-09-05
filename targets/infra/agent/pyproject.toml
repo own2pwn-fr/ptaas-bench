@@ -1,0 +1,18 @@
+[project]
+name = "site-telemetry"
+version = "1.4.0"
+description = "Deployment routine and telemetry readers for the estate's public hosts and datastores."
+readme = { text = "See src/site_telemetry/main.py for what the process does.", content-type = "text/plain" }
+requires-python = ">=3.12"
+license = { text = "Apache-2.0" }
+# The shared telemetry library, and a client for the document store. Everything else --
+# the key/value protocol, the archives, the repository formats -- is the standard
+# library, because a reader that has to be patched is a reader that stops being run.
+dependencies = ["telemetry-agent>=1.0", "pymongo>=4.8"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/site_telemetry"]

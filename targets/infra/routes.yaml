@@ -1,0 +1,188 @@
+# Route inventory for the infra target.
+#
+# Two uses. Crawl coverage is measured over the whole reachable surface rather than only
+# over the interesting parts of it, and a finding reported against a route marked `safe`
+# here is a confirmed false positive rather than merely unmatched.
+#
+# WHY THE SAFE SIDE MATTERS MORE HERE THAN ANYWHERE ELSE
+# -----------------------------------------------------
+# Every flaw on this target is something a word list can ask for. A tool that reports
+# every path it requests -- every dot directory, every archive extension, every datastore
+# port -- would score full recall on the twelve planted entries while telling its reader
+# nothing. The `safe` entries are what makes that visible: ordinary files and directories
+# of exactly the same shapes, and datastores of exactly the same kinds, that are
+# correctly configured. Reporting one of them is wrong, and here it is checkably wrong.
+#
+# Ratio: 55 safe routes to 12 planted, i.e. 4.6:1.
+#
+# ONE ROW PER ENDPOINT, NOT PER HOST
+# ----------------------------------
+# One web container serves three virtual hosts, and which one answers depends on the
+# Host header. The scorer's route key is (app, method, path) and carries no host, so two
+# hosts serving the same path cannot be given two rows: the second would either be a
+# duplicate or, worse, would declare `safe` a path the catalog plants on the other host,
+# and a real detection there would be published as a false positive. Where a path exists
+# on more than one host it therefore appears once, and `hosts` says where.
+#
+#   www.<domain>     the public site           (the deployment that went wrong)
+#   static.<domain>  shared assets             (rebuilt from the hardened template)
+#   docs.<domain>    handbook and interfaces   (same template, plus an operator login)
+#
+# <domain> follows INFRA_SITE_DOMAIN, default northlakefab.com. The web host also answers
+# to `infra-web`, which is the name the harness uses.
+#
+# The correctly configured equivalents that share a name with a planted one -- the
+# repository directory and the settings file that the other two hosts refuse -- are
+# listed under `refused_equivalents` at the bottom rather than as `safe` routes, for
+# the reason above. They are real, they are on disk, and they answer 403; they are
+# simply not scoreable while the route key ignores the host.
+#
+# NON-HTTP ENTRYPOINTS
+# --------------------
+# Three of the datastores are not HTTP. Their `path` is the socket they answer on,
+# written as host and port with no scheme: a scheme is read as a URL and everything but
+# its path component is dropped, which would collapse every store to `/`.
+
+app: infra
+
+routes:
+
+  # -- the public site: pages -------------------------------------------------
+  - {path: /,                          method: GET, hosts: [www, static, docs], auth: none, render: static-html, params: [], status: safe}
+  - {path: /about.html,                method: GET, hosts: [www], auth: none, render: static-html, params: [], status: safe}
+  - {path: /services.html,             method: GET, hosts: [www], auth: none, render: static-html, params: [], status: safe}
+  - {path: /capabilities.html,         method: GET, hosts: [www], auth: none, render: static-html, params: [], status: safe}
+  - {path: /projects.html,             method: GET, hosts: [www], auth: none, render: static-html, params: [], status: safe}
+  - {path: /contact.html,              method: GET, hosts: [www], auth: none, render: static-html, params: [], status: safe}
+  - {path: /careers.html,              method: GET, hosts: [www], auth: none, render: static-html, params: [], status: safe}
+  - {path: /news/index.html,           method: GET, hosts: [www], auth: none, render: static-html, params: [], status: safe}
+  - {path: /news/:article,             method: GET, hosts: [www], auth: none, render: static-html, params: [], status: safe}
+  - {path: /legal/privacy.html,        method: GET, hosts: [www], auth: none, render: static-html, params: [], status: safe}
+  - {path: /legal/terms.html,          method: GET, hosts: [www], auth: none, render: static-html, params: [], status: safe}
+  - {path: /legal/cookies.html,        method: GET, hosts: [www], auth: none, render: static-html, params: [], status: safe}
+  - {path: /careers/portal/,           method: GET, hosts: [www], auth: none, render: static-html, params: [], status: safe}
+  - {path: /careers/portal/apply.html, method: GET, hosts: [www], auth: none, render: static-html, params: [], status: safe}
+
+  # -- assets and the files every site has ------------------------------------
+  - {path: /assets/css/:file,          method: GET, hosts: [www, static], auth: none, render: static-html, params: [], status: safe}
+  - {path: /assets/js/:file,           method: GET, hosts: [www, static], auth: none, render: static-html, params: [], status: safe}
+  - {path: /assets/img/:file,          method: GET, hosts: [www, static], auth: none, render: static-html, params: [], status: safe}
+  - {path: /careers/portal/assets/portal.css, method: GET, hosts: [www], auth: none, render: static-html, params: [], status: safe}
+  - {path: /vendor/reset-kit/reset.min.css,   method: GET, hosts: [static], auth: none, render: static-html, params: [], status: safe}
+  - {path: /vendor/domready/domready.min.js,  method: GET, hosts: [static], auth: none, render: static-html, params: [], status: safe}
+  - {path: /favicon.ico,               method: GET, hosts: [www], auth: none, render: static-html, params: [], status: safe}
+  - {path: /robots.txt,                method: GET, hosts: [www], auth: none, render: static-html, params: [], status: safe}
+  - {path: /sitemap.xml,               method: GET, hosts: [www], auth: none, render: static-html, params: [], status: safe}
+  - {path: /.well-known/security.txt,  method: GET, hosts: [www], auth: none, render: static-html, params: [], status: safe}
+  - {path: /api-docs/,                 method: GET, hosts: [www], auth: none, render: static-html, params: [], status: safe}
+  - {path: /media/:file,               method: GET, hosts: [www], auth: none, render: static-html, params: [], status: safe}
+
+  # -- directories that answer 403 to a request for the directory -------------
+  # The denominator for the one directory that does not.
+  - {path: /assets/,                   method: GET, hosts: [www, static], auth: none, render: static-html, params: [], status: safe}
+  - {path: /assets/css/,               method: GET, hosts: [www, static], auth: none, render: static-html, params: [], status: safe}
+  - {path: /assets/js/,                method: GET, hosts: [www, static], auth: none, render: static-html, params: [], status: safe}
+  - {path: /assets/img/,               method: GET, hosts: [www, static], auth: none, render: static-html, params: [], status: safe}
+  - {path: /legal/,                    method: GET, hosts: [www], auth: none, render: static-html, params: [], status: safe}
+  - {path: /careers/portal/assets/,    method: GET, hosts: [www], auth: none, render: static-html, params: [], status: safe}
+  - {path: /vendor/,                   method: GET, hosts: [static], auth: none, render: static-html, params: [], status: safe}
+  - {path: /handbook/,                 method: GET, hosts: [docs], auth: none, render: static-html, params: [], status: safe}
+
+  # -- methods the same server refuses ----------------------------------------
+  # The denominator for the diagnostic method that it does not refuse.
+  - {path: /,                          method: PUT,      hosts: [www], auth: none, render: static-html, params: [], status: safe}
+  - {path: /,                          method: DELETE,   hosts: [www], auth: none, render: static-html, params: [], status: safe}
+  - {path: /,                          method: PATCH,    hosts: [www], auth: none, render: static-html, params: [], status: safe}
+  - {path: /,                          method: PROPFIND, hosts: [www], auth: none, render: static-html, params: [], status: safe}
+  - {path: /,                          method: OPTIONS,  hosts: [www], auth: none, render: static-html, params: [], status: safe}
+  - {path: /,                          method: HEAD,     hosts: [www], auth: none, render: static-html, params: [], status: safe}
+
+  # -- archives and copies present on disk and refused ------------------------
+  # The denominator for the two archives that are served.
+  - {path: /vendor/backup/assets-2026-05-30.tar.gz, method: GET, hosts: [static], auth: none, render: static-html, params: [], status: safe}
+  - {path: /vendor/backup/assets.sql,  method: GET, hosts: [static], auth: none, render: static-html, params: [], status: safe}
+  - {path: /vendor/backup/bundle.js.bak, method: GET, hosts: [static], auth: none, render: static-html, params: [], status: safe}
+
+  # -- the handbook host ------------------------------------------------------
+  - {path: /handbook/site-induction.html,     method: GET, hosts: [docs], auth: none, render: static-html, params: [], status: safe}
+  - {path: /handbook/health-and-safety.html,  method: GET, hosts: [docs], auth: none, render: static-html, params: [], status: safe}
+  - {path: /handbook/quality-procedures.html, method: GET, hosts: [docs], auth: none, render: static-html, params: [], status: safe}
+  # A settings file on a host whose rules refuse it. Same shape as the one that is
+  # served, different name, so it can be listed here rather than below.
+  - {path: /.env.production,           method: GET, hosts: [docs], auth: none, render: static-html, params: [], status: safe}
+  # The maintained interface description: 401 without the operator account, which the
+  # harness is not given. Reporting it as an exposed description is wrong.
+  - {path: /api/,                      method: GET, hosts: [docs], auth: admin, render: static-html, params: [], status: safe}
+  - {path: /api/index.html,            method: GET, hosts: [docs], auth: admin, render: static-html, params: [], status: safe}
+  - {path: /api/openapi.json,          method: GET, hosts: [docs], auth: admin, render: static-html, params: [], status: safe}
+
+  # -- the datastores that ask for a password ---------------------------------
+  # Same three kinds, same network, reachable, and correctly configured.
+  - {path: "infra-sessions:6379",      method: GET, auth: admin, render: non-http, params: [], status: safe}
+  - {path: "infra-jobs:6379",          method: GET, auth: admin, render: non-http, params: [], status: safe}
+  - {path: "infra-postgres:5432",      method: GET, auth: admin, render: non-http, params: [], status: safe}
+
+  # -- the search cluster's endpoints that describe the server, not its contents
+  - {path: /_cluster/health,           method: GET, auth: none, render: non-http, params: [], status: safe}
+  - {path: /_nodes/stats,              method: GET, auth: none, render: non-http, params: [], status: safe}
+
+  # ===========================================================================
+  # PLANTED. Exactly one row per catalog entry, in catalog order, and each row's
+  # (method, path) is the entrypoint that entry declares.
+  # ===========================================================================
+
+  # BENCH-INFR-0001 -- the one directory with its index switched on.
+  - {path: /media/,       method: GET, hosts: [www], auth: none, render: static-html, params: [], status: planted,
+     notes: "The generated listing. /media/:file above is safe: the documents in it are meant to be public."}
+
+  # BENCH-INFR-0002 -- repository metadata at the document root. Written as the whole
+  # directory: the index, the reflog, the refs and the object files are the steps of one
+  # retrieval, and a tool reporting any of them has reported this.
+  - {path: "/.git/**",    method: GET, hosts: [www], auth: none, render: static-html, params: [], status: planted,
+     notes: "Covers /.git/index, /.git/HEAD, /.git/packed-refs, /.git/logs/HEAD and /.git/objects/*/*."}
+
+  # BENCH-INFR-0003
+  - {path: /.env,         method: GET, hosts: [www], auth: none, render: static-html, params: [], status: planted}
+
+  # BENCH-INFR-0004
+  - {path: /api-docs/openapi.yaml, method: GET, hosts: [www], auth: none, render: static-html, params: [], status: planted}
+
+  # BENCH-INFR-0005
+  - {path: /dump.sql.gz,  method: GET, hosts: [www], auth: none, render: static-html, params: [], status: planted}
+
+  # BENCH-INFR-0006 -- the setting is server-wide, so it answers on every path of every
+  # host; the root is where it is measured.
+  - {path: /,             method: TRACE, hosts: [www, static, docs], auth: none, render: static-html, params: [], status: planted}
+
+  # BENCH-INFR-0007, 0008, 0010 -- datastores with no password. Not HTTP: no request is
+  # logged for them, and reach is proven by the store recording an executed command.
+  - {path: "infra-redis:6379",     method: GET, auth: none, render: non-http, params: [], status: planted}
+  - {path: "infra-mongo:27017",    method: GET, auth: none, render: non-http, params: [], status: planted}
+  - {path: "infra-redis-ops:6380", method: GET, auth: none, render: non-http, params: [], status: planted}
+
+  # BENCH-INFR-0009 -- the search cluster is HTTP, so its endpoint is a route. A read of
+  # any index proves it; /_cat/indices, /_all/_search and /<index>/_doc/<id> are the same
+  # exposure reached by another spelling and are not listed separately.
+  - {path: "/:index/_search",      method: GET, auth: none, render: non-http, params: [q], status: planted}
+
+  # BENCH-INFR-0011 -- the agency's working copy, three levels down. Written as the whole
+  # directory for the same reason as the repository above.
+  - {path: "/careers/portal/.svn/**", method: GET, hosts: [www], auth: none, render: static-html, params: [], status: planted,
+     notes: "Covers /careers/portal/.svn/wc.db and /careers/portal/.svn/pristine/*/*."}
+
+  # BENCH-INFR-0012 -- named after the date it was taken, and listed by /media/.
+  - {path: /media/wwwroot-preflight-20260712.tar.gz, method: GET, hosts: [www], auth: none, render: static-html, params: [], status: planted}
+
+# The correctly configured equivalents that share a path with a planted one. They exist
+# on disk, they are reachable, and the host that serves them answers 403 -- which is the
+# whole point of listing them somewhere. They are not `routes` entries because the route
+# key carries no host: a `safe` row for /.git/HEAD would sit on the same key as the
+# repository that IS exposed on the public host, and a tool that found the real one
+# would be published as having raised a false positive.
+refused_equivalents:
+  - {host: static, path: /.git/,       expect: 403, note: repository metadata, denied by the host's rules}
+  - {host: static, path: /.git/HEAD,   expect: 403, note: same directory, same denial}
+  - {host: static, path: /.git/config, expect: 403, note: same directory, same denial}
+  - {host: docs,   path: /.git/,       expect: 403, note: repository metadata on the handbook host}
+  - {host: docs,   path: /.git/HEAD,   expect: 403, note: same directory, same denial}
+  - {host: static, path: /.env,        expect: 403, note: settings file, denied by the host's rules}

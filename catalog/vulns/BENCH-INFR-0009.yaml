@@ -1,0 +1,41 @@
+id: BENCH-INFR-0009
+title: Search cluster answering queries from anyone on the network
+app: infra
+component: db
+class: db_exposed
+severity: critical
+entrypoint:
+  method: GET
+  path: /:index/_search
+  auth: none
+  param: null
+  default_value: null
+discovery:
+  render: non-http
+  reachable_from:
+  - /.env
+  requires: []
+  difficulty: 2
+oracle:
+  kind: artifact
+  condition: >
+    The search cluster runs with its security layer disabled and its HTTP port open to
+    the network, so its indices can be listed and read without credentials. The greeting
+    document at the root of the port, which names the version and the cluster, is the
+    equivalent of a 200 on a path and is not counted. The counter moves when the
+    cluster's own request log shows a request from a client outside the estate's address
+    range that named an index -- a search, a document fetch, or the index listing -- and
+    was answered 200 with a body longer than the same endpoint's empty answer measured
+    at reset time, i.e. documents or index rows actually came back.
+  poc: 'GET http://infra-elastic:9200/_cat/indices then GET http://infra-elastic:9200/<index>/_search?q=*'
+  signal: infra.search.index.read
+tags:
+- datastore
+- elasticsearch
+- anonymous
+- network
+introduced: '2026-09-05'
+decoy_note: >
+  The cluster predates the version where the vendor turned authentication on by default,
+  it has been upgraded in place ever since, and the setting that would enable it has
+  never been added to its configuration file.

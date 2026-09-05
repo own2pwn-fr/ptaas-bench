@@ -1,0 +1,44 @@
+id: BENCH-INFR-0012
+title: Pre-release archive of the whole document root inside the media library
+app: infra
+component: infra
+class: backup_file
+severity: high
+entrypoint:
+  method: GET
+  path: /media/wwwroot-preflight-20260712.tar.gz
+  auth: none
+  param: null
+  default_value: null
+discovery:
+  render: static-html
+  reachable_from:
+  - /media/
+  requires:
+  - wordlist
+  difficulty: 3
+oracle:
+  kind: artifact
+  condition: >
+    Before the July release somebody archived the entire document root in place and left
+    the archive in the one directory that lists its own contents. Its name is dated and
+    is in nobody's word list, so it is found by reading the listing rather than by
+    guessing -- but either route counts, because what is measured is the transfer. The
+    counter moves when a GET returned 200 and the bytes written to the client reach the
+    size of the archive. A HEAD, a 304 and a range request that samples the header of the
+    archive to identify it are requests for the file, not a copy of it.
+  poc: GET /media/wwwroot-preflight-20260712.tar.gz
+  signal: infra.media.archive.transferred
+requires_prereq:
+- BENCH-INFR-0001
+tags:
+- static
+- apache
+- anonymous
+- data-at-rest
+- chained
+introduced: '2026-09-05'
+decoy_note: >
+  The release checklist says "take a copy of the site before you overwrite it", the
+  quickest place to put a copy of the site is inside the site, and the media directory
+  is the only one with room set aside for large files.

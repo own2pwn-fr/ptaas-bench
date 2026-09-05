@@ -1,0 +1,46 @@
+id: BENCH-INFR-0007
+title: Page cache reachable on the network without authentication
+app: infra
+component: db
+class: db_exposed
+severity: critical
+entrypoint:
+  method: GET
+  path: infra-redis:6379
+  auth: none
+  param: null
+  default_value: null
+discovery:
+  render: non-http
+  reachable_from:
+  - /.env
+  requires: []
+  difficulty: 2
+oracle:
+  kind: artifact
+  condition: >
+    The cache binds every interface and has no password set, so any host on the network
+    can speak to it. Opening the connection is not the finding, and neither is the
+    banner: a bare PING, or a server description that names the version, moves nothing,
+    exactly as a 200 on a path proves only that the path exists. The counter moves when
+    the datastore itself reports having executed, for a client outside the estate's own
+    address range, a command that returned stored data: an enumeration of the keyspace
+    that had keys to return, or a read of a key that exists. A read of a key that is not
+    there returns nothing and is not a disclosure.
+  poc: 'redis-cli -h infra-redis -p 6379 KEYS ''*'' then GET on one of the keys returned'
+  signal: infra.cache.keyspace.read
+notes: >
+  Not an HTTP endpoint: the entrypoint is the socket the store answers on, written as
+  host and port with no scheme, because a scheme would be read as a URL and reduce the
+  whole address to a path.
+tags:
+- datastore
+- redis
+- anonymous
+- network
+introduced: '2026-09-05'
+decoy_note: >
+  The cache runs on the same private network as the web tier, the deployment notes say
+  "internal only", and nobody set a password because the network was supposed to be the
+  boundary. The two stores that came later were built from a hardened template and do
+  require one.

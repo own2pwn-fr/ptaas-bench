@@ -1,0 +1,42 @@
+id: BENCH-INFR-0003
+title: Application environment file left in the document root
+app: infra
+component: infra
+class: exposed_env
+severity: critical
+entrypoint:
+  method: GET
+  path: /.env
+  auth: none
+  param: null
+  default_value: null
+discovery:
+  render: static-html
+  reachable_from:
+  - /
+  requires:
+  - wordlist
+  difficulty: 2
+oracle:
+  kind: artifact
+  condition: >
+    The environment file of the content system this site was exported from is still in
+    the document root, and the virtual host has no rule denying dot files, so it is
+    served as text. The counter moves when a GET returned 200 and wrote at least as many
+    bytes as the file holds, meaning the response carried the whole document including
+    the credential lines at the end of it. A HEAD, a 304, or a range request stopping
+    short of the credentials is a request for the file, not a disclosure of it, and does
+    not move the counter; neither does the 403 the same name returns on the other hosts.
+  poc: GET /.env
+  signal: infra.deploy.env.secret_served
+tags:
+- static
+- apache
+- anonymous
+- credentials
+introduced: '2026-09-05'
+decoy_note: >
+  The site used to be a database-backed content system and was flattened to static files
+  during last year's rebuild; the export copied the whole application directory into the
+  document root, environment file included, and the credentials in it were never rotated
+  because "the site is static now".

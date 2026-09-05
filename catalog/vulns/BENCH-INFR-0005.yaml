@@ -1,0 +1,41 @@
+id: BENCH-INFR-0005
+title: Database dump left in the document root before a migration
+app: infra
+component: infra
+class: backup_file
+severity: high
+entrypoint:
+  method: GET
+  path: /dump.sql.gz
+  auth: none
+  param: null
+  default_value: null
+discovery:
+  render: static-html
+  reachable_from:
+  - /
+  requires:
+  - wordlist
+  difficulty: 2
+oracle:
+  kind: artifact
+  condition: >
+    A compressed dump of the old content database sits in the document root and is
+    served as an ordinary download. The counter moves when a GET returned 200 and the
+    bytes written to the client reach the size of the archive, i.e. the archive was
+    transferred rather than merely probed. A HEAD returning the content length, a range
+    request taking the first few bytes to identify the format, and a 304 all leave it
+    still, and so does the 403 that the identically named archives on the assets host
+    return.
+  poc: GET /dump.sql.gz
+  signal: infra.archive.dump.transferred
+tags:
+- static
+- apache
+- anonymous
+- data-at-rest
+introduced: '2026-09-05'
+decoy_note: >
+  Somebody took a dump before the migration, put it where they could reach it over the
+  web from the office, and never came back for it. The file is dated the week of the
+  rebuild.

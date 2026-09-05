@@ -1,0 +1,39 @@
+id: BENCH-INFR-0006
+title: TRACE method left enabled on the public virtual host
+app: infra
+component: infra
+class: trace_enabled
+severity: low
+entrypoint:
+  method: TRACE
+  path: /
+  auth: none
+  param: null
+  default_value: null
+discovery:
+  render: static-html
+  reachable_from:
+  - /
+  requires: []
+  difficulty: 1
+oracle:
+  kind: sink
+  condition: >
+    The server keeps its shipped default for the diagnostic method, so it answers TRACE
+    by echoing the request message back as the response body. The counter moves when a
+    TRACE returned 200 and the bytes written to the client are at least the bytes read
+    from it, which is only true when the request head really did come back down the
+    connection. A TRACE answered 405 or 501, a TRACE that returned 200 with nothing in
+    it, and the 405 the same server returns for PUT, DELETE, PATCH and PROPFIND all
+    leave it still.
+  poc: 'TRACE / HTTP/1.1 with an arbitrary request header, read the echoed message back'
+  signal: infra.http.method.echo_reflected
+tags:
+- static
+- apache
+- anonymous
+- http-methods
+introduced: '2026-09-05'
+decoy_note: >
+  Nobody turned it off. The configuration was written from the shipped example, the
+  example does not mention the setting, and the setting defaults to on.

@@ -1,0 +1,331 @@
+# The estate behind northlakefab.com: a public web host, the datastores it uses, and
+# the agent that deploys the sites and keeps the estate's metrics.
+#
+# Relative paths resolve against this file's directory (compose/), per the `include`
+# semantics of the Compose specification.
+#
+# WHAT IS ON WHICH NETWORK, AND WHY
+# ---------------------------------
+# The web host and every datastore are on the customer-facing network, because that is
+# where they are in the deployment this reproduces: the site was put up first, the stores
+# were added next to it, and "internal only" was a sentence in the deployment notes
+# rather than a rule anything enforced.
+#
+# The agent is NOT on that network. It holds the deployment routine and it is the only
+# thing that can rewrite a document root, so it lives on the operations network alone.
+# The operations listener is therefore unreachable from the customer side, including
+# from the web host's own document roots -- which is the point: a site that can be
+# rebuilt over HTTP is a site anybody can empty.
+#
+# WHY THE VERSIONS ARE PINNED
+# ---------------------------
+# Two of these images decide, by version alone, whether the estate behaves as deployed.
+# The search cluster is on the last release before the vendor turned authentication on
+# by default, and moving it forward would quietly close a door the estate has had open
+# for years. The web server's diagnostic method behaves as its own defaults dictate, and
+# those defaults have moved between releases. A floating tag does not keep a deployment
+# fresh; it changes what it does without anybody changing anything.
+#
+# Digests are not written here because this fragment was authored offline. At first
+# bring-up, record `docker image inspect --format '{{index .RepoDigests 0}}'` for each
+# image and replace the tags with `image@sha256:...`.
+#
+# NO PUBLISHED PORTS
+# ------------------
+# Nothing here is published to the host. The customer-facing network has no route to it
+# by design, and publishing would give anything that took a container a way back out.
+
+x-site-domain: &site-domain ${INFRA_SITE_DOMAIN:-northlakefab.com}
+
+services:
+
+  # ---------------------------------------------------------------------------
+  # The public web host. Three virtual hosts, all files, no interpreter.
+  # ---------------------------------------------------------------------------
+  infra-web:
+    image: httpd:2.4.62-alpine
+    container_name: infra-web
+    hostname: web01
+    profiles: [targets, infra]
+    volumes:
+      - ../targets/infra/web/httpd.conf:/usr/local/apache2/conf/httpd.conf:ro
+      # The operator's entry point on this host. It asks the operations listener to run
+      # the deployment; the routine itself is not on this container, because this
+      # container is the one that answers the public.
+      - ../targets/infra/web/state-reset:/usr/local/bin/state-reset:ro
+      # The document roots are written by the agent and read here. Read-only: the web
+      # host serves what it was given and has never had a reason to change it.
+      - infra-sites:/srv/sites:ro
+      - infra-private:/srv/private:ro
+      - infra-weblog:/var/log/site
+    networks:
+      bench-public:
+        aliases:
+          - "www.${INFRA_SITE_DOMAIN:-northlakefab.com}"
+          - "${INFRA_SITE_DOMAIN:-northlakefab.com}"
+          - "static.${INFRA_SITE_DOMAIN:-northlakefab.com}"
+          - "docs.${INFRA_SITE_DOMAIN:-northlakefab.com}"
+      bench-internal:
+        aliases: [web01]
+    dns: ["10.88.0.5"]
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 80"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  # ---------------------------------------------------------------------------
+  # The page cache. No password: the network was supposed to be the boundary, and
+  # protected mode was turned off years ago to make the site work from the office.
+  # ---------------------------------------------------------------------------
+  infra-redis:
+    image: redis:7.2.5-alpine
+    container_name: infra-redis
+    hostname: cache01
+    profiles: [targets, infra]
+    command:
+      - redis-server
+      - --bind
+      - 0.0.0.0
+      - --protected-mode
+      - "no"
+      - --save
+      - ""
+      - --appendonly
+      - "no"
+    networks:
+      bench-public:
+        aliases: ["cache.${INFRA_SITE_DOMAIN:-northlakefab.com}"]
+      bench-internal:
+        aliases: [cache01]
+    dns: ["10.88.0.5"]
+
+  # The maintenance queue. A second instance beside the first so that a long job cannot
+  # evict the page cache; it took the next port along and the same settings.
+  infra-redis-ops:
+    image: redis:7.2.5-alpine
+    container_name: infra-redis-ops
+    hostname: ops01
+    profiles: [targets, infra]
+    command:
+      - redis-server
+      - --port
+      - "6380"
+      - --bind
+      - 0.0.0.0
+      - --protected-mode
+      - "no"
+      - --save
+      - ""
+      - --appendonly
+      - "no"
+    networks:
+      bench-public:
+        aliases: ["ops-cache.${INFRA_SITE_DOMAIN:-northlakefab.com}"]
+      bench-internal:
+        aliases: [ops01]
+    dns: ["10.88.0.5"]
+
+  # ---------------------------------------------------------------------------
+  # The records database. Brought up for a proof of concept that became production
+  # without ever being handed over, so access control is as the default leaves it.
+  # Operation profiling is on, which is how the works team find the slow reports; it
+  # is also what the agent reads.
+  # ---------------------------------------------------------------------------
+  infra-mongo:
+    image: mongo:7.0.14
+    container_name: infra-mongo
+    hostname: records01
+    profiles: [targets, infra]
+    command: ["mongod", "--bind_ip_all", "--profile", "2", "--slowms", "0", "--quiet"]
+    networks:
+      bench-public:
+        aliases: ["records.${INFRA_SITE_DOMAIN:-northlakefab.com}"]
+      bench-internal:
+        aliases: [records01]
+    dns: ["10.88.0.5"]
+
+  # ---------------------------------------------------------------------------
+  # The search cluster. On the last release before the vendor made authentication the
+  # default, upgraded in place ever since, and its request tracing was turned on during
+  # an integration and left on.
+  # ---------------------------------------------------------------------------
+  infra-elastic:
+    image: docker.elastic.co/elasticsearch/elasticsearch:7.17.24
+    container_name: infra-elastic
+    hostname: search01
+    profiles: [targets, infra]
+    environment:
+      cluster.name: nlf-search
+      node.name: search01
+      discovery.type: single-node
+      xpack.security.enabled: "false"
+      xpack.ml.enabled: "false"
+      bootstrap.memory_lock: "false"
+      # Request tracing: a line per request and a line per response, with the remote
+      # address on both. Turned on to chase a partner's timeouts.
+      http.tracer.enabled: "true"
+      logger.org.elasticsearch.http.HttpTracer: trace
+      # A works cluster of this size never needed more, and the host it shares is small.
+      ES_JAVA_OPTS: "-Xms512m -Xmx512m"
+    volumes:
+      - infra-searchlog:/usr/share/elasticsearch/logs
+    networks:
+      bench-public:
+        aliases: ["search.${INFRA_SITE_DOMAIN:-northlakefab.com}"]
+      bench-internal:
+        aliases: [search01]
+    dns: ["10.88.0.5"]
+
+  # ---------------------------------------------------------------------------
+  # The three stores that were built from the template the audit asked for. They are on
+  # the same network as the rest and answer on their usual ports; the difference is that
+  # they ask who is calling.
+  # ---------------------------------------------------------------------------
+  infra-sessions:
+    image: redis:7.2.5-alpine
+    container_name: infra-sessions
+    hostname: sessions01
+    profiles: [targets, infra]
+    command:
+      - redis-server
+      - --bind
+      - 0.0.0.0
+      - --requirepass
+      - ${INFRA_SESSIONS_PASSWORD:-tideway-lintel-4471}
+      - --save
+      - ""
+    networks:
+      bench-public:
+        aliases: ["sessions.${INFRA_SITE_DOMAIN:-northlakefab.com}"]
+      bench-internal:
+        aliases: [sessions01]
+    dns: ["10.88.0.5"]
+
+  infra-jobs:
+    image: redis:7.2.5-alpine
+    container_name: infra-jobs
+    hostname: jobs01
+    profiles: [targets, infra]
+    command:
+      - redis-server
+      - --bind
+      - 0.0.0.0
+      - --requirepass
+      - ${INFRA_JOBS_PASSWORD:-quarry-spandrel-8123}
+      - --save
+      - ""
+    networks:
+      bench-public:
+        aliases: ["jobs.${INFRA_SITE_DOMAIN:-northlakefab.com}"]
+      bench-internal:
+        aliases: [jobs01]
+    dns: ["10.88.0.5"]
+
+  infra-postgres:
+    image: postgres:16.4-alpine
+    container_name: infra-postgres
+    hostname: db02
+    profiles: [targets, infra]
+    environment:
+      POSTGRES_USER: nlf_reports
+      POSTGRES_PASSWORD: ${INFRA_REPORTS_PASSWORD:-cofferdam-purlin-2907}
+      POSTGRES_DB: nlf_reports
+      # Password authentication for every connection, including the ones arriving from
+      # the same host: the template says so and this instance was built from it.
+      POSTGRES_HOST_AUTH_METHOD: scram-sha-256
+      POSTGRES_INITDB_ARGS: "--auth-host=scram-sha-256 --auth-local=scram-sha-256"
+    networks:
+      bench-public:
+        aliases: ["reports.${INFRA_SITE_DOMAIN:-northlakefab.com}"]
+      bench-internal:
+        aliases: [db02]
+    dns: ["10.88.0.5"]
+
+  # ---------------------------------------------------------------------------
+  # The agent. Lays the sites down, keeps the estate's metrics, and answers the
+  # operator on the operations network only.
+  # ---------------------------------------------------------------------------
+  infra-telemetry:
+    build:
+      context: ..
+      dockerfile: targets/infra/agent/Dockerfile
+    container_name: infra-telemetry
+    hostname: telemetry01
+    profiles: [targets, infra]
+    environment:
+      TELEMETRY_SERVICE: infra
+      TELEMETRY_ENDPOINT: http://otel-collector:8900
+      # The estate's own range. Traffic arriving from it is our tooling -- the
+      # deployment routine, the release checks -- and is recorded as generated rather
+      # than organic. Decided on the socket peer address and never on a header.
+      TELEMETRY_SYNTHETIC_CIDRS: "10.77.0.0/24"
+
+      SITES_ROOT: /srv/sites
+      PRIVATE_ROOT: /srv/private
+      ACCESS_LOG: /var/log/site/access.log
+      SITE_BASE_URL: http://web01
+      SEARCH_LOG_DIR: /var/log/search
+
+      CACHE_HOST: cache01
+      CACHE_PORT: "6379"
+      QUEUE_HOST: ops01
+      QUEUE_PORT: "6380"
+      RECORDS_HOST: records01
+      RECORDS_PORT: "27017"
+      RECORDS_DB: nlf_records
+      SEARCH_BASE: http://search01:9200
+      SEARCH_INDEX: nlf-enquiries
+      SEARCH_NOTES_INDEX: nlf-delivery-notes
+
+      SESSIONS_HOST: sessions01
+      SESSIONS_PASSWORD: ${INFRA_SESSIONS_PASSWORD:-tideway-lintel-4471}
+      JOBS_HOST: jobs01
+      JOBS_PASSWORD: ${INFRA_JOBS_PASSWORD:-quarry-spandrel-8123}
+
+      CONTROL_ADDR: "0.0.0.0:9902"
+      INFRA_SITE_DOMAIN: *site-domain
+      # Staff names, reference numbers, passwords and commit hashes are derived from
+      # this, so two installations of the same site share no distinctive string.
+      DEPLOY_SEED: ${DEPLOY_SEED:-}
+    volumes:
+      - infra-sites:/srv/sites
+      - infra-private:/srv/private
+      - infra-weblog:/var/log/site:ro
+      - infra-searchlog:/var/log/search:ro
+    networks:
+      bench-internal:
+        aliases: [telemetry]
+    # The resolver on the network this container can actually reach. Pinning the
+    # customer-facing one would leave it unable to resolve anything at all.
+    dns: ["10.77.0.5"]
+    depends_on: [infra-web, infra-redis, infra-redis-ops, infra-mongo, infra-elastic]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://127.0.0.1:9902/healthz')"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+
+volumes:
+  # The document roots. Written by the agent, read by the web host.
+  infra-sites:
+  # The password file for the operator login on the handbook host.
+  infra-private:
+  infra-weblog:
+  infra-searchlog:
+
+# Mirrors docker-compose.yml exactly so that `include` merges the two definitions rather
+# than conflicting with them.
+networks:
+  bench-public:
+    name: bench-public
+    internal: true
+    ipam:
+      config:
+        - subnet: 10.88.0.0/24
+  bench-internal:
+    name: bench-internal
+    internal: true
+    ipam:
+      config:
+        - subnet: 10.77.0.0/24

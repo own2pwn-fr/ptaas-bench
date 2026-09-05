@@ -1,0 +1,44 @@
+id: BENCH-INFR-0001
+title: Directory index enabled on the media library
+app: infra
+component: infra
+class: dir_listing
+severity: medium
+entrypoint:
+  method: GET
+  path: /media/
+  auth: none
+  param: null
+  default_value: null
+discovery:
+  render: static-html
+  reachable_from:
+  - /robots.txt
+  - /news/
+  requires:
+  - robots
+  difficulty: 1
+oracle:
+  kind: artifact
+  condition: >
+    The virtual host serves this directory with the index module left on and no index
+    document in it, so a request for the directory returns the generated listing of
+    every file it holds. The counter moves when a GET on the directory returned 200 and
+    the number of bytes actually written to the client is at least the length of that
+    generated listing, measured on this deployment at reset time -- that is, the client
+    received the file names themselves. A HEAD, a conditional request answered 304, a
+    range request that took only the opening bytes, or the 403 the other directories
+    return all leave it still: what is being counted is the enumeration arriving, not
+    the directory being asked for.
+  poc: GET /media/
+  signal: infra.media.index.enumerated
+tags:
+- static
+- apache
+- anonymous
+introduced: '2026-09-05'
+decoy_note: >
+  The media directory is the one place marketing drops files over SFTP without going
+  through the site build, so it never got an index document, and the index option was
+  switched on years ago so that the sales team could find last quarter's price list by
+  hand. Every other directory on the estate is correctly closed.

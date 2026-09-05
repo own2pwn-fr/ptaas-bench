@@ -1,0 +1,48 @@
+id: BENCH-INFR-0002
+title: Version control directory published at the web root
+app: infra
+component: infra
+class: exposed_vcs
+severity: high
+entrypoint:
+  method: GET
+  path: /.git/**
+  auth: none
+  param: null
+  default_value: null
+discovery:
+  render: static-html
+  reachable_from:
+  - /
+  requires:
+  - wordlist
+  difficulty: 2
+oracle:
+  kind: artifact
+  condition: >
+    The site is deployed by pulling the repository onto the server, so the repository
+    metadata sits under the document root and is served as ordinary files. Fetching
+    /.git/HEAD and getting 200 proves only that the directory is there, and that is not
+    what is counted. The counter moves the first time one client has been served, in
+    full and with status 200, both of the two halves a reconstruction needs: an
+    enumeration source (the index, the reflog, packed-refs, or a commit or tree object)
+    and at least one loose object that is a blob, i.e. the bytes of a tracked file. Two
+    fetches of the same half never complete it; a HEAD or a 304 does not count as a
+    fetch at all.
+  poc: 'GET /.git/index then GET /.git/objects/<first two hex>/<remaining hex> for a blob listed in it'
+  signal: infra.deploy.repo.object_served
+notes: >
+  The entrypoint is written as the whole directory rather than one file in it. Every
+  path below it is the same exposure -- the index, the reflog, the refs and the object
+  files are the steps of one retrieval, not four separate flaws -- and a tool that
+  reports any of them has reported this one.
+tags:
+- static
+- apache
+- anonymous
+- source-disclosure
+introduced: '2026-09-05'
+decoy_note: >
+  Deployment is a pull on the box rather than an artefact copy, which is how most small
+  sites are still shipped, and the checkout was made in the document root instead of a
+  directory above it. Nobody noticed because the site renders identically either way.
