@@ -23,7 +23,7 @@ from fastapi.responses import JSONResponse
 
 from .config import load_settings
 from .ingest import Collector, parse_address
-from .schemas import EVENT_TYPES, CorrelationCreate, EventEnvelope, RunCreate
+from .schemas import EVENT_TYPES, CorrelationCreate, EventEnvelope, RunClose, RunCreate
 
 log = logging.getLogger("bench.collector")
 
@@ -144,9 +144,30 @@ def create_app(collector: Collector | None = None) -> FastAPI:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="no active run")
         return run.as_dict()
 
+    @app.get("/v1/runs/{run_id}")
+    async def get_run(run_id: str, collector: CollectorDep) -> dict[str, Any]:
+        run = await collector.get_run(run_id)
+        if run is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="unknown run")
+        return run.as_dict()
+
     @app.post("/v1/runs/{run_id}/close")
-    async def close_run(run_id: str, collector: CollectorDep) -> dict[str, Any]:
-        run = await collector.close_run(run_id)
+    async def close_run(request: Request, run_id: str, collector: CollectorDep) -> dict[str, Any]:
+        """Close a run, optionally folding in what only the end of a run knows.
+
+        The body is optional and parsed leniently: failing to close a run because its
+        closing metadata was malformed would strand the run active, and the next one
+        would then have to force its way past it. A rejected body is logged loudly and
+        the run still closes.
+        """
+        closing = None
+        raw = await request.body()
+        if raw.strip():
+            try:
+                closing = RunClose.model_validate_json(raw)
+            except Exception:
+                log.exception("ignoring malformed close body for run %s: %s", run_id, raw[:512])
+        run = await collector.close_run(run_id, closing)
         if run is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="unknown run")
         return run.as_dict()
@@ -159,9 +180,15 @@ def create_app(collector: Collector | None = None) -> FastAPI:
         after_seq: int | None = Query(default=None, ge=0),
         limit: int = Query(default=5000, ge=1, le=50000),
     ) -> dict[str, Any]:
-        if await collector.get_run(run_id) is None:
+        run = await collector.get_run(run_id)
+        if run is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="unknown run")
-        return await collector.get_events(run_id, event_type=type, after_seq=after_seq, limit=limit)
+        page = await collector.get_events(run_id, event_type=type, after_seq=after_seq, limit=limit)
+        # The run record travels with every page: the scorer resolves a source address
+        # to an app through `addresses`, and an export that does not carry it is not
+        # re-runnable from its own record.
+        page["run"] = run.as_dict()
+        return page
 
     @app.post(
         "/v1/traces",

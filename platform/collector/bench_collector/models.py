@@ -41,6 +41,10 @@ class Run(Base):
     tool_version: Mapped[str | None] = mapped_column(String(128), nullable=True)
     profile: Mapped[str | None] = mapped_column(String(128), nullable=True)
     targets: Mapped[list[str]] = mapped_column(JSONType, default=list)
+    # {app: {service, container_id, addresses, image_digest, state_digest_*}} as
+    # captured by the orchestrator at run open. Stored verbatim: it is the only
+    # version of the truth that is true for THIS run.
+    addresses: Mapped[dict[str, Any]] = mapped_column(JSONType, default=dict)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -56,6 +60,7 @@ class Run(Base):
             "tool_version": self.tool_version,
             "profile": self.profile,
             "targets": list(self.targets or []),
+            "addresses": dict(self.addresses or {}),
             "notes": self.notes,
             "started_at": _iso(self.started_at),
             "closed_at": _iso(self.closed_at),

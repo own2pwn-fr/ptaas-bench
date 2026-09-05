@@ -1,0 +1,73 @@
+id: BENCH-EDGE-0003
+title: H2.CL downgrade smuggling through the h2c entry
+app: edge
+component: edge
+class: request_smuggling_h2
+severity: critical
+entrypoint:
+  method: POST
+  path: /api/reviews
+  auth: none
+  param: content-length
+  param_in: header
+  default_value: null
+  content_type: application/json
+discovery:
+  render: non-http
+  reachable_from: []
+  requires: [http2, custom-header]
+  difficulty: 5
+oracle:
+  kind: state
+  signal: edge.http.framing.upgraded_stream_length_mismatch
+  condition: >
+    HTTP/2 has no length framing — a message ends when a DATA frame carries END_STREAM
+    — so a declared `content-length` that disagrees with the DATA bytes is inert until
+    somebody converts the request down to HTTP/1.1. The h2c entry does exactly that,
+    and is configured to forward the CLIENT-declared content-length while streaming the
+    DATA frames it actually received. The origin therefore frames the POST by
+    `Content-Length: 0` and finds the DATA payload — a complete HTTP/1.1 request —
+    waiting behind it on the same reused upstream connection.
+    There is no second framing header to compare against, so the byte-offset test used
+    by the HTTP/1.1 entries is not computable here. The verdict rests on Via, and it is
+    exact rather than heuristic: the h2c entry sets `Via: 2.0 edge-h2c` on every
+    request it forwards, with a directive that replaces any client-supplied copy. The
+    counter is raised when, on a connection whose previous request carried that entry
+    and declared a Content-Length, the next request arrives with no Via at all. Such a
+    request cannot have been sent by an HTTP/2 client — it would have been rewritten —
+    and cannot have come from anywhere else, because the origin is on the internal
+    network and this entry is the only route to it.
+    A sender that copies a Via entry into the trailing request suppresses its own
+    counter; the test can under-report, never over-report.
+  poc: |
+    h2c on port 8081, hand-rolled frames (see targets/edge/selftest.py):
+      HEADERS  stream 1  :method POST  :path /api/reviews  :scheme http
+                         :authority www.halyardsupply.net  content-length: 0
+      DATA     stream 1  END_STREAM
+               "GET /api/v1/ping HTTP/1.1\r\nHost: www.halyardsupply.net\r\n\r\n"
+requires_prereq: []
+tags: [protocol, framing, http2, h2c, downgrade]
+introduced: "2026-09-05"
+decoy_note: >
+  The mobile apps compute and send their own content-length because the fulfilment
+  service validates it against a signed manifest; if the front tier recomputed it the
+  signature check would fail, so the client's value is passed through unchanged
+  (EDGE-903, open with the vendor). Request buffering is off on the same block because
+  buffering a multi-megabyte basket sync doubled the p99 on mobile. Both are decisions
+  a team makes under delivery pressure with a vendor bug in the way, and neither one
+  looks like a security change.
+notes: >
+  Depends on nginx 1.21.6 with `listen 8081 http2` (h2c), `proxy_request_buffering off`
+  and `proxy_set_header Content-Length $http_content_length`. This entry talks straight
+  to the origin rather than back through the balancer on purpose: if the balancer
+  re-parsed the message it would consume the trailing prefix itself and re-emit it as a
+  normal request carrying its own Via, destroying the only test available here.
+  Confidence: LOW — this is the entry most likely to need adjustment at first bring-up.
+  nginx checks the HTTP/2 request body length against the declared content-length and
+  may answer 400 rather than forwarding the mismatch; the pin to 1.21.6 is chosen
+  because it predates later tightening, but that has NOT been confirmed on a running
+  stack. If nginx refuses, move h2c termination to a HAProxy `bind :8081 proto h2`
+  frontend running in HTX mode (`option http-use-htx` is per-proxy in 2.0, so it can
+  coexist with the legacy frontend on :80) and have it set the same Via entry. The
+  counter is indifferent to which hop performs the conversion, as long as that hop
+  stamps its own requests.

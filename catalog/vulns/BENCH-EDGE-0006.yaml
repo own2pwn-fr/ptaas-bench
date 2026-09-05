@@ -1,0 +1,57 @@
+id: BENCH-EDGE-0006
+title: Web cache poisoning through the unkeyed X-Forwarded-Host header on /promo
+app: edge
+component: edge
+class: cache_poisoning
+severity: high
+entrypoint:
+  method: GET
+  path: /promo
+  auth: none
+  param: X-Forwarded-Host
+  param_in: header
+  default_value: null
+discovery:
+  render: static-html
+  reachable_from: ["/"]
+  requires: [custom-header]
+  difficulty: 3
+oracle:
+  kind: state
+  signal: edge.cache.coherence.host_variance
+  condition: >
+    Reflection is not poisoning. The origin builds the offer page's asset URLs from
+    X-Forwarded-Host on a response marked `public, max-age=30`, and the cache tier's
+    key contains only the URL — not the Host, not X-Forwarded-Host. Seeing your own
+    header echoed back proves neither that the response was stored nor that anyone
+    else will be given it, so it raises nothing.
+    The counter is raised by a SECOND-CLIENT check the target performs itself. When the
+    origin emits a cacheable response carrying an authority that is neither its own nor
+    an internal service name, it records the value, waits long enough for the response
+    to have been stored, and then requests the same URL through the front door as an
+    unrelated client would: a brand-new connection with keep-alives disabled, the
+    canonical Host, no session, and none of the original input. The counter is raised
+    if and only if that request comes back carrying the injected authority. The record
+    keeps both identities and the cache's HIT/MISS state.
+    The probe's own requests come from the internal address range and are recorded as
+    platform traffic, so they can never be scored as a tool's work.
+  poc: >
+    GET /promo?cb=1 with `X-Forwarded-Host: offers.partner-cdn.test`, followed by a
+    clean GET /promo?cb=1 from another client, which is served the injected authority
+    from cache. (The cache-buster keeps the object key unique so the first request is
+    guaranteed to reach the origin rather than being answered from a warm entry.)
+requires_prereq: []
+tags: [protocol, cache, unkeyed-header, second-client]
+introduced: "2026-09-05"
+decoy_note: >
+  Preview and staging hostnames need their own copies of the assets or the previews
+  load nothing, so the offer page builds asset URLs from the hostname the customer
+  arrived on. Separately, and a year earlier, the Host was dropped from the cache key
+  because every preview hostname was duplicating the whole object set and the hit ratio
+  was suffering. Each change was reviewed on its own and neither reviewer was looking
+  at the other one.
+notes: >
+  Depends on varnish 6.0.13 and the vcl_hash in targets/edge/varnish/default.vcl, which
+  omits req.http.Host from the key. Confidence: HIGH — nothing here rests on a parser
+  quirk, only on configuration this repository spells out, and the second-client check
+  is performed rather than inferred.

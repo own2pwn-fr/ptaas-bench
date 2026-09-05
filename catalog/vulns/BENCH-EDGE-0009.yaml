@@ -1,0 +1,54 @@
+id: BENCH-EDGE-0009
+title: Host header poisoning - an absolute password-reset link built from the Host header
+app: edge
+component: edge
+class: host_header_poisoning
+severity: high
+entrypoint:
+  method: GET
+  path: /account/reset
+  auth: none
+  param: Host
+  param_in: header
+  default_value: "www.halyardsupply.net"
+discovery:
+  render: static-html
+  reachable_from: ["/"]
+  requires: [custom-header]
+  difficulty: 3
+oracle:
+  kind: state
+  signal: edge.links.authority.body_variance
+  condition: >
+    The origin builds the absolute reset link it shows the customer by concatenating
+    the request's Host (or X-Forwarded-Host), and the response is cacheable while the
+    cache key omits the Host entirely. Both halves are needed for this to be worth a
+    point, and both are required.
+    The counter is raised when (1) the origin emits an absolute URL whose authority is
+    neither its canonical host nor an internal service name — i.e. the authority came
+    from the request rather than from configuration — AND (2) an unrelated client
+    provably receives it. Condition (2) is checked rather than assumed: the coherence
+    probe requests the same URL on a fresh connection with the canonical Host, and the
+    counter is raised only if the injected authority comes back to it. That is what
+    separates this from a self-reflection no victim would ever see.
+    Sending an unusual Host and getting it echoed in your own response is exercise. A
+    Host that resolves to the canonical site, or a response that is never stored,
+    raises nothing.
+  poc: >
+    GET /account/reset?cb=1 with `Host: reset.partner-cdn.test`; a second client then
+    issues GET /account/reset?cb=1 with the canonical Host and is served the page
+    containing http://reset.partner-cdn.test/account/reset/confirm?token=RESET-TOKEN.
+requires_prereq: []
+tags: [protocol, host-header, cache, second-client]
+introduced: "2026-09-05"
+decoy_note: >
+  Building the reset link from the request's own hostname is what makes the link work
+  on staging, on the preview hostnames and in production without a per-environment
+  configuration value that somebody always forgets to set. It is the single most common
+  reason this bug ships. The cacheability came from a different direction entirely —
+  the reset page is static apart from the link, and it was contributing avoidable
+  origin traffic during campaign spikes.
+notes: >
+  Depends on varnish 6.0.13 and the Host-free vcl_hash, and on the front tier relaying
+  port 80 at L4 so that an arbitrary Host reaches the chain unmodified (an L7 front with
+  a default server_name would answer it itself). Confidence: HIGH.

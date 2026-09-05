@@ -1,0 +1,75 @@
+id: BENCH-EDGE-0001
+title: CL.TE request smuggling via an underscore in the Transfer-Encoding header name
+app: edge
+component: edge
+class: request_smuggling_clte
+severity: critical
+entrypoint:
+  method: POST
+  path: /submit
+  auth: none
+  param: Transfer_Encoding
+  param_in: header
+  default_value: null
+  content_type: application/x-www-form-urlencoded
+discovery:
+  render: non-http
+  reachable_from: ["/"]
+  requires: [custom-header]
+  difficulty: 5
+oracle:
+  kind: state
+  signal: edge.http.framing.underscore_coding_mismatch
+  condition: >
+    The counter is raised when the origin reads a request that no client sent as a
+    request. The balancer sees an opaque `Transfer_Encoding` X-header, frames the
+    message by Content-Length and forwards every declared byte; the origin folds '_'
+    to '-', treats it as a coding header, and stops at the zero chunk. Two independent
+    tests back the verdict and at least one must hold:
+    (a) OFFSET - the origin records the absolute byte offset at which it ended request
+    N's body and the offset at which the Content-Length reading would have ended it.
+    Request N+1's first byte falls strictly inside that gap, so those bytes were, to
+    the hop in front, still request N's body.
+    (b) VIA - every hop appends a Via entry on the way through (HAProxy `add-header`,
+    nginx `proxy_set_header`). Request N+1 arrives with no Via at all, so it passed
+    through no proxy; the chain is the only route to the origin's port, so it came out
+    of the previous body.
+    What does NOT raise it: an odd coding value, a 400 or 501, two genuinely pipelined
+    requests on one keep-alive connection, or a direct request to /api/v1/ping. Only a
+    moved message boundary counts. A sender that adds its own Via to the smuggled
+    request suppresses the counter, so it can under-report and never over-report.
+  poc: |
+    POST /submit HTTP/1.1
+    Host: www.halyardsupply.net
+    Content-Length: 96
+    Transfer_Encoding: chunked
+
+    0
+
+    GET /api/v1/ping HTTP/1.1
+    Host: www.halyardsupply.net
+    Accept: application/json
+
+    (Content-Length must span the zero chunk AND the whole trailing request;
+     targets/edge/selftest.py computes it.)
+requires_prereq: []
+tags: [protocol, framing, raw-socket, legacy-parser]
+introduced: "2026-09-05"
+decoy_note: >
+  The load balancer is kept on its pre-HTX parser because two partner integrations —
+  a payments vendor's callbacks and a warehouse EDI feed — send coding headers HTX
+  rejects, and neither partner will change inside the contract term. `option
+  accept-invalid-http-request` is on for the same feed, which emits header names
+  containing underscores. The origin was then made tolerant in the same places,
+  because being stricter than the balancer in front of it produced 400s on traffic the
+  balancer had already accepted. Every step is the reasonable local decision; the
+  disagreement only exists when you look at the two together, which is exactly how
+  this class of bug reaches production.
+notes: >
+  Depends on haproxy 2.0.29 with `no option http-use-htx` (the parser was removed in
+  2.1) plus `option accept-invalid-http-request`, and on nginx 1.21.6 relaying port 80
+  at L4 so no hop re-frames the body before the balancer. `http-reuse always` on the
+  origin backend is what lets a leftover prefix outlive the connection that carried it.
+  Confidence: HIGH — the only behaviour assumed of the balancer is that it forwards an
+  unknown header verbatim and frames by Content-Length when it recognises no coding
+  header.

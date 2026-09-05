@@ -1,0 +1,54 @@
+id: BENCH-EDGE-0010
+title: Host header poisoning via X-Forwarded-Host in a cached redirect's Location
+app: edge
+component: edge
+class: host_header_poisoning
+severity: high
+entrypoint:
+  method: GET
+  path: /go
+  auth: none
+  param: X-Forwarded-Host
+  param_in: header
+  default_value: null
+discovery:
+  render: static-html
+  reachable_from: ["/"]
+  requires: [custom-header]
+  difficulty: 3
+oracle:
+  kind: state
+  signal: edge.links.authority.location_variance
+  condition: >
+    The same flaw as BENCH-EDGE-0009 with the injected authority landing in a response
+    HEADER rather than in the body, and sourced from X-Forwarded-Host rather than Host
+    — a distinct code path in most tools, which is why it is a separate entry. /go
+    answers a 302 whose Location is built from X-Forwarded-Host, and the cache tier
+    keeps 301/302 responses for 30s under a Host-free key.
+    The counter is raised when the origin emits a Location whose authority is foreign
+    AND the coherence probe — fresh connection, canonical Host, no X-Forwarded-Host —
+    subsequently receives that same Location. The probe does not follow the redirect;
+    the header is the evidence, not the destination. Both the injected value and the
+    Location the second client actually saw are recorded, so the claim can be audited
+    without re-running anything.
+    An open redirect to a location supplied in the `to` query parameter is NOT this
+    flaw and is not planted here: `to` is constrained to a path. Only a poisoned
+    authority served to somebody else counts.
+  poc: >
+    GET /go?to=/promo&cb=1 with `X-Forwarded-Host: go.partner-cdn.test`; a second
+    client then issues GET /go?to=/promo&cb=1 without that header and receives
+    `Location: http://go.partner-cdn.test/promo` from cache.
+requires_prereq: []
+tags: [protocol, host-header, redirect, cache, second-client]
+introduced: "2026-09-05"
+decoy_note: >
+  The partner-offer bounce keeps customers on whichever hostname they arrived on, which
+  is why it reads X-Forwarded-Host rather than a configured value — the alternative
+  sends a customer who came in on a campaign hostname to the canonical one and loses
+  the attribution the partner is being paid on. Caching redirects came later, from a
+  campaign-spike postmortem: they are stable for the length of a campaign and were the
+  single largest source of origin traffic.
+notes: >
+  Depends on varnish 6.0.13 caching 3xx responses (set explicitly in
+  vcl_backend_response, since the builtin would not) and on the Host-free vcl_hash.
+  Confidence: HIGH.

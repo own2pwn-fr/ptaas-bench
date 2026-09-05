@@ -1,0 +1,63 @@
+# Route inventory for the edge target.
+#
+# Two uses: crawl coverage over the whole reachable surface rather than only the
+# interesting parts of it, and a denominator for precision — a finding reported
+# against a route marked `safe` here is a false positive rather than merely unmatched.
+#
+# Ratio: 25 safe routes to 10 planted, i.e. 2.5:1, short of the 3:1 the target contract
+# asks for. An edge tier has genuinely little surface of its own — most of the
+# catalogue is static and served elsewhere — and padding this list with pages nobody
+# would ship would be its own tell. Flagged rather than fudged.
+#
+# Note what the five framing entrypoints have in common: /submit, /api/cart/items,
+# /api/cart/items/:id, /account/preferences and /api/reviews are perfectly ordinary
+# endpoints whose declared parameters are all safe. They are listed as planted because
+# they are the entrypoints the catalog names, but nothing about the ROUTE is wrong —
+# the flaw is in how the message around it is framed. A tool reporting an injection in
+# `note` or `newsletter` is still wrong.
+#
+# Paths are the route templates the origin reports (origin/routes.go, matchRoute),
+# which is what the catalog entrypoints are written against.
+
+app: edge
+
+routes:
+  - {path: /,                     method: GET,  auth: none, render: static-html, params: [],       status: safe}
+  - {path: /status,               method: GET,  auth: none, render: static-html, params: [],       status: safe}
+  - {path: /healthz,              method: GET,  auth: none, render: api-only,    params: [],       status: safe}
+  - {path: /robots.txt,           method: GET,  auth: none, render: static-html, params: [],       status: safe}
+  - {path: /sitemap.xml,          method: GET,  auth: none, render: static-html, params: [],       status: safe}
+  - {path: /about,                method: GET,  auth: none, render: static-html, params: [],       status: safe}
+  - {path: /contact,              method: GET,  auth: none, render: static-html, params: [],       status: safe}
+  - {path: /delivery,             method: GET,  auth: none, render: static-html, params: [],       status: safe}
+  - {path: /returns,              method: GET,  auth: none, render: static-html, params: [],       status: safe}
+  - {path: /terms,                method: GET,  auth: none, render: static-html, params: [],       status: safe}
+  - {path: /privacy,              method: GET,  auth: none, render: static-html, params: [],       status: safe}
+  - {path: /stores,               method: GET,  auth: none, render: static-html, params: [],       status: safe}
+  - {path: /stores/:id,           method: GET,  auth: none, render: static-html, params: [id],     status: safe}
+  - {path: /products,             method: GET,  auth: none, render: static-html, params: [],       status: safe}
+  - {path: /products/:id,         method: GET,  auth: none, render: static-html, params: [id],     status: safe}
+  - {path: /search,               method: GET,  auth: none, render: static-html, params: [q],      status: safe}
+  - {path: /assets/:file,         method: GET,  auth: none, render: static-html, params: [file],   status: safe}
+  - {path: /api/products,         method: GET,  auth: none, render: api-only,    params: [],       status: safe}
+  - {path: /api/products/:id,     method: GET,  auth: none, render: api-only,    params: [id],     status: safe}
+  - {path: /api/v1/ping,          method: GET,  auth: none, render: api-only,    params: [],       status: safe}
+  - {path: /account/login,        method: GET,  auth: none, render: static-html, params: [],       status: safe}
+  - {path: /account/login,        method: POST, auth: none, render: static-html, params: [email, password], status: safe}
+  - {path: /account/profile,      method: GET,  auth: user, render: static-html, params: [],       status: safe}
+  - {path: /account/orders,       method: GET,  auth: user, render: static-html, params: [],       status: safe}
+  - {path: /account/preferences,  method: GET,  auth: user, render: static-html, params: [],       status: safe}
+
+  # Framing entrypoints: ordinary endpoints that happen to carry a request body.
+  - {path: /submit,               method: POST, auth: none, render: non-http, params: [note],       status: planted}
+  - {path: /api/cart/items,       method: POST, auth: none, render: non-http, params: [],           status: planted}
+  - {path: /api/cart/items/:id,   method: PUT,  auth: none, render: non-http, params: [id],         status: planted}
+  - {path: /account/preferences,  method: POST, auth: user, render: non-http, params: [newsletter], status: planted}
+  - {path: /api/reviews,          method: POST, auth: none, render: non-http, params: [],           status: planted}
+
+  # Route-level: request-derived content reaching a shared cached object.
+  - {path: /promo,                method: GET,  auth: none, render: static-html, params: [],        status: planted}
+  - {path: /news,                 method: GET,  auth: none, render: static-html, params: [lang],    status: planted}
+  - {path: /account/profile.:ext, method: GET,  auth: user, render: static-html, params: [ext],     status: planted}
+  - {path: /account/reset,        method: GET,  auth: none, render: static-html, params: [],        status: planted}
+  - {path: /go,                   method: GET,  auth: none, render: static-html, params: [to],      status: planted}

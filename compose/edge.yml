@@ -1,0 +1,173 @@
+# Storefront edge: TCP front -> load balancer -> cache -> origin.
+#
+# Relative paths are resolved against this file's directory (compose/), per the
+# `include` semantics of the Compose specification.
+#
+# WHY THE VERSIONS ARE PINNED
+# ---------------------------
+# Every behaviour this tier depends on is a place where two HTTP parsers have to
+# agree, or deliberately do not. Upstream spends real effort making them agree, so a
+# floating tag does not keep the deployment fresh — it changes what the stack does
+# without changing anything in this repository. What each pin buys is documented in
+# that hop's own config file:
+#
+#   nginx   1.21.6   targets/edge/nginx/nginx.conf
+#   haproxy 2.0.29   targets/edge/haproxy/haproxy.cfg
+#   varnish 6.0.13   targets/edge/varnish/default.vcl
+#
+# Digests are not written here because this fragment was authored offline. At first
+# bring-up, record `docker image inspect --format '{{index .RepoDigests 0}}'` for each
+# of the three and replace the tags with `image@sha256:...`. Until then the tags are
+# exact — never `latest`, never a floating minor.
+#
+# NAMES
+# -----
+# Hostnames and network aliases are the product's own, and overridable per deployment
+# through EDGE_SITE_DOMAIN, because they are resolvable by anything on the same
+# network and a name is a statement about what this is.
+
+x-site-domain: &site-domain ${EDGE_SITE_DOMAIN:-halyardsupply.net}
+
+services:
+
+  # ---------------------------------------------------------------------------
+  # The only service on the customer-facing network. Everything else is reachable
+  # only from inside the estate: the tiers behind this one assume they are being
+  # spoken to by their own front, and the client accounting the origin performs is
+  # only sound because there is exactly one way in.
+  # ---------------------------------------------------------------------------
+  edge-nginx:
+    image: nginx:1.21.6-alpine
+    container_name: edge-nginx
+    hostname: nginx
+    profiles: [targets, edge]
+    volumes:
+      - ../targets/edge/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    # Ports are NOT published. The customer-facing network has no route to the host by
+    # design; publishing would put this container on a developer's loopback and, worse,
+    # give anything that took the container a way back out. See the `dev` profile at
+    # the bottom for local access.
+    networks:
+      bench-public:
+        aliases:
+          - www.${EDGE_SITE_DOMAIN:-halyardsupply.net}
+          - ${EDGE_SITE_DOMAIN:-halyardsupply.net}
+          - edge
+      bench-internal:
+        aliases: [nginx]
+    dns: ["10.88.0.5"]
+    depends_on: [edge-haproxy, edge-origin]
+
+  edge-haproxy:
+    image: haproxy:2.0.29-alpine
+    container_name: edge-haproxy
+    hostname: haproxy
+    profiles: [targets, edge]
+    volumes:
+      - ../targets/edge/haproxy/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+    networks:
+      bench-internal:
+        aliases: [haproxy]
+    # The resolver on the network this container can actually reach. Pinning the
+    # customer-facing address here instead would leave these tiers with no resolver at
+    # all: they are not on that network, so they could not resolve each other and the
+    # stack would not come up.
+    dns: ["10.77.0.5"]
+    depends_on: [edge-varnish, edge-origin]
+
+  edge-varnish:
+    image: varnish:6.0.13
+    container_name: edge-varnish
+    hostname: varnish
+    profiles: [targets, edge]
+    volumes:
+      - ../targets/edge/varnish/default.vcl:/etc/varnish/default.vcl:ro
+    command: ["varnishd", "-F", "-f", "/etc/varnish/default.vcl", "-a", ":80", "-s", "malloc,64m"]
+    networks:
+      bench-internal:
+        aliases: [varnish]
+    dns: ["10.77.0.5"]
+    depends_on: [edge-origin]
+
+  edge-origin:
+    build:
+      context: ../targets/edge
+      dockerfile: Dockerfile
+    container_name: edge-origin
+    hostname: origin
+    profiles: [targets, edge]
+    environment:
+      TELEMETRY_SERVICE: edge
+      TELEMETRY_ENDPOINT: http://otel-collector:8900
+
+      # The estate's own range. Requests whose attested client address falls inside it
+      # are our own tooling — the deployment checks, the cache coherence probe — and
+      # are recorded as such. Customer traffic arrives from the other network and
+      # never matches.
+      TELEMETRY_SYNTHETIC_CIDRS: "10.77.0.0/24"
+      # Which socket peers are allowed to attest a client address at all. The origin
+      # only reads X-Real-IP when the connection came from one of our own tiers.
+      TRUSTED_HOP_CIDRS: "10.77.0.0/24"
+
+      # The coherence probe re-enters through the front door like any other client;
+      # going straight to the origin would bypass the cache it exists to interrogate.
+      CACHE_PROBE_BASE_URL: http://nginx:80
+      CACHE_PROBE_DELAY_MS: "400"
+      CACHE_ADMIN_ADDR: varnish:80
+
+      SITE_DOMAIN: *site-domain
+      SITE_CANONICAL_HOST: www.${EDGE_SITE_DOMAIN:-halyardsupply.net}
+      # Seeded content — product name, account logins, account tokens and passwords —
+      # is derived from this. Two deployments with different seeds share no strings.
+      DEPLOY_SEED: ${DEPLOY_SEED:-}
+
+      LISTEN_ADDR: ":8080"
+      CONTROL_ADDR: "127.0.0.1:9901"
+    networks:
+      bench-internal:
+        aliases: [origin]
+    dns: ["10.77.0.5"]
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:9901/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  # ---------------------------------------------------------------------------
+  # Local development only, never during a measured run: `--profile dev`.
+  #
+  # It publishes the storefront on the developer's machine, which is exactly the route
+  # the sealed networks exist to remove. Bringing it up during a run would let a
+  # compromised container reach the host, and would let host traffic reach the target
+  # without passing the client accounting.
+  # ---------------------------------------------------------------------------
+  edge-devtap:
+    image: nginx:1.21.6-alpine
+    container_name: edge-devtap
+    profiles: [dev]
+    volumes:
+      - ../targets/edge/nginx/devtap.conf:/etc/nginx/nginx.conf:ro
+    ports:
+      - "8180:80"
+      - "8181:8081"
+    networks: [bench-internal, edge-dev]
+    depends_on: [edge-nginx]
+
+# Mirrors docker-compose.yml exactly so that `include` merges the two definitions
+# rather than conflicting with them.
+networks:
+  bench-public:
+    name: bench-public
+    internal: true
+    ipam:
+      config:
+        - subnet: 10.88.0.0/24
+  bench-internal:
+    name: bench-internal
+    internal: true
+    ipam:
+      config:
+        - subnet: 10.77.0.0/24
+  # Used by the dev tap alone, and the only non-internal network in this fragment.
+  edge-dev:
+    name: edge-dev

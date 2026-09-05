@@ -124,6 +124,15 @@ paths:
         "200": {description: OK, content: {application/json: {schema: {$ref: '#/components/schemas/Run'}}}}
         "404": {description: No active run, or caller is outside TELEMETRY_CONTROL_CIDRS}
 
+  /v1/runs/{run_id}:
+    get:
+      tags: [control]
+      summary: One run's record
+      parameters: [{name: run_id, in: path, required: true, schema: {type: string}}]
+      responses:
+        "200": {description: OK, content: {application/json: {schema: {$ref: '#/components/schemas/Run'}}}}
+        "404": {description: Unknown run, or caller is outside TELEMETRY_CONTROL_CIDRS}
+
   /v1/runs/{run_id}/close:
     post:
       tags: [control]
@@ -132,7 +141,18 @@ paths:
         Idempotent: closing a closed run returns it unchanged, with its original
         `closed_at`. Buffered events are flushed before the run is marked closed, so
         an export taken immediately afterwards is complete.
+
+        The body is optional and carries what only the end of a run knows — chiefly
+        `state_digest_after`, merged per app and per field into the record captured at
+        open. It is parsed leniently: a malformed body is logged and ignored, and the
+        run still closes, because a run left active because its closing metadata was
+        bad would force the next one to fight its way past it.
       parameters: [{name: run_id, in: path, required: true, schema: {type: string}}]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/RunClose'}
       responses:
         "200": {description: OK, content: {application/json: {schema: {$ref: '#/components/schemas/Run'}}}}
         "404": {description: Unknown run, or caller is outside TELEMETRY_CONTROL_CIDRS}
@@ -355,6 +375,21 @@ components:
         tool_version: {type: string}
         profile: {type: string, example: full, description: Scan profile, free-form, recorded in results}
         targets: {type: array, items: {type: string}, description: App keys in scope for this run}
+        addresses:
+          type: object
+          additionalProperties: {$ref: '#/components/schemas/TargetRecord'}
+          description: |
+            Per-app record of what is actually running, keyed by app key, captured by
+            the orchestrator from `docker inspect` once the stack is up and the reset
+            is verified.
+
+            This is the only version of that truth which is true for THIS run.
+            Container addresses are reassigned between runs, so anything cached across
+            runs will eventually attribute one tool's callback to another tool's
+            target — a wrong answer that looks exactly like a right one. Capturing it
+            from the orchestrator also puts it beyond the reach of the SDK and of a
+            compromised target, neither of which can influence what `docker inspect`
+            reports.
         notes: {type: string}
         force: {type: boolean, default: false, description: Close any currently active run first}
 
@@ -366,11 +401,58 @@ components:
         tool_version: {type: string, nullable: true}
         profile: {type: string, nullable: true}
         targets: {type: array, items: {type: string}}
+        addresses:
+          type: object
+          additionalProperties: {$ref: '#/components/schemas/TargetRecord'}
         notes: {type: string, nullable: true}
         started_at: {type: string, format: date-time}
         closed_at: {type: string, format: date-time, nullable: true}
         active: {type: boolean}
         event_count: {type: integer}
+
+    TargetRecord:
+      type: object
+      description: |
+        What was actually running for one target. Every field exists so that a
+        published result can be re-run and contested from its own record: addresses
+        move between runs, image tags move under you, and a target that did not come
+        back to its seeded state produces scores that partly describe the previous
+        run. None of that is visible from the event stream alone.
+
+        Unknown properties are preserved: this is machine-captured and will grow
+        fields, and losing them would be silent.
+      properties:
+        service: {type: string, description: Compose service name}
+        container_id: {type: string}
+        addresses:
+          type: array
+          items: {type: string}
+          description: |
+            Every address the container holds, on every network it is attached to.
+            This is what lets the scorer's offline join resolve an observed source
+            address to an application deterministically. A dual-homed target reaches
+            the collector on one network and makes its outbound requests on another,
+            so a single address — including the one the collector stamps on a
+            correlation — is never enough on its own.
+        image_digest: {type: string, description: The digest actually running, never the tag}
+        state_digest_before: {type: string, description: Reset state digest read before the run}
+        state_digest_after:
+          type: string
+          description: |
+            Read after the run, normally supplied at close. If it differs from
+            `state_digest_before`, the target did not return to its seeded state and
+            the run contaminated whatever ran next; the collector logs that loudly and
+            keeps both values so a reader can check it themselves.
+
+    RunClose:
+      type: object
+      description: Optional body of POST /v1/runs/{run_id}/close.
+      additionalProperties: false
+      properties:
+        addresses:
+          type: object
+          additionalProperties: {$ref: '#/components/schemas/TargetRecord'}
+          description: Merged per app and per field into the record captured at open.
 
     IngestBatch:
       type: object
@@ -499,6 +581,18 @@ components:
             they are themselves forbidden strings from the deception contract, and they
             sat as literals in shipped target source — which is precisely what a tool
             reads once it has RCE.
+
+            `peer_missing: true` is added by the collector when the event arrived
+            with no usable peer address. A sink that has lost its request context —
+            work handed to a raw thread pool, typically — emits a signal that is
+            indistinguishable from a legitimate background-job signal, which means the
+            platform's own self-test replays would be credited to whichever tool is
+            running. These are flagged rather than dropped, because a background job
+            genuinely has no request peer and dropping would throw away proof of a
+            real exploitation; the scorer quarantines them instead of counting them as
+            organic. The count is in /v1/stats, and each target's self-test asserts
+            that every replayed PoC came back carrying a peer, which turns the leak
+            into a red self-test rather than a silently inflated score.
 
             `oracle_kind` is gone for two reasons: the field name is forbidden, and the
             catalog already declares `oracle.kind`, so an SDK sending it could only
@@ -660,6 +754,12 @@ components:
       type: object
       properties:
         run_id: {type: string}
+        run:
+          description: |
+            The run's own record, repeated on every page so that a single export is
+            self-contained. The scorer needs `addresses` from it to resolve an observed
+            source address to an application.
+          allOf: [{$ref: '#/components/schemas/Run'}]
         next_seq:
           type: integer
           nullable: true
@@ -688,6 +788,12 @@ components:
         events_total: {type: integer}
         synthetic_events: {type: integer}
         synthetic_by_source: {type: integer, description: Marked by CIDR rather than by the SDK}
+        signals_without_peer:
+          type: integer
+          description: |
+            Signals that arrived with no usable peer address, i.e. carrying
+            `peer_missing`. Non-zero means some sink lost its request context; treat
+            every number from that run as provisional until it is explained.
         synthetic_cidrs: {type: array, items: {type: string}}
         dropped: {type: integer}
         dropped_detail:

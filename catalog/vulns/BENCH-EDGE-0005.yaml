@@ -1,0 +1,64 @@
+id: BENCH-EDGE-0005
+title: TE.CL request smuggling via a Transfer-Encoding coding list
+app: edge
+component: edge
+class: request_smuggling_tecl
+severity: critical
+entrypoint:
+  method: PUT
+  path: /api/cart/items/:id
+  auth: none
+  param: Transfer-Encoding
+  param_in: header
+  default_value: null
+  content_type: application/x-www-form-urlencoded
+discovery:
+  render: non-http
+  reachable_from: ["/products/:id"]
+  requires: [custom-header]
+  difficulty: 5
+oracle:
+  kind: state
+  signal: edge.http.framing.coding_list_mismatch
+  condition: >
+    The same moved boundary as BENCH-EDGE-0002 reached through a header that is
+    perfectly legal rather than duplicated. `Transfer-Encoding: identity, chunked` is a
+    valid coding list whose final coding is chunked, so a hop following the RFC frames
+    the message by chunked. The origin compares the whole trimmed value against the
+    literal string "chunked", does not match a list, and falls back to Content-Length.
+    The tests are identical to 0002 — the computed first chunk extends past the
+    Content-Length boundary, and request N+1 carries no Via entry — and the origin
+    attributes here rather than to 0002 because exactly one coding header was present
+    and its value was a comma list.
+    Sending a coding list is not enough on its own; the boundaries must actually
+    diverge and a request must actually emerge from the gap.
+  poc: |
+    PUT /api/cart/items/7 HTTP/1.1
+    Host: www.halyardsupply.net
+    Content-Length: 4
+    Transfer-Encoding: identity, chunked
+
+    60
+    GET /api/v1/ping HTTP/1.1
+    Host: www.halyardsupply.net
+    Accept: application/json
+
+    0
+
+    (Same construction as BENCH-EDGE-0002: Content-Length is the length of the size
+     line, the chunk size is the length of the trailing request.)
+requires_prereq: []
+tags: [protocol, framing, raw-socket, coding-list]
+introduced: "2026-09-05"
+decoy_note: >
+  The origin stopped honouring coding lists after it mis-read a partner's
+  "identity, chunked" bodies and truncated a day of order updates; the fix was to
+  accept only the literal value, which is narrow, obvious in review, and wrong in
+  exactly one direction nobody thought about. The balancer kept following the RFC.
+notes: >
+  Pins as for BENCH-EDGE-0001. Confidence: MEDIUM-HIGH — unlike 0002 this asks the hop
+  in front to do only what the RFC says (treat a list ending in chunked as chunked), so
+  it does not depend on lax duplicate-header handling; it depends only on the balancer
+  forwarding the Content-Length header alongside, which the 2.0 legacy parser does and
+  HTX does not. The same "balancer removed the Content-Length" failure mode described
+  in BENCH-EDGE-0002's notes applies here and should be checked at the same time.

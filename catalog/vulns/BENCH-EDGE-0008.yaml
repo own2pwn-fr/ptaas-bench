@@ -1,0 +1,59 @@
+id: BENCH-EDGE-0008
+title: Web cache deception - a personalised account page stored under a .css key
+app: edge
+component: edge
+class: cache_deception
+severity: high
+entrypoint:
+  method: GET
+  path: /account/profile.:ext
+  auth: user
+  param: ext
+  param_in: path
+  default_value: null
+discovery:
+  render: static-html
+  reachable_from: ["/account/profile"]
+  requires: [multi-step-flow, wordlist]
+  difficulty: 4
+oracle:
+  kind: differential
+  signal: edge.cache.coherence.identity_variance
+  condition: >
+    Two hops disagree about what a URL means. The cache tier decides cacheability from
+    the extension — anything ending in .css, .js, .png and friends is a public asset —
+    which overrides the builtin rule that a request carrying a Cookie must not be
+    cached, and stores the response for 60s under a key containing no identity. The
+    Cookie is left in place on the way to the origin, so the response is still
+    personalised. The origin, for its part, ignores a trailing extension and serves the
+    account page for /account/profile.css.
+    Each account's page carries a personal API token derived from DEPLOY_SEED, so it
+    cannot be guessed from anything published or hardcoded by a tool. When the origin
+    serves a token under a path that ends in an asset extension it records the token
+    and the session it belongs to, and the coherence probe then requests the same URL
+    with no session cookie at all, on a fresh connection. The counter is raised if and
+    only if that anonymous request receives the signed-in customer's token — a response
+    containing one identity's data, stored under a key carrying none, served without
+    the session.
+    A 401, or an anonymous request answered by the origin on a cache miss, proves
+    nothing and raises nothing.
+  poc: >
+    POST /account/login (email=n.okonkwo@halyardsupply.net) to obtain a `sid` cookie,
+    then GET /account/profile.css?cb=1 with that cookie; a second client then requests
+    GET /account/profile.css?cb=1 with no cookie and receives the account's API token.
+requires_prereq: []
+tags: [protocol, cache, deception, second-client, authenticated]
+introduced: "2026-09-05"
+decoy_note: >
+  Caching assets on the strength of the URL alone is what let the team drop the CDN's
+  asset plan; hit ratio on /assets went from nothing to 98%. The Cookie is deliberately
+  left in place on the way to the origin because some asset responses ARE personalised
+  — the account stylesheet carries the customer's density setting — and stripping it
+  made them all render at the default. The asymmetry that follows (personalised body,
+  identity-free key) is invisible unless someone asks what happens when the URL only
+  LOOKS like an asset.
+notes: >
+  Depends on varnish 6.0.13 and the extension rule in vcl_recv / vcl_backend_response.
+  Confidence: HIGH. Note the asymmetry that makes it work at all: the Cookie is NOT
+  unset in vcl_recv — doing so would make the origin serve an anonymous page and there
+  would be nothing personal to leak — only the cacheability decision ignores identity.

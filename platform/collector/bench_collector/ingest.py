@@ -41,6 +41,7 @@ from .schemas import (
     TYPE_ALIASES,
     AnyEvent,
     CorrelationCreate,
+    RunClose,
     dump_event,
 )
 
@@ -102,6 +103,40 @@ def parse_address(raw: Any) -> ipaddress.IPv4Address | ipaddress.IPv6Address | N
         return ipaddress.ip_address(text)
     except ValueError:
         return None
+
+
+def _merge_addresses(existing: dict[str, Any] | None, closing: RunClose | None) -> dict[str, Any] | None:
+    """Fold what the orchestrator learned at close into the record from open.
+
+    Per app and per field, so a close that reports only `state_digest_after` cannot
+    erase the addresses and digests captured when the run opened.
+    """
+    if closing is None or not closing.addresses:
+        return None
+    merged = {app: dict(record) for app, record in (existing or {}).items()}
+    for app, record in closing.addresses.items():
+        supplied = record.model_dump(mode="json", exclude_none=True, exclude_defaults=True)
+        merged.setdefault(app, {}).update(supplied)
+    return merged
+
+
+def _warn_on_unreset_state(run_id: str, addresses: dict[str, Any]) -> None:
+    """A target that did not come back to its seeded state contaminates the next run.
+
+    Enforcement belongs to the orchestrator, which holds the next run open or refuses
+    it; the collector's job is to make the discrepancy impossible to miss afterwards.
+    Both digests stay in the record, so a reader can check this themselves.
+    """
+    for app, record in addresses.items():
+        before, after = record.get("state_digest_before"), record.get("state_digest_after")
+        if before and after and before != after:
+            log.warning(
+                "run %s: %s did not return to its seeded state (before=%s after=%s)",
+                run_id,
+                app,
+                before,
+                after,
+            )
 
 
 def stamp_registration_peer(record: dict[str, Any], peer: str | None) -> None:
@@ -201,6 +236,15 @@ class Collector:
     # written by the client -- which here is the tool under test.
     PEER_FIELDS = ("peer_ip", "source_ip")
 
+    def peer_address(self, event: Any) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:
+        """The socket peer this event was attributed to, if any is usable."""
+        extra = event.model_extra or {}
+        for attr in self.PEER_FIELDS:
+            address = parse_address(getattr(event, attr, None) or extra.get(attr))
+            if address is not None:
+                return address
+        return None
+
     def is_synthetic_source(self, event: Any) -> bool:
         """True when the event was caused by the platform's own traffic.
 
@@ -214,14 +258,10 @@ class Collector:
         """
         if not self.settings.synthetic_networks:
             return False
-        extra = event.model_extra or {}
-        for attr in self.PEER_FIELDS:
-            address = parse_address(getattr(event, attr, None) or extra.get(attr))
-            if address is None:
-                continue
-            if any(address in network for network in self.settings.synthetic_networks):
-                return True
-        return False
+        address = self.peer_address(event)
+        return address is not None and any(
+            address in network for network in self.settings.synthetic_networks
+        )
 
     # ---------------------------------------------------------------- correlations
 
@@ -279,12 +319,27 @@ class Collector:
                 if not force:
                     return None, False
                 await self._close_run_locked(self.active_run_id)
+            addresses = {
+                app: record.model_dump(mode="json") for app, record in (spec.addresses or {}).items()
+            }
+            declared, captured = set(spec.targets or []), set(addresses)
+            if declared != captured:
+                # Not fatal -- refusing to open a run would strand the whole benchmark
+                # over metadata -- but the scorer resolves source addresses through
+                # this map, so a target missing from it is a target whose callbacks
+                # cannot be attributed.
+                log.warning(
+                    "run targets and captured addresses disagree: only in targets=%s, only in addresses=%s",
+                    sorted(declared - captured),
+                    sorted(captured - declared),
+                )
             run = Run(
                 run_id=uuid.uuid4().hex,
                 tool=spec.tool,
                 tool_version=spec.tool_version,
                 profile=spec.profile,
                 targets=list(spec.targets or []),
+                addresses=addresses,
                 notes=spec.notes,
                 started_at=_now(),
                 closed_at=None,
@@ -298,22 +353,26 @@ class Collector:
             self.active_run_id = run.run_id
             return run, True
 
-    async def close_run(self, run_id: str) -> Run | None:
+    async def close_run(self, run_id: str, closing: RunClose | None = None) -> Run | None:
         # Land buffered events before flipping the run closed, so an export taken
         # immediately after close is complete.
         await self.flush()
         async with self._run_lock:
-            return await self._close_run_locked(run_id)
+            return await self._close_run_locked(run_id, closing)
 
-    async def _close_run_locked(self, run_id: str) -> Run | None:
+    async def _close_run_locked(self, run_id: str, closing: RunClose | None = None) -> Run | None:
         assert self.session_factory is not None
         async with self.session_factory() as session:
             run = await session.get(Run, run_id)
             if run is None:
                 return None
-            if run.active:
+            merged = _merge_addresses(run.addresses, closing)
+            if merged is not None:
+                run.addresses = merged
+                _warn_on_unreset_state(run_id, merged)
+            if run.active or merged is not None:
                 run.active = False
-                run.closed_at = _now()
+                run.closed_at = run.closed_at or _now()
                 await session.commit()
         if self.active_run_id == run_id:
             self.active_run_id = None
@@ -367,6 +426,18 @@ class Collector:
                 self.counters["synthetic_by_source"] += 1
             payload = dump_event(event)
             payload["synthetic"] = synthetic
+
+            if event.type in TYPE_ALIASES and not self.peer_address(event):
+                # A target author who hands work to a raw thread pool loses the
+                # request context, and the signal then arrives looking exactly like a
+                # legitimate background-job signal: synthetic false, no peer. No SDK
+                # can tell those apart, so the platform's own self-test replays would
+                # be credited to whichever tool is running. Flagged rather than
+                # dropped -- a background job really does have no request peer, and
+                # dropping would throw away proof of a genuine exploitation. The
+                # scorer quarantines these instead of counting them as organic.
+                payload["peer_missing"] = True
+                self.counters["signals_without_peer"] += 1
 
             if event.type == "correlation":
                 # Same door, same registry: an SDK may batch a hint with its other
@@ -543,6 +614,10 @@ class Collector:
                 "write_error": int(self.counters["dropped_write_error"]),
             },
             "synthetic_by_source": int(self.counters["synthetic_by_source"]),
+            # Signals that arrived with no usable peer address. A non-zero count means
+            # some sink lost its request context, and those events cannot be told
+            # apart from the platform's own replays -- see the peer_missing flag.
+            "signals_without_peer": int(self.counters["signals_without_peer"]),
             "synthetic_cidrs": [str(net) for net in self.settings.synthetic_networks],
             "correlations": self.correlations.stats(),
             "discarded_idle": int(self.counters["discarded_idle"]),

@@ -1,0 +1,64 @@
+id: BENCH-EDGE-0004
+title: CL.TE request smuggling via a vertical tab in the Transfer-Encoding value
+app: edge
+component: edge
+class: request_smuggling_clte
+severity: critical
+entrypoint:
+  method: POST
+  path: /api/cart/items
+  auth: none
+  param: Transfer-Encoding
+  param_in: header
+  default_value: null
+  content_type: application/x-www-form-urlencoded
+discovery:
+  render: non-http
+  reachable_from: ["/products/:id"]
+  requires: [custom-header]
+  difficulty: 5
+oracle:
+  kind: state
+  signal: edge.http.framing.control_byte_coding_mismatch
+  condition: >
+    The same moved boundary as BENCH-EDGE-0001 reached through a different
+    obfuscation, and the origin attributes on the obfuscation it observed rather than
+    on anything the sender asserts. Here the coding value arrives prefixed with a
+    vertical tab (0x0b). The balancer compares against "chunked" after trimming only
+    real optional whitespace, does not match, and frames by Content-Length; the origin
+    also strips VT, FF and NUL, matches, and frames by chunked. The verdict needs the
+    same two tests as 0001 — the byte-offset gap between the two readings of request
+    N's body, and the absence of a Via entry on request N+1 — and the origin records
+    that the match only happened because a control byte was removed, which is what
+    tells this counter apart from 0001's.
+    A header both hops read the same way, or one that is rejected outright, moves no
+    boundary and raises nothing.
+  poc: |
+    POST /api/cart/items HTTP/1.1
+    Host: www.halyardsupply.net
+    Content-Length: 96
+    Transfer-Encoding: <VT>chunked
+
+    0
+
+    GET /api/v1/ping HTTP/1.1
+    Host: www.halyardsupply.net
+    Accept: application/json
+
+    (<VT> is a literal 0x0b byte immediately after the colon-space.)
+requires_prereq: []
+tags: [protocol, framing, raw-socket, obfuscated-coding]
+introduced: "2026-09-05"
+decoy_note: >
+  Same cover as BENCH-EDGE-0001, one layer down: the EDI feed that forced
+  `accept-invalid-http-request` also pads some header values with control characters,
+  so the balancer was configured to let them through rather than answer 400 to a
+  partner whose integration predates the current contract. Nobody re-read what
+  "accept invalid" meant for the coding header specifically.
+notes: >
+  Same pins as BENCH-EDGE-0001. Confidence: MEDIUM — `option
+  accept-invalid-http-request` is required for the balancer to forward a value
+  containing a control byte instead of answering 400, and that should be confirmed on
+  a running stack. If it strips or rejects the VT, this entry needs a different
+  obfuscation (a space before the colon is the next candidate, which the origin's
+  reader also accepts); the counter and its two tests do not change.

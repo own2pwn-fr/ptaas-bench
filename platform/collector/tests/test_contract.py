@@ -92,3 +92,28 @@ def test_the_spec_is_not_shipped_in_the_image():
     grader for anything that wins RCE on a target and reaches this port."""
     ignored = (SPEC_FILE.parent / ".dockerignore").read_text().split()
     assert SPEC_FILE.name in ignored
+
+
+def test_signal_pattern_matches_the_catalog_schema():
+    """The catalog is the authority for what a signal name may look like. Both SDKs,
+    this service and the catalog have to agree exactly: a name that one end accepts
+    and another silently drops costs a finding with no error anywhere, and the loss
+    looks like a tool that simply did not exploit the flaw."""
+    import json
+
+    from bench_collector.schemas import SIGNAL_PATTERN
+
+    catalog = json.loads((SPEC_FILE.parents[2] / "catalog" / "schema.json").read_text())
+    assert catalog["properties"]["oracle"]["properties"]["signal"]["pattern"] == SIGNAL_PATTERN
+
+
+def test_documented_signal_patterns_match_the_implementation():
+    from bench_collector.schemas import SIGNAL_PATTERN
+
+    spec = yaml.safe_load(SPEC_FILE.read_text())
+    schemas = spec["components"]["schemas"]
+    documented = {
+        schemas["SignalEvent"]["allOf"][1]["properties"]["signal"]["pattern"],
+        schemas["CorrelationCreate"]["properties"]["signal"]["pattern"],
+    }
+    assert documented == {SIGNAL_PATTERN}

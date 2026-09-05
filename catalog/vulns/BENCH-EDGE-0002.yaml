@@ -1,0 +1,80 @@
+id: BENCH-EDGE-0002
+title: TE.CL request smuggling via duplicate Transfer-Encoding headers
+app: edge
+component: edge
+class: request_smuggling_tecl
+severity: critical
+entrypoint:
+  method: POST
+  path: /account/preferences
+  auth: none
+  param: Transfer-Encoding
+  param_in: header
+  default_value: null
+  content_type: application/x-www-form-urlencoded
+discovery:
+  render: non-http
+  reachable_from: ["/account/profile"]
+  requires: [custom-header]
+  difficulty: 5
+oracle:
+  kind: state
+  signal: edge.http.framing.duplicate_coding_mismatch
+  condition: >
+    The mirror image of the CL.TE entries: the hop in front frames by chunked and the
+    origin frames by Content-Length. Two coding headers are sent, `chunked` then `cow`.
+    The balancer's legacy parser finds chunked among the codings and reads the whole
+    chunked body; the origin honours the LAST coding header, fails to match "cow", and
+    falls back to Content-Length — which is set to exactly the length of the chunk-size
+    line. It consumes "<hex>CRLF" and treats the chunk data, a complete request, as
+    request N+1.
+    The counter is raised on at least one of:
+    (a) OFFSET - the origin re-reads the bytes it consumed as a Content-Length body,
+    parses the first chunk-size line out of them, and computes where a chunked reader
+    would have ended that chunk. That offset lies far beyond where the origin ended
+    request N, so request N+1 began inside what the hop in front still considered one
+    body.
+    (b) VIA - request N+1 carries no Via entry, so it passed through no proxy.
+    Duplicate coding headers on their own, or a 400 in reply, raise nothing.
+  poc: |
+    POST /account/preferences HTTP/1.1
+    Host: www.halyardsupply.net
+    Content-Length: 4
+    Transfer-Encoding: chunked
+    Transfer-Encoding: cow
+
+    60
+    GET /api/v1/ping HTTP/1.1
+    Host: www.halyardsupply.net
+    Accept: application/json
+
+    0
+
+    (Content-Length equals the length of the "60\r\n" size line; the chunk size equals
+     the byte length of the trailing request. selftest.py computes both.)
+requires_prereq: []
+tags: [protocol, framing, raw-socket, duplicate-header]
+introduced: "2026-09-05"
+decoy_note: >
+  Same cover as BENCH-EDGE-0001. The endpoint itself is an ordinary preferences form;
+  it appears here only because it carries a request body, which is the precondition for
+  a framing disagreement to have anywhere to hide. Note that although the form needs a
+  session, the flaw does not: the boundary moves in the reader, before any handler
+  runs, so an anonymous request that is answered 401 has already desynchronised the
+  connection. That is why the entrypoint records auth `none` while the route inventory
+  records the route as needing a user.
+notes: >
+  Pins as for BENCH-EDGE-0001. Confidence: MEDIUM — this is the entry most dependent on
+  the legacy parser. It needs haproxy 2.0.29 with `no option http-use-htx` to (i)
+  accept two coding headers rather than answering 400 and (ii) frame by chunked while
+  still forwarding the Content-Length header onward. HTX does neither, which is exactly
+  why the pin matters. Verify at first bring-up; if the balancer rejects the duplicate,
+  the fallback is a second header whose name carries trailing whitespace
+  ("Transfer-Encoding : cow"), which the origin's reader also accepts. A second failure
+  mode to check on the live stack: if the balancer decides the message is chunked and
+  REMOVES the Content-Length before forwarding, the origin is left with no framing at
+  all, reads a zero-length body, and then fails to parse the raw chunk-size line as a
+  request line — the boundary really did move but the counter sees a dropped connection
+  instead of an unexpected request. The fix in that case is to stop the balancer
+  consuming the header (legacy mode is expected to forward it), not to loosen the
+  counter.

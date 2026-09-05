@@ -1,0 +1,53 @@
+id: BENCH-EDGE-0007
+title: Web cache poisoning through a query parameter the cache strips from the key
+app: edge
+component: edge
+class: cache_poisoning
+severity: high
+entrypoint:
+  method: GET
+  path: /news
+  auth: none
+  param: lang
+  param_in: query
+  default_value: "en"
+discovery:
+  render: static-html
+  reachable_from: ["/"]
+  requires: []
+  difficulty: 2
+oracle:
+  kind: state
+  signal: edge.cache.coherence.parameter_variance
+  condition: >
+    The same class as BENCH-EDGE-0006 with the unkeyed input moved from a header to a
+    query parameter, which is the variant tools miss far more often. `lang` is
+    presentation-only and is normalised out of the cache key while still being
+    forwarded to the origin, which renders it into a `public, max-age=30` page. Two
+    different URLs therefore share one stored object.
+    The counter is again raised by the second-client check, and it is built so that the
+    verifying request is a URL the attacker never sent: the origin takes the original
+    target, removes `lang`, and requests THAT — a request carrying none of the injected
+    input, which the cache nevertheless resolves to the same object. The counter is
+    raised only if the injected edition comes back on it. The cache's key normalisation
+    and the origin's stripParam apply the same transformation, so a disagreement
+    between them shows up as a missing count, never as a false one.
+    Sending ?lang=<payload> and seeing it in your own response is exercise, never a
+    count.
+  poc: >
+    GET /news?cb=1&lang=xx-1 followed by a clean GET /news?cb=1 from another client,
+    which is served the xx-1 edition from cache.
+requires_prereq: []
+tags: [protocol, cache, unkeyed-param, second-client]
+introduced: "2026-09-05"
+decoy_note: >
+  One copy of every article per locale per campaign parameter had the workshop-notes
+  hit ratio down around 40%, so the locale was normalised out of the key — while still
+  being forwarded, because the origin has to render the right edition. "Presentation
+  only, safe to normalise" is a sentence that appears in a lot of real cache configs
+  and is true right up until the presentation is attacker-chosen.
+notes: >
+  Depends on varnish 6.0.13 and the vcl_hash regsub in
+  targets/edge/varnish/default.vcl. Confidence: HIGH. The one subtlety is that the VCL
+  and the origin's probe must normalise to the same key; both strip `lang` and
+  re-canonicalise the leading separator, and a disagreement fails closed.

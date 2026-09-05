@@ -48,6 +48,35 @@ def _truncator(limit: int):
     return _clip
 
 
+class TargetRecord(BaseModel):
+    """What was actually running for one target, captured by the orchestrator.
+
+    Every field here exists so that a published result can be re-run and contested
+    from its own record. Container addresses are reassigned between runs, image tags
+    move, and a target that did not come back to its seeded state produces scores
+    that describe the previous run as much as this one -- none of which is visible
+    from the event stream alone.
+
+    ``extra="allow"`` on purpose: this is machine-captured from `docker inspect` and
+    will grow fields. Losing them would be silent, and the envelope around it
+    (RunCreate) is strict enough to catch a hand-written typo.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    service: str | None = Field(default=None, description="Compose service name")
+    container_id: str | None = None
+    addresses: list[str] = Field(
+        default_factory=list,
+        description="Every address the container holds, on every network it is attached to",
+    )
+    image_digest: str | None = Field(
+        default=None, description="The digest actually running, never the tag"
+    )
+    state_digest_before: str | None = None
+    state_digest_after: str | None = None
+
+
 class RunCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -55,8 +84,25 @@ class RunCreate(BaseModel):
     tool_version: str | None = None
     profile: str | None = None
     targets: list[str] = Field(default_factory=list)
+    addresses: dict[str, TargetRecord] = Field(
+        default_factory=dict,
+        description="Per-app record, keyed by app key. See TargetRecord.",
+    )
     notes: str | None = None
     force: bool = False
+
+
+class RunClose(BaseModel):
+    """Optional body of POST /v1/runs/{run_id}/close.
+
+    Carries what is only knowable once the run is over -- chiefly the state digest
+    read after the run, which is what says whether the target came back to its seeded
+    state. Merged per app into the record captured at open.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    addresses: dict[str, TargetRecord] = Field(default_factory=dict)
 
 
 class HttpParam(BaseModel):

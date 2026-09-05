@@ -577,3 +577,86 @@ async def test_the_allowlisted_caller_reaches_the_control_surface(settings):
         assert (await http.post("/v1/runs", json={"tool": "zap"})).status_code == 201
         for path in ("/v1/runs", "/v1/runs/active", "/v1/stats", "/v1/correlations"):
             assert (await http.get(path)).status_code == 200, path
+
+
+# ------------------------------------------------- signals with no request context
+
+
+async def test_signals_with_no_peer_are_flagged_not_dropped(client):
+    """A sink that hands work to a raw thread pool loses the request context, and its
+    signal then looks exactly like a legitimate background-job signal. Nothing can
+    tell those apart, so the platform's own self-test replays would be credited to
+    whichever tool is running. Flag them; do not drop them, because a background job
+    really has no request peer and dropping would lose proof of a real exploitation.
+    """
+    run = await open_run(client)
+    await post_events(
+        client,
+        [
+            signal_event(peer_ip=TOOL_IP),
+            signal_event(),                              # context lost
+            signal_event(peer_ip="not-an-address"),      # unusable is the same as none
+            legacy_trigger_event(),                      # the old spelling too
+            http_request_event(),                        # only signals are flagged
+        ],
+    )
+
+    events = (await client.get(f"/v1/runs/{run['run_id']}/events")).json()["events"]
+    assert [event.get("peer_missing", False) for event in events] == [
+        False,
+        True,
+        True,
+        True,
+        False,
+    ]
+    assert len(events) == 5, "flagged, never dropped"
+
+    stats = (await client.get("/v1/stats")).json()
+    assert stats["signals_without_peer"] == 3
+
+
+async def test_a_signal_from_the_platform_keeps_its_peer(client):
+    """The counterpart: a self-test replay arrives with a peer in the platform range,
+    so it is marked synthetic and is never flagged as context-less."""
+    run = await open_run(client)
+    await post_events(client, [signal_event(peer_ip=PLATFORM_IP)])
+
+    stored = (await client.get(f"/v1/runs/{run['run_id']}/events")).json()["events"][0]
+    assert stored["synthetic"] is True
+    assert "peer_missing" not in stored
+
+
+async def test_a_two_segment_signal_name_is_rejected(client):
+    """The catalog schema is the authority and requires three segments or more. A
+    two-segment name that both SDKs would accept but this service silently dropped
+    would be a blind vulnerability scoring as missed by every tool, with no error
+    anywhere."""
+    run = await open_run(client)
+    response = await post_events(
+        client,
+        [
+            signal_event(signal="shop.anomaly"),
+            {
+                "type": "correlation",
+                "app": "shopfront",
+                "signal": "shop.anomaly",
+                "destination_host": "x.oast.fun",
+            },
+            signal_event(signal="shop.catalog.anomaly"),
+        ],
+    )
+    assert response.json() == {"accepted": 1, "dropped": 2, "discarded_idle": 0}
+
+    events = (await client.get(f"/v1/runs/{run['run_id']}/events")).json()["events"]
+    assert [event["signal"] for event in events] == ["shop.catalog.anomaly"]
+
+    # Same rule on the dedicated door, where the drop would cost a blind finding.
+    hint = await client.post(
+        "/v1/correlations",
+        json={
+            "app": "shopfront",
+            "signal": "shop.anomaly",
+            "destination_host": "x.oast.fun",
+        },
+    )
+    assert hint.json() == {"registered": False}
