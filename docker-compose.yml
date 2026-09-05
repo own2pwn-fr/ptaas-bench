@@ -9,19 +9,47 @@
 include:
   - compose/targets.yml
 
-name: ptaas-bench
+# Container names are derived from this, they appear in /etc/hostname inside every
+# target, and Docker's embedded DNS resolves them on the tool's own network — so this
+# string is directly observable by the subject of the benchmark. Override it per
+# deployment with COMPOSE_PROJECT_NAME; the default must stay unremarkable.
+name: ${COMPOSE_PROJECT_NAME:-platform-edge}
 
 networks:
-  # The tool under test is attached here, and to nothing else. It can see the
-  # target applications and the canary service, and that is all.
+  # The tool under test is attached here, and to nothing else. It can see the target
+  # applications and the sinkhole, and that is all. `internal: true` here is what makes
+  # blind vulnerabilities measurable rather than merely unreachable: with no route out,
+  # a callback to the tool's own collaborator domain cannot leave, and the sinkhole —
+  # which is the resolver for this network — captures it instead. It also removes the
+  # host gateway from reach, so nothing published on the host's loopback is exposed to
+  # a tool that has just taken RCE on a target.
+  #
+  # Tools needing internet to update templates or signatures must do so in a preparation
+  # step, before the run opens, on a different network.
   bench-public:
     name: bench-public
+    internal: true
+    # Fixed addressing because every target fragment must pin `dns: ["10.88.0.5"]` to the
+    # sinkhole. Docker's embedded resolver cannot do the job here: on an internal network
+    # it has no route to forward an external name, so a payload's callback would hang for
+    # the resolver timeout instead of being captured, and blind vulnerabilities would look
+    # unexploitable to every tool. The sinkhole answers everything and forwards the names
+    # that are genuinely internal.
+    ipam:
+      config:
+        - subnet: 10.88.0.0/24
   # Collector, database and scoring. `internal: true` means no route out and, more
   # importantly, no route in from bench-public: a scanner cannot reach the collector
   # to read the answer key or to forge trigger events.
   bench-internal:
     name: bench-internal
     internal: true
+    # Fixed addressing so the collector can allowlist the sinkhole for its control
+    # endpoints. Targets sit on this network too, and a target is exactly what a tool
+    # takes RCE on, so "internal" alone does not protect the answer key.
+    ipam:
+      config:
+        - subnet: 10.77.0.0/24
 
 volumes:
   collector-data:
@@ -45,7 +73,14 @@ services:
   otel-collector:
     build: ./platform/collector
     environment:
-      BENCH_DATABASE_URL: postgresql://bench:bench@collector-db:5432/bench
+      TELEMETRY_DATABASE_URL: postgresql://bench:bench@collector-db:5432/bench
+      # Run management and event export — the answer key — answer 404 to anyone but the
+      # sinkhole and the container's own loopback, which is how the orchestrator reaches
+      # them (via `docker compose exec`, never a published port). Ingestion stays open to
+      # every target and byte-identical, so a compromised target learns nothing from the
+      # difference.
+      TELEMETRY_CONTROL_CIDRS: "127.0.0.1/32,10.77.0.5/32"
+      TELEMETRY_SYNTHETIC_CIDRS: "10.77.0.5/32"
     networks: [bench-internal]
     depends_on:
       collector-db: {condition: service_healthy}
@@ -69,6 +104,10 @@ services:
       # network would score every blind SSRF, XXE and command injection as missed by
       # every tool — a property of our topology, not of the tools.
       SINKHOLE_ZONE: telemetry-edge.net
-    networks: [bench-internal, bench-public]
+    networks:
+      bench-internal:
+        ipv4_address: 10.77.0.5
+      bench-public:
+        ipv4_address: 10.88.0.5
     depends_on:
       otel-collector: {condition: service_healthy}

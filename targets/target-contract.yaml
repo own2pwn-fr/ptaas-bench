@@ -61,7 +61,7 @@ deception:
     Because this repository is public, a tool with internet access could fingerprint a
     literal string from a target and find the corpus. Seeded content (company name,
     product names, user names, ids, path prefixes for non-standard routes) is therefore
-    generated from BENCH_DEPLOY_SEED at reset time, so two deployments do not share the
+    generated from DEPLOY_SEED at reset time, so two deployments do not share the
     strings that would make that search work. Anything that must stay stable for scoring
     lives in the catalog, never in the visible content.
 
@@ -103,7 +103,7 @@ reset:
     - Prints a one-line state digest on stdout that changes if and only if the seeded
       state changed. The orchestrator records it before and after a run and refuses to
       open the next run until the digest is back to its seeded value.
-    - Re-derives seeded content from BENCH_DEPLOY_SEED so a redeploy does not reuse the
+    - Re-derives seeded content from DEPLOY_SEED so a redeploy does not reuse the
       public repository's default strings.
 
 credentials:

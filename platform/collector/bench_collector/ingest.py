@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import ipaddress
 import json
 import logging
 import uuid
@@ -33,8 +34,9 @@ from sqlalchemy import func, insert, select, update
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async_engine
 
 from .config import Settings
+from .correlations import CorrelationRegistry
 from .models import Base, Event, Run
-from .schemas import MAX_EVENTS_PER_BATCH, AnyEvent, dump_event
+from .schemas import MAX_EVENTS_PER_BATCH, AnyEvent, CorrelationCreate, dump_event
 
 log = logging.getLogger("bench.collector")
 
@@ -67,6 +69,26 @@ def _now() -> datetime:
     return datetime.now(UTC)
 
 
+def parse_address(raw: Any) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:
+    """Best-effort address extraction from whatever an SDK put in the field.
+
+    Real deployments hand us ``1.2.3.4``, ``1.2.3.4:51234``, ``[::1]:80`` and
+    forwarded-for lists. Getting this wrong in either direction is expensive: a
+    missed match scores our own seeding traffic as if a tool had produced it.
+    """
+    if raw in (None, ""):
+        return None
+    text = str(raw).split(",")[0].strip()
+    if text.startswith("["):  # [::1]:80
+        text = text[1:].split("]")[0]
+    elif text.count(":") == 1:  # host:port, never bare IPv6
+        text = text.split(":")[0]
+    try:
+        return ipaddress.ip_address(text)
+    except ValueError:
+        return None
+
+
 class Collector:
     """Owns the engine, the active-run state and the writer task."""
 
@@ -80,6 +102,9 @@ class Collector:
         self.active_run_id: str | None = None
         self._seq: dict[str, int] = {}
         self.counters: Counter[str] = Counter()
+        self.correlations = CorrelationRegistry(
+            ttl=settings.correlation_ttl, max_entries=settings.correlation_max
+        )
 
     # ------------------------------------------------------------------ lifecycle
 
@@ -131,6 +156,69 @@ class Collector:
                     await session.execute(select(func.max(Event.seq)).where(Event.run_id == run.run_id))
                 ).scalar()
                 self._seq[run.run_id] = int(last or 0)
+
+    def is_synthetic_source(self, event: Any) -> bool:
+        """True when the event was caused by the platform's own traffic.
+
+        Identified by source address, never by a marker header: any reflection,
+        verbose error or header-injection flaw in a target would have shown the tool
+        a header named after the grader, and told it exactly what it was inside of.
+        """
+        if not self.settings.synthetic_networks:
+            return False
+        extra = event.model_extra or {}
+        for attr in ("client_ip", "source_ip"):
+            address = parse_address(getattr(event, attr, None) or extra.get(attr))
+            if address is None:
+                continue
+            if any(address in network for network in self.settings.synthetic_networks):
+                return True
+        return False
+
+    # ---------------------------------------------------------------- correlations
+
+    def register_correlation(self, spec: CorrelationCreate) -> dict[str, Any]:
+        """Register an outbound-fetch hint and mirror it into the event stream.
+
+        Registration is synchronous in memory because the callback it describes can
+        arrive within milliseconds; the event copy goes through the ordinary buffered
+        path so the caller -- a planted sink, mid-request -- still pays no database
+        latency.
+        """
+        record = spec.model_dump(mode="json", by_alias=True)
+        record["type"] = "correlation"
+        if self.is_synthetic_source(spec):
+            record["synthetic"] = True
+        entry = self.correlations.register(record, ttl=spec.ttl)
+        self.counters["correlations"] += 1
+        # Counted like any other intake so the debug totals still reconcile:
+        # received == written + dropped + discarded_idle.
+        self.counters["received"] += 1
+        self._enqueue_payload(entry)
+        return entry
+
+    def _enqueue_payload(self, payload: dict[str, Any]) -> bool:
+        """Queue an already-validated payload. Returns False when nothing was kept."""
+        run_id = self.active_run_id
+        if run_id is None:
+            self.counters["discarded_idle"] += 1
+            return False
+        item = QueuedEvent(
+            run_id=run_id,
+            received_at=_now(),
+            type=str(payload.get("type")),
+            app=str(payload.get("app", "")),
+            ts=payload.get("ts"),
+            synthetic=bool(payload.get("synthetic")),
+            payload=payload,
+        )
+        try:
+            self.queue.put_nowait([item])
+        except asyncio.QueueFull:
+            self.counters["dropped_overflow"] += 1
+            log.error("event queue full (maxsize=%d), dropped 1 event", self.queue.maxsize)
+            return False
+        return True
 
     # ----------------------------------------------------------------------- runs
 
@@ -225,9 +313,25 @@ class Collector:
                 dropped += 1
                 log.exception("dropping unprocessable event: %s", _preview(raw))
                 continue
+            synthetic = bool(event.synthetic) or self.is_synthetic_source(event)
+            if synthetic and not event.synthetic:
+                self.counters["synthetic_by_source"] += 1
+            payload = dump_event(event)
+            payload["synthetic"] = synthetic
+
+            if event.type == "correlation":
+                # Same door, same registry: an SDK may batch a hint with its other
+                # telemetry rather than call POST /v1/correlations, and the sinkhole
+                # must see it either way.
+                entry = self.correlations.register(payload, ttl=payload.get("ttl"))
+                self.counters["correlations"] += 1
+                payload = entry
+
             if run_id is None:
                 # Idle: targets stay instrumented between benchmarks so their
-                # behaviour is identical whether or not a run is in progress.
+                # behaviour is identical whether or not a run is in progress. The
+                # correlation registry is still updated above -- the sinkhole must
+                # behave the same way too.
                 idle += 1
                 continue
             accepted.append(
@@ -237,8 +341,8 @@ class Collector:
                     type=event.type,
                     app=event.app,
                     ts=event.ts,
-                    synthetic=bool(event.synthetic),
-                    payload=dump_event(event),
+                    synthetic=synthetic,
+                    payload=payload,
                 )
             )
 
@@ -386,6 +490,9 @@ class Collector:
                 "queue_overflow": int(self.counters["dropped_overflow"]),
                 "write_error": int(self.counters["dropped_write_error"]),
             },
+            "synthetic_by_source": int(self.counters["synthetic_by_source"]),
+            "synthetic_cidrs": [str(net) for net in self.settings.synthetic_networks],
+            "correlations": self.correlations.stats(),
             "discarded_idle": int(self.counters["discarded_idle"]),
             "received": int(self.counters["received"]),
             "written": int(self.counters["written"]),

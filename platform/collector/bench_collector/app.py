@@ -3,6 +3,12 @@
 Everything here is thin: routing, status codes and the one piece of policy the API
 owns -- exactly one active run at a time. SDKs never send a run id, so attribution
 cannot desynchronise when a target restarts mid-scan.
+
+The service presents itself as an ordinary self-hosted OpenTelemetry collector.
+That is not decoration: targets are dual-homed so they can report inward, so a tool
+that wins RCE on a target can reach this service at the endpoint named in the
+target's environment. Ingestion therefore answers on /v1/traces as well, and the
+generated API description stays unpublished unless someone asks for it.
 """
 
 from __future__ import annotations
@@ -10,16 +16,62 @@ from __future__ import annotations
 import json
 import logging
 from contextlib import asynccontextmanager
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response, status
 from fastapi.responses import JSONResponse
 
 from .config import load_settings
-from .ingest import Collector
-from .schemas import EventEnvelope, RunCreate
+from .ingest import Collector, parse_address
+from .schemas import EVENT_TYPES, CorrelationCreate, EventEnvelope, RunCreate
 
 log = logging.getLogger("bench.collector")
+
+
+# Reachable by anything that can talk to the port; everything else is the control
+# surface and answers 404 to a client outside TELEMETRY_CONTROL_CIDRS.
+INSTRUMENTATION_ROUTES = {
+    ("GET", "/healthz"),
+    ("POST", "/v1/events"),
+    ("POST", "/v1/traces"),
+    ("POST", "/v1/correlations"),
+}
+
+
+def _install_control_guard(app: FastAPI, collector: Collector) -> None:
+    """Keep the answer key away from a target that has been popped.
+
+    Targets are dual-homed so they can report inward, which means a tool holding RCE
+    on one can reach this port at the address in the target's environment. The
+    network split does not help there. So the control surface -- run management, the
+    event export that lists exactly which planted sinks fired, the stats -- is
+    additionally limited by source address.
+
+    Empty allowlist means open, so an operator who has not configured this is exactly
+    where they were before. Unauthorised callers get 404 rather than 403: a refusal
+    confirms there is something to refuse.
+
+    Enabling it means allowlisting the orchestrator AND the sinkhole, which reads the
+    pending correlation set over the internal network.
+    """
+    networks = collector.settings.control_networks
+    if not networks:
+        log.warning(
+            "control surface open to anything that can reach the port "
+            "(set TELEMETRY_CONTROL_CIDRS to restrict it)"
+        )
+        return
+
+    @app.middleware("http")
+    async def guard(request: Request, call_next):
+        route = (request.method.upper(), request.url.path)
+        if route not in INSTRUMENTATION_ROUTES:
+            client = request.client
+            address = parse_address(client.host if client else None)
+            if address is None or not any(address in network for network in networks):
+                log.warning("refused control request %s %s from %s", *route, client)
+                return JSONResponse(status_code=status.HTTP_404_NOT_FOUND, content={"detail": "Not Found"})
+        return await call_next(request)
 
 
 def get_collector(request: Request) -> Collector:
@@ -40,12 +92,22 @@ async def lifespan(app: FastAPI):
 
 
 def create_app(collector: Collector | None = None) -> FastAPI:
+    collector = collector or Collector(load_settings())
+    settings = collector.settings
+    expose = settings.expose_schema
     app = FastAPI(
-        title="ptaas-bench collector",
+        title=settings.service_name,
+        summary="OpenTelemetry collector",
         version="1.0.0",
         lifespan=lifespan,
+        # A served schema listing runs, events and stats would tell a tool holding
+        # RCE on a target exactly what it is talking to, and where the answer key is.
+        openapi_url="/openapi.json" if expose else None,
+        docs_url="/docs" if expose else None,
+        redoc_url="/redoc" if expose else None,
     )
-    app.state.collector = collector or Collector(load_settings())
+    app.state.collector = collector
+    _install_control_guard(app, collector)
 
     @app.get("/healthz")
     async def healthz() -> dict[str, Any]:
@@ -88,7 +150,7 @@ def create_app(collector: Collector | None = None) -> FastAPI:
     async def export_events(
         run_id: str,
         collector: CollectorDep,
-        type: Literal["http_request", "trigger", "oob", "note"] | None = None,
+        type: EVENT_TYPES | None = None,
         after_seq: int | None = Query(default=None, ge=0),
         limit: int = Query(default=5000, ge=1, le=50000),
     ) -> dict[str, Any]:
@@ -96,6 +158,17 @@ def create_app(collector: Collector | None = None) -> FastAPI:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="unknown run")
         return await collector.get_events(run_id, event_type=type, after_seq=after_seq, limit=limit)
 
+    @app.post(
+        "/v1/traces",
+        status_code=status.HTTP_202_ACCEPTED,
+        summary="Ingest a batch of spans",
+        openapi_extra={
+            "requestBody": {
+                "required": True,
+                "content": {"application/json": {"schema": EventEnvelope.model_json_schema()}},
+            }
+        },
+    )
     @app.post(
         "/v1/events",
         status_code=status.HTTP_202_ACCEPTED,
@@ -108,6 +181,10 @@ def create_app(collector: Collector | None = None) -> FastAPI:
     )
     async def ingest_events(request: Request, collector: CollectorDep) -> Response:
         """Always 202. Never validate the batch as a whole.
+
+        Answers on /v1/traces too: a target whose environment points at an OTLP-ish
+        path is unremarkable, one pointing at something called a bench collector is
+        an immediate tell to anyone who reads that environment.
 
         The body is parsed by hand instead of being bound to a Pydantic model because
         FastAPI would answer 422 for the *whole* batch on a single bad item: one
@@ -132,6 +209,51 @@ def create_app(collector: Collector | None = None) -> FastAPI:
             log.exception("failed to ingest event batch")
             result = {"accepted": 0, "dropped": 1, "discarded_idle": 0}
         return JSONResponse(status_code=status.HTTP_202_ACCEPTED, content=result)
+
+    @app.post("/v1/correlations", status_code=status.HTTP_202_ACCEPTED)
+    async def register_correlation(request: Request, collector: CollectorDep) -> Response:
+        """Register an outbound-fetch hint for the egress sinkhole.
+
+        Called by a planted sink immediately before it makes an attacker-controlled
+        outbound request. Same fire-and-forget contract as ingestion -- a malformed
+        hint is dropped and counted, never 4xx'd -- because this runs inside the
+        target's request handling and several oracles are timing-based.
+
+        The record is live in memory before this returns, since the callback it
+        describes can arrive within milliseconds.
+        """
+        try:
+            raw = await request.body()
+            spec = CorrelationCreate.model_validate_json(raw)
+        except Exception:
+            collector.counters["dropped_invalid"] += 1
+            log.exception("dropping malformed correlation")
+            return JSONResponse(status_code=status.HTTP_202_ACCEPTED, content={"registered": False})
+        entry = collector.register_correlation(spec)
+        return JSONResponse(
+            status_code=status.HTTP_202_ACCEPTED,
+            content={"registered": True, "correlation": entry},
+        )
+
+    @app.get("/v1/correlations")
+    async def list_correlations(
+        collector: CollectorDep,
+        destination_host: str | None = None,
+        include_expired: bool = False,
+    ) -> dict[str, Any]:
+        """Pending hints, for the sinkhole to attribute a callback it just observed.
+
+        Expired entries are evicted on read; `include_expired` is a debugging escape
+        hatch and returns nothing extra once eviction has run.
+        """
+        entries = collector.correlations.pending(destination_host)
+        return {
+            "now": collector.correlations.clock(),
+            "ttl": collector.correlations.ttl,
+            "count": len(entries),
+            "correlations": entries,
+            "include_expired": include_expired,
+        }
 
     @app.get("/v1/stats")
     async def stats(collector: CollectorDep) -> dict[str, Any]:

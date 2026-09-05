@@ -2,11 +2,16 @@
 
 from __future__ import annotations
 
-from httpx import ASGITransport, AsyncClient
+import json
 
-from bench_collector.app import create_app
-from bench_collector.ingest import Collector
-from tests.conftest import http_request_event, trigger_event
+from tests.conftest import (
+    PLATFORM_IP,
+    TOOL_IP,
+    client_for,
+    http_request_event,
+    trigger_event,
+)
+from tests.conftest import correlation as correlation_hint
 
 
 async def post_events(client, events):
@@ -40,7 +45,7 @@ async def test_events_are_stamped_with_the_active_run(client):
     assert all(event["received_at"] for event in page["events"])
     # The parameter location keeps its wire name, not the python-safe alias.
     assert page["events"][0]["params"][0]["in"] == "path"
-    assert page["events"][1]["vuln_id"] == "BENCH-SHOP-0001"
+    assert page["events"][1]["signal"] == "shop.catalog.query.plan_anomaly"
     assert page["events"][1]["evidence"]["payload"] == "' OR 1=1--"
 
     listed = {run_row["run_id"]: run_row for run_row in (await client.get("/v1/runs")).json()}
@@ -233,12 +238,7 @@ async def test_active_run_and_seq_survive_a_collector_restart(client, collector,
     await post_events(client, [http_request_event(), http_request_event()])
     await client.get("/v1/stats")  # forces a flush
 
-    restarted = Collector(settings)
-    app = create_app(restarted)
-    async with (
-        app.router.lifespan_context(app),
-        AsyncClient(transport=ASGITransport(app=app), base_url="http://collector:8900") as http,
-    ):
+    async with client_for(settings) as (http, _restarted):
         active = await http.get("/v1/runs/active")
         assert active.status_code == 200
         assert active.json()["run_id"] == run["run_id"]
@@ -262,3 +262,214 @@ async def test_openapi_schema_is_generated(client):
         "/v1/events",
         "/v1/stats",
     }
+
+
+# --------------------------------------------------------------------- signals
+
+
+async def test_trigger_identified_by_signal_alone(client):
+    """Current targets emit an opaque metric-shaped signal, never a catalog id."""
+    run = await open_run(client)
+    await post_events(client, [trigger_event(signal="shop.checkout.coupon.negative_total")])
+
+    stored = (await client.get(f"/v1/runs/{run['run_id']}/events")).json()["events"][0]
+    assert stored["signal"] == "shop.checkout.coupon.negative_total"
+    assert stored["vuln_id"] is None
+
+
+async def test_trigger_identified_by_vuln_id_alone_still_works(client):
+    """Older targets have not been re-signalled yet; their runs must stay scoreable."""
+    run = await open_run(client)
+    await post_events(client, [trigger_event(signal=None, vuln_id="BENCH-SHOP-0001")])
+
+    stored = (await client.get(f"/v1/runs/{run['run_id']}/events")).json()["events"][0]
+    assert stored["vuln_id"] == "BENCH-SHOP-0001"
+    assert stored["signal"] is None
+
+
+async def test_trigger_may_carry_both(client):
+    run = await open_run(client)
+    await post_events(client, [trigger_event(vuln_id="BENCH-SHOP-0001")])
+
+    stored = (await client.get(f"/v1/runs/{run['run_id']}/events")).json()["events"][0]
+    assert stored["vuln_id"] == "BENCH-SHOP-0001"
+    assert stored["signal"] == "shop.catalog.query.plan_anomaly"
+
+
+async def test_trigger_without_any_identifier_is_dropped(client):
+    """Unattributable is worse than absent: it would skew ground truth silently."""
+    run = await open_run(client)
+    response = await post_events(client, [trigger_event(signal=None), trigger_event()])
+    assert response.json() == {"accepted": 1, "dropped": 1, "discarded_idle": 0}
+
+    page = (await client.get(f"/v1/runs/{run['run_id']}/events")).json()
+    assert len(page["events"]) == 1
+
+
+async def test_malformed_signals_are_dropped(client):
+    run = await open_run(client)
+    bad = [
+        "Shop.Catalog.Query",       # upper case
+        "shop.catalog",            # too few segments
+        "shop..query.anomaly",     # empty segment
+        "1shop.catalog.anomaly",   # leading digit
+        "shop.catalog.query-plan", # hyphen is not allowed inside a segment
+    ]
+    response = await post_events(client, [trigger_event(signal=signal) for signal in bad])
+    assert response.json()["dropped"] == len(bad)
+    assert (await client.get(f"/v1/runs/{run['run_id']}/events")).json()["events"] == []
+
+
+async def test_signals_are_stored_verbatim_and_never_resolved(client, collector):
+    """The collector does not read the catalog. Signal -> vulnerability is the
+    scorer's job, and keeping the answer key out of this process is half the reason
+    the network split exists."""
+    run = await open_run(client)
+    await post_events(client, [trigger_event(signal="edge.session.cookie.replay_accepted")])
+
+    stored = (await client.get(f"/v1/runs/{run['run_id']}/events")).json()["events"][0]
+    assert stored["signal"] == "edge.session.cookie.replay_accepted"
+    assert "BENCH-" not in json.dumps(stored)
+
+
+# ------------------------------------------------------------- /v1/traces alias
+
+
+async def test_traces_is_an_alias_of_events(client):
+    """A target pointed at an OTLP-ish path is unremarkable; one pointed at a
+    collector named after the benchmark tells the tool what it is inside of."""
+    run = await open_run(client)
+    response = await client.post("/v1/traces", json={"events": [http_request_event(), trigger_event()]})
+    assert response.status_code == 202
+    assert response.json()["accepted"] == 2
+
+    page = (await client.get(f"/v1/runs/{run['run_id']}/events")).json()
+    assert [event["type"] for event in page["events"]] == ["http_request", "trigger"]
+
+
+async def test_traces_and_events_share_one_sequence(client):
+    run = await open_run(client)
+    await client.post("/v1/traces", json={"events": [http_request_event()]})
+    await client.post("/v1/events", json={"events": [http_request_event()]})
+    await client.post("/v1/traces", json={"events": [http_request_event()]})
+
+    page = (await client.get(f"/v1/runs/{run['run_id']}/events")).json()
+    assert [event["seq"] for event in page["events"]] == [1, 2, 3]
+
+
+async def test_traces_never_fails_the_caller(client):
+    await open_run(client)
+    response = await client.post(
+        "/v1/traces", content=b"{ not json", headers={"content-type": "application/json"}
+    )
+    assert response.status_code == 202
+
+
+# ------------------------------------------------------ synthetic by source address
+
+
+async def test_platform_traffic_is_marked_synthetic_by_source(client):
+    """The selftest header is gone platform-wide: any reflection or header-injection
+    flaw would have shown a tool the shape of the grader."""
+    run = await open_run(client)
+    await post_events(
+        client,
+        [
+            http_request_event(client_ip=PLATFORM_IP),
+            http_request_event(client_ip=TOOL_IP),
+            http_request_event(client_ip=f"{PLATFORM_IP}:51234"),
+            trigger_event(client_ip=PLATFORM_IP),
+            {"type": "oob", "app": "edge", "token": "abc", "channel": "dns", "source_ip": PLATFORM_IP},
+        ],
+    )
+
+    events = (await client.get(f"/v1/runs/{run['run_id']}/events")).json()["events"]
+    assert [event["synthetic"] for event in events] == [True, False, True, True, True]
+    stats = (await client.get("/v1/stats")).json()
+    assert stats["synthetic_by_source"] == 4
+    assert stats["synthetic_cidrs"] == ["10.99.0.0/16", "fd00:99::/32"]
+
+
+async def test_sdk_flag_still_overrides(client):
+    """An SDK that knows better wins: it may see platform traffic arriving through a
+    proxy, where the address we get is the proxy's."""
+    run = await open_run(client)
+    await post_events(client, [http_request_event(client_ip=TOOL_IP, synthetic=True)])
+
+    events = (await client.get(f"/v1/runs/{run['run_id']}/events")).json()["events"]
+    assert events[0]["synthetic"] is True
+    assert (await client.get("/v1/stats")).json()["synthetic_by_source"] == 0
+
+
+async def test_unparsable_or_absent_addresses_are_not_synthetic(client):
+    run = await open_run(client)
+    await post_events(
+        client,
+        [
+            http_request_event(),
+            http_request_event(client_ip=""),
+            http_request_event(client_ip="not-an-address"),
+            http_request_event(client_ip="10.99.4.12, 192.0.2.1"),
+        ],
+    )
+    events = (await client.get(f"/v1/runs/{run['run_id']}/events")).json()["events"]
+    # Only the forwarded-for list resolves: its first hop is the original client.
+    assert [event["synthetic"] for event in events] == [False, False, False, True]
+
+
+async def test_no_cidrs_configured_means_nothing_is_synthetic_by_source(settings):
+    from dataclasses import replace
+
+    async with client_for(replace(settings, synthetic_networks=())) as (http, _):
+        await http.post("/v1/runs", json={"tool": "zap"})
+        await http.post("/v1/events", json={"events": [http_request_event(client_ip=PLATFORM_IP)]})
+        stats = (await http.get("/v1/stats")).json()
+        assert stats["synthetic_events"] == 0
+        assert stats["synthetic_cidrs"] == []
+
+
+# ------------------------------------------------------------------- deception
+
+
+async def test_api_description_is_not_published_by_default(settings):
+    """Targets are dual-homed, so a tool with RCE on one can reach this service. A
+    served schema listing runs and events would be a complete confession."""
+    from dataclasses import replace
+
+    async with client_for(replace(settings, expose_schema=False)) as (http, _):
+        assert (await http.get("/openapi.json")).status_code == 404
+        assert (await http.get("/docs")).status_code == 404
+        assert (await http.get("/healthz")).status_code == 200
+
+
+async def test_service_presents_itself_as_ordinary_telemetry(client):
+    schema = (await client.get("/openapi.json")).json()
+    title = schema["info"]["title"].lower()
+    assert "bench" not in title and "ptaas" not in title
+
+
+async def test_control_surface_can_be_limited_by_source_address(settings):
+    """A tool with RCE on a target reaches this port at the address in the target's
+    environment; the network split cannot help there. The export that lists which
+    planted sinks fired must not answer it."""
+    from dataclasses import replace
+
+    from bench_collector.config import parse_cidrs
+
+    # httpx's ASGI transport presents 127.0.0.1, so allowing a foreign range makes
+    # this client the unauthorised one.
+    async with client_for(replace(settings, control_networks=parse_cidrs("10.99.0.0/16"))) as (http, _):
+        for path in ("/v1/runs", "/v1/runs/active", "/v1/stats", "/v1/correlations"):
+            assert (await http.get(path)).status_code == 404, path
+        assert (await http.post("/v1/runs", json={"tool": "zap"})).status_code == 404
+
+        # Instrumentation still answers identically: a target must not be able to
+        # tell that the collector is guarded, or that a run is in progress.
+        assert (await http.get("/healthz")).status_code == 200
+        assert (await http.post("/v1/events", json={"events": [http_request_event()]})).status_code == 202
+        assert (await http.post("/v1/traces", json={"events": [http_request_event()]})).status_code == 202
+        assert (await http.post("/v1/correlations", json=correlation_hint())).status_code == 202
+
+
+async def test_control_surface_is_open_when_unconfigured(client):
+    assert (await client.get("/v1/stats")).status_code == 200
