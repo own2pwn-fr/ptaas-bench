@@ -43,6 +43,7 @@ class AdminHandler:
         poller=None,
         worker=None,
         networks=(),
+        upstream=None,
     ) -> None:
         self.config = config
         self.store = store
@@ -50,6 +51,7 @@ class AdminHandler:
         self.index = index
         self.poller = poller
         self.worker = worker
+        self.upstream = upstream
         self.networks = tuple(networks)
 
     def allows(self, address: str) -> bool:
@@ -146,6 +148,7 @@ class AdminHandler:
                 "correlation": self.index.stats(),
                 "poller": self.poller.stats() if self.poller is not None else None,
                 "attribution": self.worker.stats() if self.worker is not None else None,
+                "upstream": self.upstream.stats() if self.upstream is not None else None,
             }
 
         if path == "/healthz":

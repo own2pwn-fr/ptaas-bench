@@ -4,10 +4,19 @@ from __future__ import annotations
 
 import socket
 import struct
+import time
 
 from edge_resolver import dnswire
 
-from conftest import ZONE, build_dns_query, dns_tcp, dns_udp, parse_dns_response
+from conftest import (
+    ZONE,
+    FakeUpstream,
+    build_dns_query,
+    dns_tcp,
+    dns_udp,
+    parse_dns_response,
+    stub_resolver,
+)
 
 
 def test_any_external_name_resolves_and_is_recorded(service):
@@ -70,92 +79,125 @@ def test_unsupported_type_in_our_zone_is_empty_noerror(service):
     assert response["answers"] == [] and response["nscount"] == 1
 
 
-def test_internal_name_is_forwarded_upstream(make_service):
-    """A target must still be able to resolve the reporting endpoint and its database.
-    Getting this wrong breaks every application in the deployment."""
-    seen: list[str] = []
+def _upstream_service(make_service, names=None, hang=False, **overrides):
+    """A service whose upstream is a real (fake) DNS server."""
+    upstream = FakeUpstream(names or {}, hang=hang)
+    resolver = stub_resolver(upstream, timeout=overrides.pop("timeout", 0.15))
+    service = make_service(upstream=resolver, **overrides)
+    return service, upstream
 
-    async def upstream(name: str):
-        seen.append(name)
-        return {"otel-collector": ("10.77.0.4",), "collector-db": ("10.77.0.3",)}.get(name, ())
 
-    service = make_service(upstream=upstream, telemetry_url="http://otel-collector:8900")
-    for name, expected in (("otel-collector", "10.77.0.4"), ("collector-db", "10.77.0.3")):
-        response = parse_dns_response(dns_udp(service.ports["dns_udp"], name))
-        assert response["a_records"] == [expected], name
+def test_a_claimed_hostname_is_forwarded_not_sinkholed(make_service):
+    """The bring-up case. Applications advertise a hostname generated per deployment;
+    answering it with our own address would make every one of them unreachable under the
+    name it publishes, and the whole corpus would score zero."""
+    service, upstream = _upstream_service(
+        make_service, {"www.halyardsupply.net": "10.88.0.20"}
+    )
+    try:
+        response = parse_dns_response(dns_udp(service.ports["dns_udp"], "www.halyardsupply.net"))
+        assert response["a_records"] == ["10.88.0.20"]
         assert not response["aa"]  # forwarded, not ours to be authoritative for
-
-    assert seen == ["otel-collector", "collector-db"]
-    # Infrastructure chatter is not recorded: it would bury the requests that matter.
-    assert len(service.store) == 0
-
-
-def test_single_label_miss_falls_through_to_the_sinkhole(make_service):
-    async def upstream(name: str):
-        return ()
-
-    service = make_service(upstream=upstream)
-    response = parse_dns_response(dns_udp(service.ports["dns_udp"], "z9x2k1p8"))
-    assert response["a_records"] == ["127.0.0.1"]
-    (record,) = service.store.wait_for(1, timeout=5)
-    assert record.host == "z9x2k1p8"
+        # Application traffic is not recorded; it would bury the requests that matter.
+        assert len(service.store) == 0
+    finally:
+        upstream.close()
 
 
-def test_known_internal_name_that_upstream_cannot_answer_gets_servfail(make_service):
+def test_plain_service_names_are_forwarded(make_service):
+    """Load-bearing for a whole target coming up: its chain resolves its siblings by
+    plain service name, and the reporting endpoint is reached the same way."""
+    names = {
+        "otel-collector": "10.77.0.4",
+        "haproxy": "10.88.0.11",
+        "varnish": "10.88.0.12",
+        "origin": "10.88.0.13",
+        "nginx": "10.88.0.14",
+    }
+    service, upstream = _upstream_service(
+        make_service, names, telemetry_url="http://otel-collector:8900"
+    )
+    try:
+        for name, address in names.items():
+            response = parse_dns_response(dns_udp(service.ports["dns_udp"], name))
+            assert response["a_records"] == [address], name
+        assert len(service.store) == 0
+    finally:
+        upstream.close()
+
+
+def test_a_name_nobody_claims_is_sinkholed_and_recorded(make_service):
+    service, upstream = _upstream_service(make_service, {"www.halyardsupply.net": "10.88.0.20"})
+    try:
+        response = parse_dns_response(
+            dns_udp(service.ports["dns_udp"], "z9x2k1p8.example-collab.net")
+        )
+        assert response["a_records"] == ["127.0.0.1"]
+        (record,) = service.store.wait_for(1, timeout=5)
+        assert record.host == "z9x2k1p8.example-collab.net"
+        assert "z9x2k1p8.example-collab.net" in upstream.queries  # asked first, every time
+    finally:
+        upstream.close()
+
+
+def test_an_upstream_that_hangs_costs_only_the_cap(make_service):
+    """A sealed network does not answer NXDOMAIN for an external name, it says nothing.
+    That silence must cost one capped wait and then be read as 'unclaimed', because a
+    stalled lookup makes a captured callback look like an application error."""
+    service, upstream = _upstream_service(make_service, hang=True, timeout=0.15)
+    try:
+        started = time.monotonic()
+        response = parse_dns_response(
+            dns_udp(service.ports["dns_udp"], "z9x2k1p8.example-collab.net")
+        )
+        elapsed = time.monotonic() - started
+        assert response["a_records"] == ["127.0.0.1"]
+        assert elapsed < 1.0, f"answer took {elapsed:.3f}s"
+        assert service.store.wait_for(1, timeout=5)
+    finally:
+        upstream.close()
+
+
+def test_the_cap_is_paid_once_per_host(make_service):
+    """Repeat lookups of one callback host -- resolution, the connection, a retry -- must
+    not each pay the cap."""
+    service, upstream = _upstream_service(make_service, hang=True, timeout=0.15)
+    try:
+        dns_udp(service.ports["dns_udp"], "z9x2k1p8.example-collab.net")
+        started = time.monotonic()
+        for _ in range(5):
+            dns_udp(service.ports["dns_udp"], "z9x2k1p8.example-collab.net")
+        elapsed = time.monotonic() - started
+        assert elapsed < 0.15, f"five cached lookups took {elapsed:.3f}s"
+        assert len(service.store.wait_for(6, timeout=5)) == 6  # all six still recorded
+    finally:
+        upstream.close()
+
+
+def test_known_infrastructure_that_upstream_cannot_answer_gets_servfail(make_service):
     """Not our own address: pointing a database client at this process would turn a
     resolver blip into a silent misconnection."""
-
-    async def upstream(name: str):
-        return ()
-
-    service = make_service(
-        upstream=upstream,
+    service, upstream = _upstream_service(
+        make_service,
+        {},
         telemetry_url="http://otel-collector:8900",
         internal_names=("db.internal",),
     )
-    response = parse_dns_response(dns_udp(service.ports["dns_udp"], "db.internal"))
-    assert response["rcode"] == dnswire.RCODE_SERVFAIL
-    assert response["answers"] == []
+    try:
+        for name in ("otel-collector", "db.internal"):
+            response = parse_dns_response(dns_udp(service.ports["dns_udp"], name))
+            assert response["rcode"] == dnswire.RCODE_SERVFAIL, name
+            assert response["answers"] == []
+        assert len(service.store) == 0
+    finally:
+        upstream.close()
 
 
-def test_external_names_are_never_forwarded(make_service):
-    """No open resolver, no lookups leaking off the network, and no latency."""
-    seen: list[str] = []
-
-    async def upstream(name: str):
-        seen.append(name)
-        return ("1.2.3.4",)
-
-    service = make_service(upstream=upstream)
-    response = parse_dns_response(dns_udp(service.ports["dns_udp"], "z9x2k1p8.example-collab.net"))
+def test_no_upstream_configured_sinkholes_everything(service):
+    """The degenerate deployment: nothing to ask, so nothing is claimed."""
+    response = parse_dns_response(dns_udp(service.ports["dns_udp"], "www.halyardsupply.net"))
     assert response["a_records"] == ["127.0.0.1"]
-    assert seen == []
-
-
-def test_a_hanging_upstream_does_not_hang_the_client(make_service):
-    """An unanswered query costs a client its whole resolver timeout, and a captured
-    callback would then look like an application error."""
-    import asyncio
-    import time
-
-    async def upstream(name: str):
-        await asyncio.sleep(30)
-        return ()
-
-    service = make_service(upstream=upstream, upstream_timeout=0.3)
-    started = time.monotonic()
-    response = parse_dns_response(dns_udp(service.ports["dns_udp"], "slow-service"))
-    elapsed = time.monotonic() - started
-    assert elapsed < 3.0, f"answer took {elapsed:.2f}s"
-    assert response["a_records"] == ["127.0.0.1"]
-
-
-def test_real_resolver_path(service):
-    """No injection: `localhost` is single-label, so it goes through the container's own
-    resolver and comes back truthfully."""
-    response = parse_dns_response(dns_udp(service.ports["dns_udp"], "localhost"))
-    assert response["a_records"] == ["127.0.0.1"]
-    assert len(service.store) == 0
+    assert service.store.wait_for(1, timeout=5)[0].host == "www.halyardsupply.net"
 
 
 def test_denylisted_name_gets_nxdomain(make_service):
@@ -208,3 +250,50 @@ def test_pointer_loop_is_rejected():
     except dnswire.DnsFormatError:
         return
     raise AssertionError("a compression pointer loop must not be accepted")
+
+
+def test_a_burst_of_unknown_names_does_not_pile_up(make_service):
+    """A tool fuzzing an outbound-fetch parameter mints a new hostname per attempt. The
+    cap alone would leave hundreds of lookups in flight, so past the concurrency limit a
+    name is simply treated as unclaimed -- for a burst, the fast and correct answer."""
+    service, upstream = _upstream_service(make_service, hang=True, timeout=0.15)
+    port = service.ports["dns_udp"]
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.settimeout(5)
+    try:
+        started = time.monotonic()
+        for index in range(40):
+            sock.sendto(build_dns_query(f"burst{index}.example-collab.net"), ("127.0.0.1", port))
+        for _ in range(40):
+            sock.recv(4096)
+        elapsed = time.monotonic() - started
+        assert len(service.store.wait_for(40, timeout=10)) == 40
+        # Forty in flight at once, each capped: they overlap instead of queueing behind
+        # one another, so the whole burst costs about one cap, not forty.
+        assert elapsed < 2.0, f"the burst serialised on the cap ({elapsed:.2f}s)"
+    finally:
+        sock.close()
+        upstream.close()
+
+
+def test_an_answer_from_outside_the_deployment_is_not_believed(make_service):
+    """The embedded resolver forwards what it cannot answer to the daemon's own DNS, and
+    the daemon is not on the sealed network -- so a callback domain can come back with a
+    real public address. Forwarding that would lose the capture *and* leave the
+    application unable to reach it, since its network has no route out."""
+    upstream = FakeUpstream(
+        {"oast.example": "93.184.216.34", "www.halyardsupply.net": "10.88.0.20"}
+    )
+    resolver = stub_resolver(upstream)
+    service = make_service(upstream=resolver)
+    try:
+        public = parse_dns_response(dns_udp(service.ports["dns_udp"], "oast.example"))
+        assert public["a_records"] == ["127.0.0.1"]  # sinkholed anyway
+        (record,) = service.store.wait_for(1, timeout=5)
+        assert record.host == "oast.example"
+
+        # And the deployment's own hostname is still forwarded untouched.
+        internal = parse_dns_response(dns_udp(service.ports["dns_udp"], "www.halyardsupply.net"))
+        assert internal["a_records"] == ["10.88.0.20"]
+    finally:
+        upstream.close()

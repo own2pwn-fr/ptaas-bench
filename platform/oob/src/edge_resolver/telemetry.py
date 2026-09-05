@@ -120,16 +120,23 @@ class TelemetryClient:
         while not self._queue.empty() and time.monotonic() < deadline:
             time.sleep(0.02)
 
-    def fetch_hints(self, destination_host: str | None = None) -> list[dict[str, Any]] | None:
-        """Pending hints, optionally only those matching a host. None on failure.
+    def fetch_hints(
+        self, destination_host: str | None = None, registered_after: float | None = None
+    ) -> list[dict[str, Any]] | None:
+        """Pending hints: all of them, those matching a host, or only what is new.
 
         Called from the attribution worker and from the slow poller, never from a
         listener: this is a blocking HTTP round-trip."""
         if not self.enabled:
             return None
-        url = f"{self.base_url}{HINTS_PATH}"
+        params: dict[str, Any] = {}
         if destination_host:
-            url += "?" + urlencode({"destination_host": destination_host})
+            params["destination_host"] = destination_host
+        if registered_after:
+            params["registered_after"] = registered_after
+        url = f"{self.base_url}{HINTS_PATH}"
+        if params:
+            url += "?" + urlencode(params)
         request = urllib.request.Request(url, method="GET")
         with urllib.request.urlopen(request, timeout=self.timeout) as response:
             payload = json.loads(response.read() or b"{}")

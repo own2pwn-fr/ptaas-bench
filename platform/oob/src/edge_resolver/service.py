@@ -31,6 +31,7 @@ from .net import local_address_towards
 from .recorder import Recorder
 from .store import ObservationStore
 from .telemetry import TelemetryClient
+from .upstream import StubResolver, parse_servers
 
 log = logging.getLogger("edge_resolver.service")
 
@@ -38,8 +39,9 @@ log = logging.getLogger("edge_resolver.service")
 class ResolverService:
     def __init__(self, config: Config, upstream=None) -> None:
         self.config = config
-        # Optional override for the upstream resolver used to answer internal names.
-        # Production leaves it None and goes through the container's own resolver.
+        # Injectable for tests. Left None, a stub resolver is built at startup from
+        # RESOLVER_UPSTREAM or the container's own resolver configuration; set to False
+        # to disable forwarding entirely and sinkhole every name.
         self.upstream = upstream
         self.store = ObservationStore(maxlen=config.store_size)
         self.telemetry = TelemetryClient(
@@ -139,7 +141,12 @@ class ResolverService:
             await self._teardown()
             raise
         self._ready.set()
-        log.info("listening for %s: %s", self.config.zone, self.ports)
+        log.info(
+            "listening for %s: %s (upstream %s)",
+            self.config.zone,
+            self.ports,
+            getattr(self.upstream, "servers", None),
+        )
         try:
             await self._stop_event.wait()
         finally:
@@ -148,7 +155,18 @@ class ResolverService:
     async def _setup(self) -> None:
         cfg = self.config
         loop = asyncio.get_running_loop()
-        dns_handler = DnsHandler(cfg, self.recorder, upstream=self.upstream)
+        if self.upstream is None:
+            self.upstream = StubResolver(
+                parse_servers(cfg.upstream_servers) or None,
+                timeout=cfg.upstream_timeout,
+                concurrency=cfg.upstream_concurrency,
+                positive_ttl=cfg.upstream_positive_ttl,
+                negative_ttl=cfg.upstream_negative_ttl,
+                claim_networks=cfg.claim_networks or None,
+            )
+        dns_handler = DnsHandler(
+            cfg, self.recorder, upstream=self.upstream or None
+        )
 
         transport, _ = await loop.create_datagram_endpoint(
             lambda: DnsUdpProtocol(dns_handler),
@@ -183,6 +201,7 @@ class ResolverService:
                 self.poller,
                 self.worker,
                 cfg.effective_admin_networks(extra),
+                self.upstream or None,
             ),
             admin_host,
             cfg.admin_port,

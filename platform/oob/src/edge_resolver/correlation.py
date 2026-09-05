@@ -10,17 +10,25 @@ attribution is a join, on three keys of decreasing strength.
    what it is about to do -- destination host, route, parameter, request id, signal --
    with the reporting endpoint. We ask that endpoint for the hints matching the host we
    just saw; a match is the evidence, because it pairs "the application was about to
-   fetch X for parameter P" with "X was looked up from that application's container".
+   fetch X for parameter P" with "X was asked for".
+
+   The host is the whole of the match. The address on a registration is stamped from the
+   peer that registered it, which is the container's address on the reporting network,
+   while we observe the callback arriving on the application network -- two addresses of
+   the same container that have no relation to each other. So address agreement is
+   reported as an observation (``source_match``) and never used to downgrade: treating a
+   mismatch as weaker evidence would downgrade every genuine match there is.
 
 2. **Owned-zone label** (high confidence). The static form, for payload templates that
    do name our own zone.
 
 3. **Source address within a time window** (low confidence). Nothing matched by host,
-   but we know which container the request came from, because that address registered a
-   hint recently. That says "this application made an outbound request to a host it was
-   given", which is meaningful, but not which parameter caused it -- so it is reported
-   as low confidence and the downstream analysis can count it separately rather than
-   silently mixing it with proven pairs.
+   but the source address maps to an application. It says "this application made an
+   outbound request to a host it was given", not which parameter caused it, so it is
+   reported as low confidence and can be counted separately rather than silently mixed
+   in with proven pairs. It is a hint and nothing more: the authoritative address-to-
+   application map is the one the orchestrator captures when a run opens, and only the
+   static RESOLVER_APP_SOURCES map is keyed on addresses we actually see here.
 
 Two mechanisms feed the index, for two different reasons:
 
@@ -49,7 +57,6 @@ from typing import Any, Callable
 log = logging.getLogger("edge_resolver.correlation")
 
 HIGH = "high"
-MEDIUM = "medium"
 LOW = "low"
 NONE = "none"
 
@@ -152,6 +159,10 @@ class Attribution:
     app: str | None = None
     hint: Hint | None = None
     age_ms: int | None = None
+    # Whether the address we saw is the address that registered the hint. Informational:
+    # the two are recorded on different networks, so they routinely differ for perfectly
+    # good matches (see the module docstring).
+    source_match: bool | None = None
 
     def as_json(self) -> dict[str, Any]:
         out: dict[str, Any] = {"mode": self.mode, "app": self.app}
@@ -159,6 +170,7 @@ class Attribution:
             out.update(self.hint.as_attribution())
             out["app"] = self.app
             out["hint_age_ms"] = self.age_ms
+            out["source_match"] = self.source_match
         return out
 
 
@@ -224,13 +236,13 @@ class CorrelationIndex:
         name = normalise_host(host)
         hint = self._match_host(name, source_ip, moment) if name else None
         if hint is not None:
-            consistent = not hint.source_ips or source_ip in hint.source_ips
             return Attribution(
                 mode=MODE_HINT,
-                confidence=HIGH if consistent else MEDIUM,
+                confidence=HIGH,
                 app=hint.app or None,
                 hint=hint,
                 age_ms=max(0, int((moment - hint.ts) * 1000)),
+                source_match=(source_ip in hint.source_ips) if hint.source_ips else None,
             )
         app = self.app_for_source(source_ip, moment)
         if app:
@@ -247,8 +259,8 @@ class CorrelationIndex:
                         candidates.append(hint)
             if not candidates:
                 return None
-            # Prefer a hint whose registering container is the one we heard from, then
-            # the most recent: two applications can legitimately fetch the same host.
+            # Most recent first; an address agreement, when there happens to be one, is
+            # a tiebreaker only. Two applications can legitimately fetch the same host.
             candidates.sort(key=lambda h: (source_ip in h.source_ips, h.ts), reverse=True)
             return candidates[0]
 
@@ -291,6 +303,9 @@ class HintPoller:
         self.backoff = backoff
         self.failures = 0
         self.polls = 0
+        # Watermark for the incremental listing, rewound a second each time: an overlap
+        # costs a duplicate the index drops anyway, a gap would cost a hint.
+        self.watermark = 0.0
         self.last_error: str | None = None
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
@@ -311,7 +326,7 @@ class HintPoller:
     def poll_once(self) -> int:
         self.polls += 1
         try:
-            payloads = self.fetch()
+            payloads = self.fetch(registered_after=self.watermark or None)
         except Exception as exc:  # noqa: BLE001 - a poller reports, it does not raise
             self.failures += 1
             self.last_error = f"{type(exc).__name__}: {exc}"
@@ -321,6 +336,11 @@ class HintPoller:
             return 0
         self.failures = 0
         self.last_error = None
+        newest = max(
+            (float(item.get("registered_at") or 0) for item in payloads), default=0.0
+        )
+        if newest:
+            self.watermark = max(self.watermark, newest - 1.0)
         return self.index.add_payloads(payloads)
 
     def _run(self) -> None:
@@ -329,7 +349,12 @@ class HintPoller:
             self._stop.wait(self.backoff if self.failures > 3 else self.interval)
 
     def stats(self) -> dict[str, Any]:
-        return {"polls": self.polls, "failures": self.failures, "last_error": self.last_error}
+        return {
+            "polls": self.polls,
+            "failures": self.failures,
+            "watermark": self.watermark,
+            "last_error": self.last_error,
+        }
 
 
 class AttributionWorker:

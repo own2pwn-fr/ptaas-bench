@@ -159,7 +159,11 @@ selftest:
   command: targets/<app>/selftest.py
   requirements:
     - Runs from the platform network so its traffic is recognised as synthetic by source
-      address, and is therefore never scored.
+      address, and is therefore never scored. Concretely — invoked with
+      `docker compose exec resolver`, which is the one place that has both a route to the
+      targets and loopback access to the resolver's admin API. Running a self-test from
+      the host or from a tool-side container would either be scored as a tool's own
+      exploitation, or be refused by the admin allowlist.
     - Asserts exactly one signal per PoC. Two usually means the sink fires on the payload
       rather than on the effect.
     - Asserts every replayed PoC's signal came back carrying a peer address. A sink that

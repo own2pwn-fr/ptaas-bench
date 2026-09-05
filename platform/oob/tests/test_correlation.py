@@ -74,11 +74,18 @@ def test_match_returns_the_registered_route_and_parameter():
     assert attribution.as_json()["route"] == "/api/admin/imports"
 
 
-def test_match_from_another_address_is_downgraded_not_dropped():
+def test_a_different_source_address_does_not_weaken_a_host_match():
+    """The address on a registration is the container's address on the reporting
+    network; we see it on the application network. The two differ by construction for
+    the same container, so agreement is reported and never scored."""
     index = CorrelationIndex()
     index.add_payloads([_payload()])
     attribution = index.match("z9x2k1p8.example-collab.net", "10.88.0.9")
-    assert attribution.mode == MODE_HINT and attribution.confidence == "medium"
+    assert (attribution.mode, attribution.confidence) == (MODE_HINT, HIGH)
+    assert attribution.as_json()["source_match"] is False
+
+    agreeing = index.match("z9x2k1p8.example-collab.net", "10.88.0.7")
+    assert agreeing.as_json()["source_match"] is True
 
 
 def test_expired_hints_do_not_match():

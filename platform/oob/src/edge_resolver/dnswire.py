@@ -240,6 +240,80 @@ def build_response(
     return message
 
 
+@dataclass(frozen=True)
+class Record:
+    name: str
+    rrtype: int
+    rrclass: int
+    ttl: int
+    rdata: bytes
+
+
+@dataclass(frozen=True)
+class Response:
+    """Parsed answer from another server, for the forwarding path."""
+
+    txid: int
+    flags: int
+    rcode: int
+    question: Question | None
+    answers: tuple[Record, ...] = ()
+
+    @property
+    def addresses(self) -> tuple[str, ...]:
+        return tuple(
+            socket.inet_ntoa(record.rdata)
+            for record in self.answers
+            if record.rrtype == TYPE_A and len(record.rdata) == 4
+        )
+
+
+def parse_response(data: bytes) -> Response:
+    """Header, question and answer section. Authority and additional are skipped: the
+    forwarding path only needs to know whether somebody claimed the name and with what."""
+    if len(data) < 12:
+        raise DnsFormatError("message shorter than a DNS header")
+    txid, flags, qdcount, ancount, _nscount, _arcount = struct.unpack("!6H", data[:12])
+    pos = 12
+    question = None
+    for index in range(qdcount):
+        labels, pos = parse_name(data, pos)
+        if pos + 4 > len(data):
+            raise DnsFormatError("truncated question")
+        qtype, qclass = struct.unpack("!2H", data[pos : pos + 4])
+        pos += 4
+        if index == 0:
+            question = Question(tuple(labels), qtype, qclass)
+    answers: list[Record] = []
+    for _ in range(ancount):
+        labels, pos = parse_name(data, pos)
+        if pos + 10 > len(data):
+            raise DnsFormatError("truncated record header")
+        rrtype, rrclass, ttl, rdlength = struct.unpack("!HHIH", data[pos : pos + 10])
+        pos += 10
+        if pos + rdlength > len(data):
+            raise DnsFormatError("truncated record data")
+        answers.append(
+            Record(
+                name=".".join(label.decode("latin-1") for label in labels).lower(),
+                rrtype=rrtype,
+                rrclass=rrclass,
+                ttl=ttl,
+                rdata=data[pos : pos + rdlength],
+            )
+        )
+        pos += rdlength
+    return Response(
+        txid=txid, flags=flags, rcode=flags & 0x0F, question=question, answers=tuple(answers)
+    )
+
+
+def build_query(name: str, qtype: int = TYPE_A, txid: int = 0) -> bytes:
+    """A recursion-desired question, for asking another server."""
+    header = struct.pack("!6H", txid, 0x0100, 1, 0, 0, 0)
+    return header + encode_name(name) + struct.pack("!2H", qtype, CLASS_IN)
+
+
 def build_format_error(data: bytes) -> bytes:
     """Answer to bytes we could not parse: echo the transaction id if there was one."""
     txid = struct.unpack("!H", data[:2])[0] if len(data) >= 2 else 0

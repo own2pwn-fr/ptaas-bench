@@ -103,19 +103,29 @@ class Config:
     dns_ttl: int = 30
     store_size: int = 20000
 
-    # We are the resolver for the application network, so we also have to answer the
-    # names that network genuinely has: the reporting endpoint, databases, sibling
-    # services. Those are forwarded to the upstream resolver inside this container
-    # (Docker's embedded server, which can see both networks). Everything else is
-    # answered with our own address.
+    # Every name is offered to the upstream resolver first, and only names nobody claims
+    # are answered with our own address. An allowlist cannot work here: the applications
+    # advertise hostnames generated per deployment, and a static list would be stale the
+    # moment anything is reseeded. The upstream resolver already knows every service name
+    # and every alias in the project, and knows nothing about a callback domain, so
+    # "unclaimed" is exactly the right test and it maintains itself.
     #
-    # Two rules decide "genuinely internal": a single-label name (no dot at all), which
-    # is what a compose service name looks like, and an explicit suffix list. Arbitrary
-    # multi-label names are never forwarded -- that would be slow, would leak lookups
-    # off the network, and would give a client a way to use us as an open resolver.
+    # `internal_names` no longer gates forwarding. It marks names whose failure must not
+    # be papered over: if the upstream cannot answer one of those, the reply is SERVFAIL
+    # rather than our own address, because pointing a database client at this process
+    # would turn a resolver blip into a silent misconnection.
     internal_names: tuple[str, ...] = ()
-    forward_single_label: bool = True
-    upstream_timeout: float = 1.0
+    upstream_servers: str = ""
+    # Hard cap on the upstream question. On a sealed network an unknown name does not
+    # come back NXDOMAIN, it hangs, so this is the delay every captured callback pays --
+    # and the delay every application pays if it were ever set high.
+    upstream_timeout: float = 0.15
+    upstream_concurrency: int = 128
+    # An upstream answer is only believed when it points into the deployment. Empty means
+    # believe anything, which is only ever right in a test.
+    claim_networks: tuple[str, ...] = ()
+    upstream_positive_ttl: float = 30.0
+    upstream_negative_ttl: float = 5.0
     # Names answered NXDOMAIN. Empty by default: a name that does not resolve is a
     # distinctive behaviour, so it exists only for the rare planted defect whose
     # condition is precisely that an outbound lookup fails.
@@ -173,7 +183,10 @@ class Config:
         return self.default_cn or f"edge1.{self.owned_zone}"
 
     def internal_suffixes(self) -> tuple[str, ...]:
-        """Configured internal names plus the reporting endpoint's own hostname."""
+        """Names whose upstream failure is reported rather than sinkholed.
+
+        The reporting endpoint's own hostname is always one of them: answering it with
+        our own address would swallow every application's telemetry."""
         host = self.telemetry_host
         names = list(self.internal_names)
         if host and host.lower() not in names:
@@ -234,9 +247,10 @@ class Config:
             dns_ttl=_int_env(environ, "RESOLVER_DNS_TTL", 30),
             store_size=_int_env(environ, "RESOLVER_STORE_SIZE", 20000),
             internal_names=_csv(environ.get("RESOLVER_INTERNAL_NAMES")),
-            forward_single_label=environ.get("RESOLVER_FORWARD_SINGLE_LABEL", "1")
-            not in ("0", "false", "no", "off"),
-            upstream_timeout=_float_env(environ, "RESOLVER_UPSTREAM_TIMEOUT", 1.0),
+            upstream_servers=environ.get("RESOLVER_UPSTREAM", ""),
+            upstream_timeout=_float_env(environ, "RESOLVER_UPSTREAM_TIMEOUT", 0.15),
+            upstream_concurrency=_int_env(environ, "RESOLVER_UPSTREAM_CONCURRENCY", 128),
+            claim_networks=_csv(environ.get("RESOLVER_CLAIM_CIDRS")),
             denylist=_csv(environ.get("RESOLVER_DENYLIST")),
             # The deployment already names the platform's own addresses once, for the
             # reporting endpoint; read that too rather than making it say it twice.

@@ -22,8 +22,14 @@ import pytest
 from edge_resolver import dnswire
 from edge_resolver.config import Config
 from edge_resolver.service import ResolverService
+from edge_resolver.upstream import StubResolver
 
 ZONE = "telemetry-edge.net"
+
+
+def stub_resolver(upstream: "FakeUpstream", **kwargs) -> StubResolver:
+    """A resolver pointed at a fake upstream, with the production claim ranges."""
+    return StubResolver((("127.0.0.1", upstream.port),), **kwargs)
 
 
 class FakeEndpoint:
@@ -80,10 +86,14 @@ class FakeEndpoint:
                     # The real endpoint answers 404 to any address but the sinkhole's.
                     self._json(endpoint.control_status, {"error": "not found"})
                     return
-                wanted = (parse_qs(parsed.query).get("destination_host") or [None])[0]
+                query = parse_qs(parsed.query)
+                wanted = (query.get("destination_host") or [None])[0]
+                after = (query.get("registered_after") or [None])[0]
                 with endpoint._lock:
                     endpoint.hint_queries.append(wanted)
                 entries = endpoint.pending(wanted)
+                if after:
+                    entries = [e for e in entries if e["registered_at"] > float(after)]
                 self._json(
                     200,
                     {"now": time.time(), "ttl": 120.0, "count": len(entries), "correlations": entries},
@@ -139,6 +149,56 @@ def _host_matches(entry: dict, wanted: str) -> bool:
     )
 
 
+class FakeUpstream:
+    """A real DNS server standing in for the container-local resolver.
+
+    Answers the names it was given and NXDOMAINs the rest -- or, with ``hang=True``,
+    answers nothing at all, which is what a sealed network does to a name that would
+    have to be resolved outside it.
+    """
+
+    def __init__(self, names: dict[str, str] | None = None, hang: bool = False) -> None:
+        self.names = {k.lower(): v for k, v in (names or {}).items()}
+        self.hang = hang
+        self.queries: list[str] = []
+        self._socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self._socket.bind(("127.0.0.1", 0))
+        self._socket.settimeout(0.2)
+        self.port = self._socket.getsockname()[1]
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._serve, daemon=True)
+        self._thread.start()
+
+    def _serve(self) -> None:
+        while not self._stop.is_set():
+            try:
+                data, addr = self._socket.recvfrom(4096)
+            except (socket.timeout, TimeoutError):
+                continue
+            except OSError:
+                return
+            try:
+                query = dnswire.parse_query(data)
+            except dnswire.DnsFormatError:
+                continue
+            name = query.question.name if query.question else ""
+            self.queries.append(name)
+            if self.hang:
+                continue
+            address = self.names.get(name)
+            if address:
+                response = dnswire.build_response(
+                    query, answers=[(dnswire.TYPE_A, dnswire.a_rdata(address))], ttl=30
+                )
+            else:
+                response = dnswire.build_response(query, rcode=dnswire.RCODE_NXDOMAIN)
+            self._socket.sendto(response, addr)
+
+    def close(self) -> None:
+        self._stop.set()
+        self._socket.close()
+
+
 @pytest.fixture
 def endpoint():
     fake = FakeEndpoint()
@@ -151,7 +211,9 @@ def make_service():
     """Factory for a running service; every port is ephemeral, TLS material is minted."""
     started: list[ResolverService] = []
 
-    def _make(upstream=None, **overrides) -> ResolverService:
+    def _make(upstream=False, **overrides) -> ResolverService:
+        """``upstream=False`` (the default) sinkholes every name, which is what the
+        serving-side tests want; pass a StubResolver to exercise forwarding."""
         config = Config(
             zone=overrides.pop("zone", ZONE),
             telemetry_url=overrides.pop("telemetry_url", ""),
