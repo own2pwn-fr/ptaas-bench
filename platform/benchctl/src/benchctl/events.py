@@ -433,7 +433,19 @@ def events_from_iterable(items: Iterable[Mapping[str, Any]]) -> EventStream:
 
 def load_events(path: Path | str) -> tuple[EventStream, dict[str, Any]]:
     """Load an events export. Returns the stream and any run metadata found."""
-    data = json.loads(Path(path).read_text(encoding="utf-8"))
+    text = Path(path).read_text(encoding="utf-8")
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError:
+        # The harness exports one event per line. Both shapes are read here rather
+        # than agreed by convention: the writer and the reader were built by
+        # different hands against the same contract, and the first live active run
+        # failed at this exact boundary with a JSON parse error that says nothing
+        # about the disagreement it stands for.
+        events = [json.loads(line) for line in text.splitlines() if line.strip()]
+        if not events:
+            raise
+        data = events if not isinstance(events[0], dict) or "events" not in events[0] else events[0]
     meta: dict[str, Any] = {}
     if isinstance(data, list):
         items = data
