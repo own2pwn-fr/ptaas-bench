@@ -284,6 +284,25 @@ class Credentials:
         return body
 
 
+def _expand(value: object) -> object:
+    """Expand ``${VAR}`` and ``${VAR:-default}`` in a configuration string.
+
+    apps.yaml documents several fields as overridable per deployment and writes them
+    in shell syntax, but YAML does not expand anything: without this the literal
+    ``${COMPOSE_PROJECT_NAME:-platform-edge}`` was passed to ``docker compose -p``,
+    matched no project, and every control-plane call failed with the collector
+    apparently unreachable -- a configuration bug wearing the costume of a network one.
+    """
+    if not isinstance(value, str) or "${" not in value:
+        return value
+
+    def sub(match: "re.Match[str]") -> str:
+        name, default = match.group(1), match.group(2)
+        return os.environ.get(name) or (default if default is not None else "")
+
+    return re.sub(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}", sub, value)
+
+
 def _resolve(base: str, path: Any) -> str | None:
     if not path:
         return None
@@ -563,11 +582,11 @@ class BenchConfig:
                 k: Credentials.from_dict(k, v or {}) for k, v in (creds_doc.get("apps") or {}).items()
             },
             compose_file=Path(compose_file) if compose_file else (REPO_ROOT / "docker-compose.yml"),
-            compose_project=platform.get("compose_project", "platform-edge"),
-            collector_service=platform.get("collector_service", "otel-collector"),
-            collector_url=platform.get("collector_url", "http://127.0.0.1:8900"),
-            platform_client_service=platform.get("platform_client_service", "resolver"),
-            network=platform.get("network", PUBLIC_NETWORK),
+            compose_project=_expand(platform.get("compose_project", "platform-edge")),
+            collector_service=_expand(platform.get("collector_service", "otel-collector")),
+            collector_url=_expand(platform.get("collector_url", "http://127.0.0.1:8900")),
+            platform_client_service=_expand(platform.get("platform_client_service", "resolver")),
+            network=_expand(platform.get("network", PUBLIC_NETWORK)),
             results_dir=Path(platform.get("results_dir", REPO_ROOT / "results" / "runs")),
         )
 
