@@ -8,6 +8,7 @@
     "schema_version",
     "generated_at",
     "run",
+    "scope",
     "catalog",
     "events",
     "metrics",
@@ -384,7 +385,9 @@
               "unattributed-oob",
               "missing-container-map",
               "reset-digest-mismatch",
-              "incomplete-run-record"
+              "incomplete-run-record",
+              "unscoped-run",
+              "scope-derived-from-events"
             ]
           },
           "vuln_id": {
@@ -442,6 +445,44 @@
             "$ref": "#/$defs/attribution"
           },
           "description": "Callbacks observed by the sinkhole that no catalog entry could claim: a blind flaw may have fired uncredited."
+        }
+      }
+    },
+    "scope": {
+      "type": "object",
+      "description": "Which apps the headline covers, and how that was decided. A run that scanned one target must not be scored against the whole corpus: doing so understates it by the number of targets, an error far larger than anything the tool did. `source` is `explicit` (--apps), `run-record` (the run's `targets`), `events` (derived from the apps the events touched) or `catalog` (nothing said, headline is corpus-wide and a `unscoped-run` warning says so).",
+      "required": [
+        "apps",
+        "source",
+        "vulns_in_scope"
+      ],
+      "properties": {
+        "apps": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "source": {
+          "type": "string",
+          "enum": [
+            "explicit",
+            "run-record",
+            "events",
+            "catalog"
+          ]
+        },
+        "catalog_apps": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "vulns_in_scope": {
+          "type": "integer"
+        },
+        "vulns_total": {
+          "type": "integer"
         }
       }
     }
@@ -793,17 +834,51 @@
         },
         "false_positives_unknown_route": {
           "type": "integer",
-          "description": "False positives on a route no inventory describes. Counted, but weaker evidence."
+          "description": "False positives we cannot confirm: on a route no inventory describes, or one only a catch-all pattern row matched. Counted, but weaker evidence, and out of the headline denominator."
         },
         "precision_confirmed": {
           "type": [
             "number",
             "null"
           ],
-          "description": "TP / (TP + confirmed FP): precision restricted to the surface the inventory actually describes."
+          "description": "HEADLINE. TP / (TP + confirmed FP), where a confirmed false positive sits on a route the inventory declares safe or otherwise describes. Findings on undeclared routes are excluded: the inventory's silence is our gap, not the tool's error."
         },
         "inventory_available": {
           "type": "boolean"
+        },
+        "out_of_catalog": {
+          "type": "integer",
+          "description": "Findings whose every CWE is planted by no class in the taxonomy: real findings the corpus does not cover (a missing CSP header, say). Unscoreable, not wrong -- excluded from every precision denominator. A large count is information about the corpus, not about the tool."
+        },
+        "out_of_catalog_by_cwe": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "count": {
+                "type": "integer"
+              },
+              "reason": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "out_of_catalog_list": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/finding"
+          }
+        },
+        "precision_basis": {
+          "type": "string",
+          "description": "Which published precision is the headline. `precision_confirmed` is the strictest claim we can defend finding by finding: its denominator counts only false positives the route inventory contradicts, never findings on paths we serve but never declared."
+        },
+        "out_of_catalog_by_kind": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "integer"
+          }
         }
       }
     },
@@ -872,7 +947,8 @@
             "duplicate",
             "location-match, param-mismatch",
             "location-match, class-mismatch",
-            "location-match, class-unknown"
+            "location-match, class-unknown",
+            "out-of-catalog"
           ]
         },
         "matched_vuln": {
@@ -892,11 +968,12 @@
           "enum": [
             "inventory-safe-route",
             "inventory-known-route",
+            "inventory-pattern-route",
             "unknown-route",
             "no-inventory",
             null
           ],
-          "description": "Why a false positive is a false positive, so the verdict can be contested per finding."
+          "description": "Why a false positive is a false positive, so the verdict can be contested per finding. Only `inventory-safe-route` and `inventory-known-route` are confirmable: they name a literal row we declared. `inventory-pattern-route` means the only row that matched is a pattern (a SPA fallback such as /{full_path} accepts every path, 404s included) and confirms nothing about this path; `unknown-route` means we never declared it at all \u2014 our gap, not the tool's error."
         },
         "inventory_status": {
           "type": [
@@ -931,6 +1008,18 @@
             "null"
           ],
           "description": "The URL authority exactly as the tool wrote it, kept as evidence next to the normalised form."
+        },
+        "out_of_catalog_kind": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "unplanted-class",
+            "unplanted-in-scope",
+            null
+          ],
+          "description": "`unplanted-class`: no class in the taxonomy carries this CWE. `unplanted-in-scope`: a class does, but nothing in the apps this run scanned is planted with it, so no ground truth here can confirm or contradict the finding."
         }
       }
     },

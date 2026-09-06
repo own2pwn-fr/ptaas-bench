@@ -200,14 +200,17 @@ def test_summary_table_carries_the_new_columns(make_catalog):
     summary = md.split("## Overall")[1].split("##")[0]
     assert "trigger +weak oob" in summary
     assert "surface crawl" in summary
-    assert "FP (confirmed)" in summary
-    assert "2 (1)" in summary
+    # The headline precision is the confirmed one, and findings outside the corpus
+    # get their own column rather than being folded into false positives.
+    assert "precision (confirmed)" in summary
+    assert "FP confirmed" in summary
+    assert "outside corpus" in summary
 
 
 def test_precision_table_shows_the_confirmed_reading(make_catalog):
     md = markdown_report(with_new_blocks(make_catalog))
     block = md.split("## Precision")[1].split("##")[0]
-    assert "FP confirmed" in block and "confirmed" in block
+    assert "FP confirmed" in block and "FP unconfirmable" in block
 
 
 def test_html_renders_the_new_sections_offline(make_catalog):

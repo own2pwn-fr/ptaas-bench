@@ -668,3 +668,64 @@ def test_the_tail_of_a_chain_without_its_head_is_reported_as_an_anomaly(make_cat
     ]
     assert chains["by_depth"]["0"]["trigger"]["recall"] == 0.0
     assert chains["by_depth"]["1"]["trigger"]["recall"] == 1.0
+
+
+# --------------------------------------------------------------------------- #
+# scope
+# --------------------------------------------------------------------------- #
+
+def _two_app_catalog(make_catalog):
+    return load_catalog(make_catalog([
+        vuln_entry(id="BENCH-SHOP-0001", app="shopfront"),
+        vuln_entry(id="BENCH-SHOP-0002", app="shopfront", **{"class": "xss_stored"},
+                   severity="high",
+                   entrypoint={"method": "POST", "path": "/api/reviews", "param": "body",
+                               "param_in": "json", "default_value": "nice"}),
+        vuln_entry(id="BENCH-EDGE-0001", app="edge", **{"class": "cache_poisoning"},
+                   severity="high",
+                   entrypoint={"method": "GET", "path": "/submit", "param": "x",
+                               "param_in": "header", "default_value": None}),
+    ]))
+
+
+def test_the_run_record_targets_scope_the_headline(make_catalog):
+    # A run that scanned one app must not be scored against the whole corpus: doing
+    # so understates it by the number of targets.
+    catalog = _two_app_catalog(make_catalog)
+    doc = score_run(catalog, events_from_iterable([http_event(params=[param("q", "x'")])]),
+                    run={"run_id": "r1", "tool": "zap", "targets": ["shopfront"]},
+                    apps=["shopfront"], scope_source="run-record")
+    assert doc["scope"] == {"apps": ["shopfront"], "source": "run-record",
+                            "catalog_apps": ["edge", "shopfront"],
+                            "vulns_in_scope": 2, "vulns_total": 3}
+    assert doc["metrics"]["overall"]["reach"] == {"hit": 1, "applicable": 2, "recall": 0.5}
+
+
+def test_scope_falls_back_to_the_apps_the_events_touched(make_catalog):
+    catalog = _two_app_catalog(make_catalog)
+    doc = score_run(catalog, events_from_iterable([http_event(params=[param("q", "x'")])]),
+                    run={"run_id": "r1", "tool": "zap"})
+    assert doc["scope"]["apps"] == ["shopfront"]
+    assert doc["scope"]["source"] == "events"
+    assert doc["metrics"]["overall"]["reach"]["applicable"] == 2
+    assert any(w["code"] == "scope-derived-from-events" for w in doc["warnings"])
+
+
+def test_a_run_that_touched_nothing_is_scored_corpus_wide_and_says_so(make_catalog):
+    catalog = _two_app_catalog(make_catalog)
+    doc = score_run(catalog, events_from_iterable([]), run={"run_id": "r", "tool": "zap"})
+    assert doc["scope"]["source"] == "catalog"
+    assert doc["scope"]["vulns_in_scope"] == 3
+    unscoped = [w for w in doc["warnings"] if w["code"] == "unscoped-run"]
+    assert unscoped and "understated" in unscoped[0]["message"]
+
+
+def test_synthetic_traffic_does_not_widen_the_scope(make_catalog):
+    # The harness's own login traffic is excluded from credit, so it must not drag
+    # another app into the denominator either.
+    catalog = _two_app_catalog(make_catalog)
+    doc = score_run(catalog, events_from_iterable([
+        http_event(params=[param("q", "x'")]),
+        http_event(app="edge", route="/submit", synthetic=True),
+    ]), run={"run_id": "r", "tool": "zap"})
+    assert doc["scope"]["apps"] == ["shopfront"]

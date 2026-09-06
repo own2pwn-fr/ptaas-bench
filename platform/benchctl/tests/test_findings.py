@@ -8,6 +8,7 @@ from benchctl.catalog import load_catalog
 from benchctl.events import events_from_iterable
 from benchctl.findings import (
     VERDICT_CLASS_MISMATCH,
+    VERDICT_OUT_OF_CATALOG,
     VERDICT_CLASS_UNKNOWN,
     VERDICT_DUP,
     VERDICT_FP,
@@ -80,8 +81,10 @@ def test_wrong_method_on_the_right_path_is_a_false_positive(make_catalog):
 
 
 def test_right_place_wrong_class_is_reported_separately(make_catalog):
-    # CWE-79 (XSS) claimed on the SQL injection endpoint: neither TP nor FP.
-    report = classify_findings(catalog_of(make_catalog), [finding(cwe=79, name="XSS")])
+    # CWE-639 (IDOR) claimed on the SQL injection endpoint: neither TP nor FP. The
+    # class is planted in scope -- on another endpoint -- so we can genuinely say
+    # this is the wrong class here, rather than having no ground truth for it.
+    report = classify_findings(catalog_of(make_catalog), [finding(cwe=639, name="IDOR")])
     assert verdicts(report) == [VERDICT_CLASS_MISMATCH]
     assert report["true_positives"] == 0 and report["false_positives"] == 0
     assert report["ambiguous"] == 1
@@ -94,10 +97,20 @@ def test_missing_cwe_is_class_unknown(make_catalog):
     assert verdicts(report) == [VERDICT_CLASS_UNKNOWN]
 
 
-def test_unmapped_cwe_is_a_class_mismatch(make_catalog):
+def test_a_cwe_no_class_plants_is_unscoreable_even_on_a_planted_location(make_catalog):
+    # Location is irrelevant here: no entry in the corpus could ever carry this CWE,
+    # so the finding is outside the ground truth rather than wrong.
     report = classify_findings(catalog_of(make_catalog), [finding(cwe=1234567)])
-    assert verdicts(report) == [VERDICT_CLASS_MISMATCH]
-    assert "unmapped" in report["findings"][0]["reason"]
+    assert verdicts(report) == [VERDICT_OUT_OF_CATALOG]
+    assert report["true_positives"] == 0 and report["false_positives"] == 0
+    assert report["out_of_catalog"] == 1
+    assert report["precision"] is None  # nothing scoreable to divide
+
+
+def test_a_mixed_cwe_finding_is_still_judged_on_its_scoreable_half(make_catalog):
+    # One planted CWE among unplanted ones: we can still say something, so we do.
+    report = classify_findings(catalog_of(make_catalog), [finding(cwe=[693, 89])])
+    assert verdicts(report) == [VERDICT_TP]
 
 
 def test_wrong_parameter_on_the_right_endpoint(make_catalog):
@@ -155,11 +168,12 @@ def test_precision_arithmetic_with_a_mixed_batch(make_catalog):
         finding(url=f"{BASE}/api/orders/1002", param="id", cwe=639),  # TP
         finding(url=f"{BASE}/nope"),                 # FP
         finding(url=f"{BASE}/also-nope"),            # FP
-        finding(cwe=79),                             # ambiguous (class mismatch)
+        finding(cwe=639, param=None),                # ambiguous (class mismatch)
+        finding(cwe=693),                            # unscoreable, excluded entirely
     ]
     report = classify_findings(catalog_of(make_catalog), findings)
-    assert (report["true_positives"], report["false_positives"],
-            report["duplicates"], report["ambiguous"]) == (2, 2, 1, 1)
+    assert (report["true_positives"], report["false_positives"], report["duplicates"],
+            report["ambiguous"], report["out_of_catalog"]) == (2, 2, 1, 1, 1)
     assert report["precision"] == 0.5
     assert report["precision_conservative"] == 2 / 5
 
@@ -191,3 +205,111 @@ def test_load_findings_accepts_array_and_object(tmp_path):
     p2 = tmp_path / "b.json"
     p2.write_text(json.dumps({"findings": rows}))
     assert len(load_findings(p1)) == len(load_findings(p2)) == 1
+
+
+# --------------------------------------------------------------------------- #
+# regression: the first live scanner run
+# --------------------------------------------------------------------------- #
+
+def zap_baseline_findings():
+    """The shape ZAP's baseline actually produced against `blog`: 21 findings, all
+    real, none of them a class this corpus plants."""
+    rows = []
+    for i in range(10):  # "Content Security Policy Header Not Set"
+        rows.append({"tool": "zap", "url": f"http://blog:8080/page{i}", "method": "GET",
+                     "param": None, "cwe": 693, "name": "CSP Header Not Set",
+                     "severity": "medium", "confidence": "high"})
+    for path in ("/account", "/studio", "/privacy", "/", "/feed"):  # anti-clickjacking
+        rows.append({"tool": "zap", "url": f"http://blog:8080{path}", "method": "GET",
+                     "param": None, "cwe": 1021, "name": "Missing Anti-clickjacking Header",
+                     "severity": "medium", "confidence": "medium"})
+    for path in ("/a", "/b", "/c", "/d", "/e", "/f"):  # informational, no CWE at all
+        rows.append({"tool": "zap", "url": f"http://blog:8080{path}", "method": "GET",
+                     "param": None, "cwe": None, "name": "Informational",
+                     "severity": "info", "confidence": "low"})
+    return [finding_from_dict(r) for r in rows]
+
+
+def test_a_scanner_that_said_nothing_false_is_not_published_at_zero_precision(make_catalog):
+    # The regression this test exists for: all 21 findings were classified as false
+    # positives and the tool was published at precision 0.0% in a public comparison.
+    report = classify_findings(catalog_of(make_catalog), zap_baseline_findings(),
+                               app_map={"blog": "blog"})
+    # 10 CSP alerts (no class in the taxonomy plants CWE-693) plus 5 clickjacking
+    # alerts (a class exists, but nothing in the scanned app carries it): 15
+    # findings this corpus has no ground truth for, in either direction.
+    assert report["out_of_catalog"] == 15
+    assert report["out_of_catalog_by_kind"] == {"unplanted-class": 10,
+                                                "unplanted-in-scope": 5}
+    assert report["out_of_catalog_by_cwe"]["693"]["count"] == 10
+    assert report["false_positives_confirmed"] == 0       # nothing contradicted
+    # The headline must not be 0%: it is "we cannot say", which is the truth.
+    assert report["precision_confirmed"] is None
+    assert all(r["verdict"] != "false-positive"
+               for r in report["findings"] if r["cwe"])
+
+
+def test_out_of_catalog_findings_leave_every_denominator_alone(make_catalog):
+    catalog = catalog_of(make_catalog)
+    clean = classify_findings(catalog, [finding()])
+    polluted = classify_findings(catalog, [finding(), *zap_baseline_findings()[:10]])
+    assert polluted["out_of_catalog"] == 10
+    assert polluted["precision"] == clean["precision"] == 1.0
+    assert polluted["precision_conservative"] == clean["precision_conservative"] == 1.0
+
+
+def test_a_reason_is_given_for_each_unplanted_cwe(make_catalog):
+    report = classify_findings(catalog_of(make_catalog), zap_baseline_findings()[:1],
+                               out_of_catalog_reasons={693: "header hygiene, not planted"})
+    assert report["out_of_catalog_by_cwe"]["693"]["reason"] == "header hygiene, not planted"
+    assert "unscoreable, not wrong" in report["findings"][0]["reason"]
+
+
+def test_the_real_reason_table_is_read_when_present():
+    from benchctl.findings import load_out_of_catalog_reasons
+    from conftest import REPO_ROOT
+
+    reasons = load_out_of_catalog_reasons(REPO_ROOT)
+    # runners/_lib/cwe_map.yaml is the harness's own list; if it moves, we degrade
+    # to a generic sentence rather than failing to score.
+    assert reasons == {} or 693 in reasons
+    assert load_out_of_catalog_reasons(None) == {}
+
+
+def test_each_unscoreable_cwe_carries_the_right_reason(make_catalog):
+    report = classify_findings(catalog_of(make_catalog), zap_baseline_findings(),
+                               app_map={"blog": "blog"},
+                               out_of_catalog_reasons={693: "header hygiene, not planted"})
+    by_cwe = report["out_of_catalog_by_cwe"]
+    assert by_cwe["693"]["reason"] == "header hygiene, not planted"
+    # CWE-1021 is a real taxonomy class; the honest statement is that nothing in the
+    # scanned app carries it, not that no class does.
+    assert "nothing in" in by_cwe["1021"]["reason"]
+
+
+def test_a_pattern_row_cannot_confirm_a_false_positive(make_catalog, tmp_path):
+    # The SPA fallback /{full_path} answers every path, 404s included, so matching
+    # it proves nothing about the path a tool reported.
+    from benchctl.inventory import load_inventories
+    from conftest import routes_inventory
+
+    root = make_catalog([vuln_entry()])
+    routes_inventory(root, "shopfront", [
+        {"path": "/api/products", "method": "GET", "status": "planted"},
+        {"path": "/about", "method": "GET", "status": "safe"},
+        {"path": "/{full_path}", "method": "GET", "status": "safe"},
+    ])
+    catalog = load_catalog(root)
+    inventories = load_inventories(root)
+    report = classify_findings(
+        catalog,
+        [finding(url=f"{BASE}/whatever-the-spa-renders", param=None),
+         finding(url=f"{BASE}/about", param=None)],
+        inventories=inventories, app_map={"shopfront": "shopfront"},
+    )
+    pattern, literal = report["findings"]
+    assert pattern["fp_basis"] == "inventory-pattern-route"
+    assert literal["fp_basis"] == "inventory-safe-route"
+    assert report["false_positives"] == 2
+    assert report["false_positives_confirmed"] == 1      # only the literal row
+    assert report["precision_confirmed"] == 0.0

@@ -155,19 +155,21 @@ def _md_table(header: Sequence[str], rows: Sequence[Sequence[str]]) -> str:
 # --------------------------------------------------------------------------- #
 
 def _summary_rows(docs: Sequence[Mapping[str, Any]]) -> tuple[list[str], list[list[str]]]:
-    header = ["tool", "vulns", "reach", "exercise", "trigger", "trigger +weak oob",
-              "surface crawl", "precision", "FP (confirmed)"]
+    header = ["tool", "scope", "vulns", "reach", "exercise", "trigger", "trigger +weak oob",
+              "surface crawl", "precision (confirmed)", "FP confirmed", "outside corpus"]
     rows = []
     for doc in docs:
         overall = _node(doc, "metrics", "overall") or {}
         crawl = _node(doc, "metrics", "crawl") or {}
         f = doc.get("findings") or {}
-        precision = f.get("precision")
-        fp = _DASH
-        if f:
-            fp = f"{f.get('false_positives', 0)} ({f.get('false_positives_confirmed', 0)})"
+        # Headline precision counts only false positives the inventory contradicts.
+        precision = f.get("precision_confirmed")
+        fp = _DASH if not f else str(f.get("false_positives_confirmed", 0))
+        unscored = _DASH if not f else str(f.get("out_of_catalog", 0))
+        scope = _node(doc, "scope", "apps") or (doc.get("run") or {}).get("targets") or []
         rows.append([
             tool_name(doc),
+            ", ".join(scope) if scope else _DASH,
             str((doc.get("catalog") or {}).get("vulns_in_scope", overall.get("vulns", 0))),
             _fmt(overall, "reach"),
             _fmt(overall, "exercise"),
@@ -176,6 +178,7 @@ def _summary_rows(docs: Sequence[Mapping[str, Any]]) -> tuple[list[str], list[li
             _fmt_coverage(crawl.get("surface")),
             _DASH if precision is None else f"{precision * 100:.0f}%",
             fp,
+            unscored,
         ])
     return header, rows
 
@@ -431,28 +434,44 @@ def markdown_report(docs: Sequence[Mapping[str, Any]]) -> str:
             tool_name(doc),
             str(f.get("total", 0)),
             str(f.get("true_positives", 0)),
-            str(f.get("false_positives", 0)),
             str(f.get("false_positives_confirmed", 0)),
+            str(f.get("false_positives_unknown_route", 0)),
+            str(f.get("out_of_catalog", 0)),
             str(f.get("duplicates", 0)),
             str(f.get("ambiguous", 0)),
+            _DASH if f.get("precision_confirmed") is None
+            else f"{f['precision_confirmed'] * 100:.0f}%",
             _DASH if f.get("precision") is None else f"{f['precision'] * 100:.0f}%",
             _DASH if f.get("precision_conservative") is None
             else f"{f['precision_conservative'] * 100:.0f}%",
-            _DASH if f.get("precision_confirmed") is None
-            else f"{f['precision_confirmed'] * 100:.0f}%",
         ])
     if fp_rows:
         parts.append("## Precision")
-        parts.append("<sub>FP confirmed = on a route the inventory describes. `conservative` "
-                     "counts location-match/class-mismatch findings as false positives; "
-                     "`confirmed` divides by confirmed false positives only.</sub>")
+        parts.append(
+            "<sub>The headline is `precision (confirmed)`: its denominator counts only "
+            "false positives the route inventory contradicts. `FP unconfirmable` sits on "
+            "paths we never declared, or that only a catch-all pattern row matched — our "
+            "gap, not the tool's error — "
+            "and is counted separately in `precision (all)`. `outside corpus` are real "
+            "findings for classes this corpus does not plant (a missing CSP header, say): "
+            "unscoreable, not wrong, and excluded from every denominator. `conservative` "
+            "additionally counts right-place-wrong-class findings against the tool.</sub>")
         parts.append("")
         parts.append(_md_table(
-            ["tool", "findings", "TP", "FP", "FP confirmed", "dup", "ambiguous",
-             "precision", "conservative", "confirmed"],
+            ["tool", "findings", "TP", "FP confirmed", "FP unconfirmable", "outside corpus",
+             "dup", "ambiguous", "precision (confirmed)", "precision (all)", "conservative"],
             fp_rows,
         ))
         parts.append("")
+        for doc in docs:
+            f = doc.get("findings") or {}
+            by_cwe = f.get("out_of_catalog_by_cwe") or {}
+            if not by_cwe:
+                continue
+            parts.append(f"<sub>{tool_name(doc)} — outside the corpus: " + "; ".join(
+                f"CWE-{cwe} ×{v['count']} ({v['reason']})" for cwe, v in by_cwe.items()
+            ) + "</sub>")
+            parts.append("")
 
     warn_rows = [
         [tool_name(doc), w.get("code", ""), w.get("vuln_id") or "", w.get("message", "")]
@@ -571,28 +590,45 @@ def html_report(docs: Sequence[Mapping[str, Any]]) -> str:
             continue
         fp_rows.append([
             tool_name(doc), str(f.get("total", 0)), str(f.get("true_positives", 0)),
-            str(f.get("false_positives", 0)), str(f.get("false_positives_confirmed", 0)),
+            str(f.get("false_positives_confirmed", 0)),
+            str(f.get("false_positives_unknown_route", 0)),
+            str(f.get("out_of_catalog", 0)),
             str(f.get("duplicates", 0)), str(f.get("ambiguous", 0)),
+            _DASH if f.get("precision_confirmed") is None
+            else f"{f['precision_confirmed'] * 100:.0f}% (—)",
             _DASH if f.get("precision") is None else f"{f['precision'] * 100:.0f}% (—)",
             _DASH if f.get("precision_conservative") is None
             else f"{f['precision_conservative'] * 100:.0f}% (—)",
-            _DASH if f.get("precision_confirmed") is None
-            else f"{f['precision_confirmed'] * 100:.0f}% (—)",
         ])
     if fp_rows:
         body.append("<h2>Precision</h2>")
         body.append(
-            '<p class="legend">Two readings are published: <code>precision</code> ignores '
-            "location-match/class-mismatch findings, <code>conservative</code> counts them "
-            "as false positives.</p>"
+            '<p class="legend">The headline is <code>precision (confirmed)</code>: only '
+            "false positives the route inventory contradicts are in its denominator. Findings "
+            "on paths the target serves but never declared are our gap, not the tool's error, "
+            "and are counted separately. <code>outside corpus</code> findings are real findings "
+            "for classes this corpus does not plant — unscoreable, not wrong — and are excluded "
+            "from every denominator.</p>"
         )
         body.append(_html_table(
-            ["tool", "findings", "TP", "FP", "FP confirmed", "dup", "ambiguous",
-             "precision", "conservative", "confirmed"],
+            ["tool", "findings", "TP", "FP confirmed", "FP unconfirmable", "outside corpus",
+             "dup", "ambiguous", "precision (confirmed)", "precision (all)", "conservative"],
             fp_rows,
         ))
         for doc in docs:
             f = doc.get("findings") or {}
+            outside = f.get("out_of_catalog_list") or []
+            if outside:
+                body.append(f"<h2>Outside the corpus — {html.escape(tool_name(doc))}</h2>")
+                body.append('<p class="legend">Real findings for classes this benchmark does '
+                            "not plant. Listed so a reader can check that judgement, and "
+                            "counted against nobody.</p>")
+                body.append(_html_table(
+                    ["method", "url", "cwe", "name", "reason"],
+                    [[str(r.get("method") or ""), str(r.get("url") or ""),
+                      ",".join(str(c) for c in (r.get("cwe") or [])),
+                      str(r.get("name") or ""), str(r.get("reason") or "")] for r in outside],
+                ))
             fps = f.get("false_positive_list") or []
             if not fps:
                 continue

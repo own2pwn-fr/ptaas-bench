@@ -118,7 +118,9 @@ __all__ = [
 ]
 
 # 1.1.0 added the trigger_any axis, low_confidence_triggers and metrics.crawl.
-SCORE_SCHEMA_VERSION = "1.1.0"
+# 1.2.0 added the scope block, the out-of-catalog findings verdict and
+#       findings.precision_basis.
+SCORE_SCHEMA_VERSION = "1.2.0"
 
 # The four reported axes. `trigger` is the headline (proof only); `trigger_any`
 # additionally counts low-confidence out-of-band attributions.
@@ -320,12 +322,16 @@ def _resolve_source_app(
     event itself is honoured -- that is the platform stating a fact, not us
     inferring one.
     """
+    known_apps = {v.app for v in catalog.vulns}
+    # The resolver may have done this already and said so; its answer wins, since it
+    # saw the connection and we only see the record of it.
+    if ev.attributed_app and ev.attributed_app in known_apps:
+        return ev.attributed_app
     if addresses:
-        for key in (ev.source_ip, ev.container, ev.app):
+        for key in (ev.attributed_app, ev.source_ip, ev.container, ev.app):
             if key and key in addresses:
                 return addresses[key]
         return None
-    known_apps = {v.app for v in catalog.vulns}
     for key in (ev.container, ev.app):
         if key and key in known_apps:
             return key
@@ -734,6 +740,7 @@ def score_run(
     run: Mapping[str, Any] | None = None,
     findings: Mapping[str, Any] | None = None,
     apps: Sequence[str] | None = None,
+    scope_source: str | None = None,
     inventories: Mapping[str, RouteInventory] | None = None,
 ) -> dict[str, Any]:
     """Build the full score document. See ``results/schema/score.schema.json``.
@@ -744,7 +751,25 @@ def score_run(
     coverage block; without it only the planted-only recall is reported.
     """
     scored_stream = stream.scored()
-    in_scope = [v for v in catalog.vulns if not apps or v.app in set(apps)]
+    catalog_apps = set(catalog.apps)
+
+    # SCOPE. A run that scanned one app must not be scored against the whole corpus:
+    # doing so understates a single-target run by the number of targets, which is a
+    # far bigger error than anything the tool did. The run record's `targets` is the
+    # authority; failing that the apps the events actually touched are a sound
+    # derivation; only with neither is the headline corpus-wide, and then it says so.
+    if apps:
+        scope_apps = [a for a in apps if a in catalog_apps] or list(apps)
+        scope = scope_source or "explicit"
+    else:
+        observed_apps = sorted({e.app for e in scored_stream.events if e.app} & catalog_apps)
+        if observed_apps:
+            scope_apps, scope = observed_apps, "events"
+        else:
+            scope_apps, scope = sorted(catalog_apps), "catalog"
+
+    apps = scope_apps
+    in_scope = [v for v in catalog.vulns if v.app in set(scope_apps)]
     record = normalize_run_record(run)
     addresses = address_index(record["containers"])
     oob_by_vuln, orphan_callbacks = attribute_oob_events(
@@ -815,6 +840,28 @@ def score_run(
                 "without updating oracle.signal. Nobody can be credited for it."
             ),
         })
+    if scope == "catalog" and len(catalog_apps) > 1:
+        warnings.append({
+            "code": "unscoped-run",
+            "vuln_id": None,
+            "message": (
+                "neither the run record nor the events named a target, so the headline "
+                f"is scored against all {len(catalog_apps)} apps in the corpus. A run "
+                "that scanned one target is understated by that factor; pass --apps or "
+                "score against a run record carrying `targets`."
+            ),
+        })
+    elif scope == "events":
+        warnings.append({
+            "code": "scope-derived-from-events",
+            "vuln_id": None,
+            "message": (
+                "the run record named no targets, so the scope was derived from the apps "
+                f"the events touched: {', '.join(scope_apps)}. An app the tool never "
+                "reached at all would be missing from this scope."
+            ),
+        })
+
     if not record["container_map_available"]:
         warnings.append({
             "code": "missing-container-map",
@@ -941,6 +988,13 @@ def score_run(
             "images": record["images"],
             "reset_digests": record["reset_digests"],
             "reset_consistent": record["reset_consistent"],
+        },
+        "scope": {
+            "apps": list(scope_apps),
+            "source": scope,
+            "catalog_apps": sorted(catalog_apps),
+            "vulns_in_scope": len(in_scope),
+            "vulns_total": len(catalog.vulns),
         },
         "catalog": {
             "vulns_total": len(catalog.vulns),

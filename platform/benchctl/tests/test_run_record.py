@@ -232,3 +232,52 @@ def test_an_explicit_low_confidence_flag_still_demotes(make_catalog):
     doc = score_run(catalog, events_from_iterable([ev]), run=RUN)
     assert doc["vulns"][0]["trigger"] is False
     assert doc["vulns"][0]["attributions"][0]["source_match"] is True
+
+
+def test_a_structured_attribution_object_is_read_like_a_string(make_catalog):
+    # The resolver reports {"app": ..., "mode": ...}; older streams and fixtures send
+    # a bare string. Both must be read: raising on one shape made every callback
+    # unscoreable on the first live run, and looked like a crash rather than a
+    # contract disagreement.
+    catalog = load_catalog(make_catalog([
+        ssrf_entry("BENCH-SHOP-0031", "shopfront", "shop.imports.fetch.external")]))
+    ev = oob_event(signal="shop.imports.fetch.external", channel="dns",
+                   attribution={"app": None, "mode": "unattributed"})
+    doc = score_run(catalog, events_from_iterable([ev]), run=RUN)
+    row = doc["vulns"][0]
+    # "unattributed" is not one of the weak markers, so the signal still credits it.
+    assert row["trigger"] is True
+    assert row["attributions"][0]["confidence"] == "high"
+
+
+def test_a_structured_attribution_can_demote_and_can_name_the_app(make_catalog):
+    catalog = load_catalog(make_catalog([
+        ssrf_entry("BENCH-SHOP-0031", "shopfront", "shop.imports.fetch.external"),
+        ssrf_entry("BENCH-EDGE-0031", "edge", "edge.origin.fetch.external"),
+    ]))
+    ev = oob_event(attribution={"app": "edge", "mode": "container-window"})
+    doc = score_run(catalog, events_from_iterable([ev]), run=RUN)
+    rows = {v["id"]: v for v in doc["vulns"]}
+    assert rows["BENCH-EDGE-0031"]["trigger_any"] is True
+    assert rows["BENCH-EDGE-0031"]["trigger"] is False   # the mode is a weak marker
+    assert rows["BENCH-EDGE-0031"]["attributions"][0]["app"] == "edge"
+    assert rows["BENCH-SHOP-0031"]["trigger_any"] is False
+
+
+def test_structured_scalars_elsewhere_do_not_raise(make_catalog):
+    # Same assumption, checked on every other scalar the wire carries.
+    catalog = load_catalog(make_catalog([
+        ssrf_entry("BENCH-SHOP-0031", "shopfront", "shop.imports.fetch.external")]))
+    stream = events_from_iterable([
+        {"type": "http_request", "app": "shopfront", "method": "POST",
+         "route": {"template": "/api/admin/imports"}, "host": {"name": "shopfront"},
+         "params": [{"name": {"value": "source_url"}, "in": "json",
+                     "value_sha256": "deadbeef", "value_len": 12}]},
+        {"type": "signal", "app": "shopfront", "signal": {"name": "shop.imports.fetch.external"}},
+        {"type": "oob", "app": "canary", "channel": {"value": "dns"},
+         "source_ip": {"address": "10.88.0.9"},
+         "destination_host": {"host": "x.oast.fun"}, "confidence": {"level": "high"}},
+    ])
+    doc = score_run(catalog, stream, run=RUN)
+    row = doc["vulns"][0]
+    assert row["reach"] is True and row["exercise"] is True and row["trigger"] is True

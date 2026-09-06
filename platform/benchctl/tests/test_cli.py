@@ -90,7 +90,12 @@ def test_score_with_findings_adds_precision(run_root, tmp_path):
     findings = write_json(tmp_path / "f.json", [
         {"tool": "zap", "url": "http://shopfront:8080/api/products?q=1", "method": "GET",
          "param": "q", "cwe": 89, "name": "SQLi", "severity": "high", "confidence": "high"},
+        # A class this run's app does plant (CWE-89), claimed where nothing is: a
+        # scoreable false positive.
         {"tool": "zap", "url": "http://shopfront:8080/robots.txt", "method": "GET",
+         "param": None, "cwe": 89, "name": "SQLi", "severity": "high", "confidence": "low"},
+        # A class nothing in scope plants: unscoreable, and out of the denominator.
+        {"tool": "zap", "url": "http://shopfront:8080/sitemap.xml", "method": "GET",
          "param": None, "cwe": 200, "name": "Info leak", "severity": "low", "confidence": "low"},
     ])
     out = tmp_path / "score.json"
@@ -98,6 +103,7 @@ def test_score_with_findings_adds_precision(run_root, tmp_path):
                  "--findings", findings, "--out", str(out)]) == 0
     doc = json.loads(out.read_text())
     assert doc["findings"]["precision"] == 0.5
+    assert doc["findings"]["out_of_catalog"] == 1
     assert doc["findings"]["triggered_not_reported"] == []
 
 
@@ -254,3 +260,51 @@ def test_validate_accepts_a_non_derivable_prefix(make_catalog, capsys):
                                     **{"class": "el_injection"}, severity="critical")])
     assert main(["--root", str(root), "validate"]) == 0
     assert "id-app-mismatch" not in capsys.readouterr().err
+
+
+def test_score_reads_the_run_record_when_the_events_export_lost_it(run_root, tmp_path):
+    # An events file with no run block: without the record the document cannot say
+    # what produced it, and the headline covers the whole corpus.
+    events = write_json(tmp_path / "e.json", [http_event(params=[param("q", "x'")])])
+    record = write_json(tmp_path / "run.json", {
+        "run": {"run_id": "r-live", "tool": "zap", "tool_version": "2.15.0",
+                "profile": "baseline", "targets": ["shopfront"]}})
+    out = tmp_path / "score.json"
+    assert main(["--root", str(run_root), "score", "--run", "r-live", "--events", events,
+                 "--run-record", record, "--out", str(out)]) == 0
+    doc = json.loads(out.read_text())
+    assert doc["run"]["tool"] == "zap" and doc["run"]["tool_version"] == "2.15.0"
+    assert doc["scope"] == {"apps": ["shopfront"], "source": "run-record",
+                            "catalog_apps": ["shopfront"], "vulns_in_scope": 2,
+                            "vulns_total": 2}
+
+
+def test_score_accepts_a_directory_and_writes_all_three_artefacts(run_root, tmp_path):
+    events = write_json(tmp_path / "e.json", [http_event()])
+    out = tmp_path / "run-artifacts"
+    assert main(["--root", str(run_root), "score", "--run", "r1", "--events", events,
+                 "--tool", "zap", "--out", str(out)]) == 0
+    assert sorted(p.name for p in out.iterdir()) == [
+        "results.html", "results.json", "results.md", "score.json"]
+    assert json.loads((out / "score.json").read_text())["run"]["tool"] == "zap"
+
+
+def test_score_prints_the_scope_it_used(run_root, tmp_path, capsys):
+    events = write_json(tmp_path / "e.json", [http_event()])
+    assert main(["--root", str(run_root), "score", "--run", "r1", "--events", events,
+                 "--out", str(tmp_path / "s.json")]) == 0
+    out = capsys.readouterr().out
+    assert "scope    : shopfront" in out
+    assert "from the events" in out
+
+
+def test_score_reports_out_of_catalog_findings_as_unscored(run_root, tmp_path, capsys):
+    events = write_json(tmp_path / "e.json", [http_event()])
+    findings = write_json(tmp_path / "f.json", [
+        {"tool": "zap", "url": "http://shopfront:8080/", "method": "GET", "param": None,
+         "cwe": 693, "name": "CSP Header Not Set", "severity": "medium", "confidence": "high"}])
+    assert main(["--root", str(run_root), "score", "--run", "r1", "--events", events,
+                 "--findings", findings, "--out", str(tmp_path / "s.json")]) == 0
+    printed = capsys.readouterr().out
+    assert "unscored : 1 finding(s) outside the corpus" in printed
+    assert "excluded from precision" in printed

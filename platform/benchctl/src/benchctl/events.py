@@ -166,6 +166,8 @@ class OobEvent(Event):
     channel: str | None = None
     source_ip: str | None = None
     attribution: str | None = None
+    # The app the resolver itself attributed the callback to, when it says so.
+    attributed_app: str | None = None
     confidence: str | None = None
     source_match: bool | None = None
     low_confidence: bool = False
@@ -326,6 +328,29 @@ def address_index(containers: Mapping[str, Mapping[str, Any]]) -> dict[str, str]
     return index
 
 
+def _as_text(value: Any, *keys: str) -> str | None:
+    """Coerce a wire field to text, tolerating a structured object.
+
+    Emitters disagree about whether a field is a scalar or an object -- the
+    resolver reports ``attribution`` as ``{"app": null, "mode": "unattributed"}``
+    while older streams send the bare string ``"unattributed"`` -- and there are six
+    emitters in the corpus. A scorer that raises on the shape it did not expect
+    makes every affected observation unscoreable and looks like a crash rather than
+    a contract disagreement, so every scalar-ish field is read through here.
+    """
+    if value is None:
+        return None
+    if isinstance(value, Mapping):
+        for key in (*keys, "value", "name", "id"):
+            if value.get(key) not in (None, ""):
+                return str(value[key])
+        return None
+    if isinstance(value, (list, tuple)):
+        return _as_text(value[0], *keys) if value else None
+    text = str(value).strip()
+    return text or None
+
+
 def _as_bool(value: Any) -> bool:
     if isinstance(value, str):
         return value.strip().lower() in {"1", "true", "yes"}
@@ -334,9 +359,9 @@ def _as_bool(value: Any) -> bool:
 
 def _param_from_dict(d: Mapping[str, Any]) -> Param:
     return Param(
-        name=str(d.get("name", "")),
-        location=str(d.get("in", "query")),
-        value_sha256=(d.get("value_sha256") or None),
+        name=_as_text(d.get("name")) or "",
+        location=_as_text(d.get("in")) or "query",
+        value_sha256=_as_text(d.get("value_sha256")),
         value_len=d.get("value_len"),
         sample=d.get("sample"),
     )
@@ -358,9 +383,9 @@ def event_from_dict(d: Mapping[str, Any]) -> Event:
     if kind == "http_request":
         return HttpRequestEvent(
             method=str(d.get("method", "GET")).upper(),
-            route=str(d.get("route", d.get("path", "/"))),
-            host=(d.get("host") or d.get("vhost") or None),
-            path=d.get("path"),
+            route=_as_text(d.get("route"), "template") or _as_text(d.get("path")) or "/",
+            host=_as_text(d.get("host") or d.get("vhost"), "host", "name"),
+            path=_as_text(d.get("path")),
             status=d.get("status"),
             auth_subject=d.get("auth_subject"),
             params=tuple(_param_from_dict(p) for p in (d.get("params") or []) if isinstance(p, Mapping)),
@@ -368,28 +393,35 @@ def event_from_dict(d: Mapping[str, Any]) -> Event:
         )
     if kind in SIGNAL_EVENT_TYPES:
         return TriggerEvent(
-            vuln_id=str(d.get("vuln_id") or ""),
-            signal=(d.get("signal") or None),
+            vuln_id=_as_text(d.get("vuln_id")) or "",
+            signal=_as_text(d.get("signal"), "name"),
             evidence=d.get("attributes") or d.get("evidence") or {},
             **common,
         )
     if kind == "oob":
+        attribution = d.get("attribution") or d.get("attribution_kind")
+        # The resolver's structured attribution also names the app it resolved, and
+        # that is a fact from the platform side worth keeping rather than re-deriving.
+        attributed_app = (
+            _as_text(attribution.get("app")) if isinstance(attribution, Mapping) else None
+        )
         return OobEvent(
-            token=str(d.get("token") or ""),
-            signal=(d.get("signal") or None),
-            vuln_id=(d.get("vuln_id") or None),
-            channel=d.get("channel"),
-            source_ip=d.get("source_ip"),
-            attribution=(d.get("attribution") or d.get("attribution_kind") or None),
-            confidence=(d.get("confidence") or None),
+            token=_as_text(d.get("token")) or "",
+            signal=_as_text(d.get("signal")),
+            vuln_id=_as_text(d.get("vuln_id")),
+            channel=_as_text(d.get("channel")),
+            source_ip=_as_text(d.get("source_ip"), "address", "ip"),
+            attribution=_as_text(attribution, "mode", "kind"),
+            attributed_app=attributed_app,
+            confidence=_as_text(d.get("confidence"), "level"),
             source_match=(None if d.get("source_match") is None
                           else _as_bool(d.get("source_match"))),
             low_confidence=_as_bool(d.get("low_confidence", False)),
-            destination_host=(d.get("destination_host") or d.get("host") or None),
-            request_id=(d.get("request_id") or None),
-            container=(d.get("container") or None),
-            route=(d.get("route") or None),
-            method=(str(d["method"]).upper() if d.get("method") else None),
+            destination_host=_as_text(d.get("destination_host") or d.get("host"), "host"),
+            request_id=_as_text(d.get("request_id")),
+            container=_as_text(d.get("container"), "container_id"),
+            route=_as_text(d.get("route"), "path"),
+            method=(str(_as_text(d.get("method")) or "").upper() or None),
             **common,
         )
     return Event(**common)

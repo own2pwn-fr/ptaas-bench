@@ -28,7 +28,7 @@ from .events import (
     load_events,
     normalize_run_record,
 )
-from .findings import classify_findings, load_findings
+from .findings import classify_findings, load_findings, load_out_of_catalog_reasons
 from .inventory import coverage_summary, crosscheck_inventory, load_inventories
 from .report import load_score, write_report
 from .scoring import score_run
@@ -119,6 +119,13 @@ def cmd_score(args: argparse.Namespace) -> int:
     else:
         stream, meta = fetch_events(args.collector, args.run)
     meta = dict(meta)
+    if args.run_record:
+        # The collector's Run object, saved next to the events. It carries the tool,
+        # the targets and the provenance an events-only export loses, and a score
+        # document that cannot say what produced it is not much use to anyone.
+        record = json.loads(Path(args.run_record).read_text(encoding="utf-8"))
+        if isinstance(record, dict):
+            meta.update(record.get("run") if isinstance(record.get("run"), dict) else record)
     meta.setdefault("run_id", args.run)
     if args.tool:
         meta["tool"] = args.tool
@@ -128,10 +135,14 @@ def cmd_score(args: argparse.Namespace) -> int:
         meta["profile"] = args.profile
 
     apps: Sequence[str] | None = None
+    scope_source: str | None = None
     if args.apps:
         apps = [a.strip() for a in args.apps.split(",") if a.strip()]
+        scope_source = "explicit"
     elif meta.get("targets"):
         apps = list(meta["targets"])
+        scope_source = "run-record"
+    # else: score_run derives the scope from the events and says so.
 
     findings_block = None
     if args.findings:
@@ -143,28 +154,31 @@ def cmd_score(args: argparse.Namespace) -> int:
         if args.app_map:
             app_map.update(json.loads(Path(args.app_map).read_text(encoding="utf-8")))
         preliminary = score_run(catalog, stream, run=meta, apps=apps,
-                                inventories=inventories)
+                                scope_source=scope_source, inventories=inventories)
         findings_block = classify_findings(
             catalog,
             load_findings(args.findings),
             outcomes=preliminary["vulns"],
             app_map=app_map,
-            apps=apps,
+            apps=preliminary["scope"]["apps"],
             inventories=inventories,
+            out_of_catalog_reasons=load_out_of_catalog_reasons(_root(args)),
         )
 
     doc = score_run(catalog, stream, run=meta, findings=findings_block, apps=apps,
-                    inventories=inventories)
+                    scope_source=scope_source, inventories=inventories)
 
-    out = Path(args.out) if args.out else Path(_root(args)) / "results" / "runs" / str(args.run) / "score.json"
-    out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(json.dumps(doc, indent=2) + "\n", encoding="utf-8")
+    written = _write_score(doc, args.out, _root(args), str(args.run))
+    out = written[0]
 
     if args.json:
         _emit(doc)
     else:
         overall = doc["metrics"]["overall"]
+        scope = doc["scope"]
         print(f"run {doc['run']['run_id']} · tool {doc['run']['tool']} · {out}")
+        print(f"  scope    : {', '.join(scope['apps'])} ({scope['vulns_in_scope']} of "
+              f"{scope['vulns_total']} planted, from the {scope['source']})")
         print(f"  events   : {doc['events']}")
         for axis in ("reach", "exercise", "trigger", "trigger_any"):
             block = overall[axis]
@@ -180,18 +194,49 @@ def cmd_score(args: argparse.Namespace) -> int:
             print(f"  crawl    : {_pct(surface['coverage'])} of the published surface "
                   f"({surface['covered']}/{surface['routes']} routes)")
         if findings_block:
+            f = findings_block
             print(
-                f"  precision: {_pct(findings_block['precision'])} "
-                f"(TP {findings_block['true_positives']}, FP {findings_block['false_positives']}"
-                f" of which {findings_block['false_positives_confirmed']} confirmed by the "
-                f"inventory, ambiguous {findings_block['ambiguous']})"
+                f"  precision: {_pct(f['precision_confirmed'])} confirmed "
+                f"({_pct(f['precision'])} counting undeclared routes) · "
+                f"TP {f['true_positives']}, FP {f['false_positives_confirmed']} confirmed "
+                f"+ {f['false_positives_unknown_route']} unconfirmable, "
+                f"ambiguous {f['ambiguous']}"
             )
+            if f["out_of_catalog"]:
+                # Not a mark against the tool: it found real things we do not plant.
+                cwes = ", ".join(f"CWE-{c}×{v['count']}"
+                                 for c, v in f["out_of_catalog_by_cwe"].items())
+                print(f"  unscored : {f['out_of_catalog']} finding(s) outside the corpus "
+                      f"({cwes}) — excluded from precision")
         if doc["run"]["reset_consistent"] is False:
             print("  ! state reset DIRTY: the target did not return to its seeded "
                   "state, later runs are not comparable", file=sys.stderr)
         for warning in doc["warnings"]:
             print(f"  ! {warning['code']} {warning['vuln_id'] or ''}", file=sys.stderr)
     return 0
+
+
+def _looks_like_a_directory(path: Path) -> bool:
+    """A directory is the natural thing to pass to --out, so accept either."""
+    return path.is_dir() or str(path).endswith(("/", "\\")) or path.suffix == ""
+
+
+def _write_score(doc: dict[str, Any], out: str | None, root: Path, run_id: str) -> list[Path]:
+    """Write the score, and the rendered report too when given a directory."""
+    if out is None:
+        target = root / "results" / "runs" / run_id
+    else:
+        target = Path(out)
+    if _looks_like_a_directory(target):
+        target.mkdir(parents=True, exist_ok=True)
+        path = target / "score.json"
+        path.write_text(json.dumps(doc, indent=2) + "\n", encoding="utf-8")
+        # The two rendered artefacts alongside it: a run nobody can read is a run
+        # nobody checks.
+        return [path, *write_report([doc], target)]
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(json.dumps(doc, indent=2) + "\n", encoding="utf-8")
+    return [target]
 
 
 # --------------------------------------------------------------------------- #
@@ -308,7 +353,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_score.add_argument("--tool", help="override the tool key recorded in the score")
     p_score.add_argument("--tool-version")
     p_score.add_argument("--profile")
-    p_score.add_argument("--out", help="score document path")
+    p_score.add_argument("--run-record", help="collector Run JSON, when the events export lost it")
+    p_score.add_argument("--out", help="score document path, or a directory to write all three artefacts into")
     p_score.add_argument("--json", action="store_true", help="also print the document")
     p_score.add_argument("--ignore-catalog-errors", action="store_true")
     p_score.set_defaults(func=cmd_score)

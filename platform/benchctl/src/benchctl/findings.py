@@ -46,7 +46,28 @@ MATCHING RULES, in order:
    would measure reporting style rather than accuracy. A different parameter on the
    right endpoint lands in ``location-match, param-mismatch``.
 
-3. *Class*. The finding's CWEs are compared with the vulnerability's resolved CWEs:
+3. *Out of catalog*. Before anything else: a finding whose every CWE belongs to no
+   class in ``catalog/taxonomy.yaml`` is **unscoreable, not wrong**. A missing CSP
+   header (CWE-693) is a real finding; this corpus simply does not plant header
+   hygiene, so no catalog entry could ever match it. Those findings get their own
+   verdict, ``out-of-catalog``, are counted separately, and are excluded from every
+   precision denominator. Publishing them as false positives would report "precision
+   0%" for a scanner that said nothing false -- in a public comparison, about
+   somebody else's tool -- which is the exact injustice this benchmark exists to
+   expose. The count is reported prominently, because a tool finding many real
+   things we do not plant is information about the corpus, not about the tool.
+   The vocabulary is derived from the taxonomy itself, so it cannot drift; the
+   reasons, when available, come from ``runners/_lib/cwe_map.yaml``.
+
+   The same reasoning applies one step further in, and this is a judgement call
+   worth contesting if you disagree: a CWE that *is* in the taxonomy but that
+   nothing in the **apps this run scanned** plants is equally unmatchable. Calling
+   such a finding a false positive asserts that we checked and the target is clean,
+   which we never did -- no ground truth for that class exists here. It is therefore
+   also ``out-of-catalog``, tagged ``unplanted-in-scope`` rather than
+   ``unplanted-class`` so the two can be told apart and counted separately.
+
+4. *Class*. The finding's CWEs are compared with the vulnerability's resolved CWEs:
      * non-empty intersection            -> ``true-positive`` (``exact-cwe``)
      * no intersection, but both CWE sets belong to a common taxonomy *family*
        (families are derived from taxonomy.yaml itself, so CWE-89 and CWE-943 are
@@ -54,16 +75,16 @@ MATCHING RULES, in order:
      * no family agreement                -> ``location-match, class-mismatch``
      * finding carries no usable CWE      -> ``location-match, class-unknown``
 
-4. *Duplicates*. The first finding that resolves to a vulnerability is the true
+5. *Duplicates*. The first finding that resolves to a vulnerability is the true
    positive; further findings from the same tool for the same vulnerability are
    ``duplicate``. Duplicates are neither TP nor FP -- they measure noise, reported
    separately as ``duplicate_ratio``.
 
-5. *Ranking*. A finding is evaluated against every candidate and keeps its best
+6. *Ranking*. A finding is evaluated against every candidate and keeps its best
    verdict (true-positive > param-mismatch > class-mismatch > class-unknown), so a
    shared endpoint hosting two flaws is never penalised for the order of the files.
 
-6. *Route inventory* (when the target publishes ``targets/<app>/routes.yaml``).
+7. *Route inventory* (when the target publishes ``targets/<app>/routes.yaml``).
    A false positive is tagged with the reason it is one, because the two reasons
    are not equally defensible:
      * ``inventory-safe-route``   the inventory declares that exact route safe, and
@@ -72,22 +93,28 @@ MATCHING RULES, in order:
      * ``inventory-known-route``  the route is in the inventory but nothing planted
        matches the finding's shape (wrong method, say). Also confirmed: we have
        ground truth for that location.
+     * ``inventory-pattern-route`` the only row that matched is a pattern (a SPA
+       fallback such as ``/{full_path}`` accepts every path, 404s included), so it
+       confirms nothing about this particular path. Not confirmable.
      * ``unknown-route``          no inventory describes this route. Still counted
        as a false positive, but flagged as weaker evidence.
      * ``no-inventory``           the target publishes none at all.
 
-PRECISION -- three numbers are published, never one:
+PRECISION -- three numbers are published, never one, and the headline is the one we
+can defend finding by finding:
 
+    precision_confirmed    = TP_unique / (TP_unique + FP_confirmed)   <- headline
     precision              = TP_unique / (TP_unique + FP)
     precision_conservative = TP_unique / (TP_unique + FP + ambiguous)
-    precision_confirmed    = TP_unique / (TP_unique + FP_confirmed)
 
-where *ambiguous* is the union of the three ``location-match, ...`` buckets and
-*FP_confirmed* excludes false positives on routes no inventory describes. The
-first is the friendly reading (a right-place-wrong-label finding still put a human
-on the right endpoint), the second is the hostile one, the third is the one we can
-defend route by route. Publishing all three means the choice of policy is the
-reader's, not ours.
+*FP_confirmed* counts only findings the inventory contradicts: a route it declares
+safe, or one it describes and no planted flaw of that shape sits on. A finding on a
+path we serve but never declared (a client-side SPA route, say) is **not**
+confirmable -- the inventory's silence is our gap, not the tool's error -- so it is
+reported as ``unknown-route`` and stays out of the headline denominator. *ambiguous*
+is the union of the three ``location-match, ...`` buckets. ``out-of-catalog``
+findings appear in none of the three. All three are published so the choice of
+policy is the reader's, not ours; only the strictest claim is made in the headline.
 """
 
 from __future__ import annotations
@@ -112,6 +139,9 @@ __all__ = [
     "VERDICT_PARAM_MISMATCH",
     "VERDICT_CLASS_MISMATCH",
     "VERDICT_CLASS_UNKNOWN",
+    "VERDICT_OUT_OF_CATALOG",
+    "catalog_cwes",
+    "load_out_of_catalog_reasons",
 ]
 
 VERDICT_TP = "true-positive"
@@ -120,6 +150,8 @@ VERDICT_DUP = "duplicate"
 VERDICT_PARAM_MISMATCH = "location-match, param-mismatch"
 VERDICT_CLASS_MISMATCH = "location-match, class-mismatch"
 VERDICT_CLASS_UNKNOWN = "location-match, class-unknown"
+# Real finding, no ground truth for it anywhere in the corpus: unscoreable.
+VERDICT_OUT_OF_CATALOG = "out-of-catalog"
 
 AMBIGUOUS_VERDICTS = (VERDICT_PARAM_MISMATCH, VERDICT_CLASS_MISMATCH, VERDICT_CLASS_UNKNOWN)
 
@@ -217,6 +249,40 @@ def load_findings(path: Path | str) -> tuple[Finding, ...]:
     return tuple(finding_from_dict(d) for d in data if isinstance(d, Mapping))
 
 
+def catalog_cwes(catalog: Catalog) -> set[int]:
+    """Every CWE this corpus can possibly plant.
+
+    Derived from the taxonomy (plus any per-entry override), never from a
+    hand-maintained list, so it cannot drift away from the ground truth.
+    """
+    out: set[int] = set()
+    for spec in catalog.taxonomy.classes.values():
+        out.update(int(c) for c in (spec.get("cwe") or ()))
+    for v in catalog.vulns:
+        out.update(v.cwe)
+    return out
+
+
+def load_out_of_catalog_reasons(root: Path | str | None) -> dict[int, str]:
+    """Why each unplanted CWE is unplanted, from ``runners/_lib/cwe_map.yaml``.
+
+    Read-only and entirely optional: the verdict is decided from the taxonomy, and
+    this only supplies the sentence a reader of the report needs.
+    """
+    if root is None:
+        return {}
+    path = Path(root) / "runners" / "_lib" / "cwe_map.yaml"
+    if not path.is_file():
+        return {}
+    try:
+        import yaml
+
+        data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    except Exception:  # pragma: no cover - a malformed runner table must not stop scoring
+        return {}
+    return {int(k): str(v) for k, v in (data.get("out_of_catalog") or {}).items()}
+
+
 def _cwe_families(catalog: Catalog) -> dict[int, set[str]]:
     """CWE -> taxonomy families, derived from taxonomy.yaml (no hand-written map)."""
     out: dict[int, set[str]] = {}
@@ -281,6 +347,11 @@ def _fp_basis(
         entry = inv.match_path(f.method, f.path, host=f.host)
         if entry is None:
             continue
+        if "{" in entry.route_key:
+            # The row that matched is a pattern -- a SPA fallback such as
+            # /{full_path} accepts every path, including those that render a 404 --
+            # so it says nothing about this particular path and confirms nothing.
+            return "inventory-pattern-route", entry.status
         if entry.status == STATUS_SAFE:
             return "inventory-safe-route", entry.status
         return "inventory-known-route", entry.status
@@ -312,6 +383,7 @@ def classify_findings(
     app_map: Mapping[str, str] | None = None,
     apps: Sequence[str] | None = None,
     inventories: Mapping[str, RouteInventory] | None = None,
+    out_of_catalog_reasons: Mapping[int, str] | None = None,
 ) -> dict[str, Any]:
     """Classify every finding and compute precision. See the module docstring.
 
@@ -320,13 +392,32 @@ def classify_findings(
     triggered but never reported, and which it reported without ever triggering).
     """
     cwe_fams = _cwe_families(catalog)
+    known_cwes = catalog_cwes(catalog)
+    reasons = dict(out_of_catalog_reasons or {})
     in_scope = [v for v in catalog.vulns if not apps or v.app in set(apps)]
+    scope_apps = sorted({v.app for v in in_scope})
+    # What the scanned apps could actually contradict.
+    scoped_cwes = {c for v in in_scope for c in v.cwe}
 
     claimed: set[tuple[str | None, str]] = set()
     rows: list[dict[str, Any]] = []
 
+    out_of_catalog_hits: dict[int, dict[str, Any]] = {}
+
     for f in findings:
         app = _resolve_app(f, app_map)
+        # Is there any ground truth in this run that could confirm or contradict the
+        # class this finding claims? Evaluated below, but only once we know the
+        # finding did not actually match a planted flaw: a real detection is never
+        # discarded as unscoreable.
+        unplanted = [c for c in f.cwe if c not in known_cwes]
+        unscoped = [c for c in f.cwe if c not in scoped_cwes]
+        unscoreable_kind: str | None = None
+        if f.cwe and len(unplanted) == len(f.cwe):
+            unscoreable_kind = "unplanted-class"
+        elif f.cwe and len(unscoped) == len(f.cwe):
+            unscoreable_kind = "unplanted-in-scope"
+
         inv = (inventories or {}).get(app) if app else None
         resolved_host = inv.resolve_host(f.host) if inv else None
         if inv is None:
@@ -356,6 +447,33 @@ def classify_findings(
                 best = (rank, verdict, reason, v)
 
         _, verdict, reason, matched = best
+
+        if verdict != VERDICT_TP and unscoreable_kind is not None:
+            first = (unplanted or unscoped)[0]
+            if unscoreable_kind == "unplanted-class":
+                why = reasons.get(first) or (
+                    f"CWE {first} is planted by no class in the taxonomy")
+            else:
+                why = (
+                    f"CWE {first} is planted by a taxonomy class, but nothing in "
+                    f"{', '.join(scope_apps) or 'the scanned apps'} carries it, so no "
+                    "ground truth here can confirm or contradict this finding")
+            for cwe in (unplanted or unscoped):
+                hit = out_of_catalog_hits.setdefault(cwe, {"count": 0, "reason": why})
+                hit["count"] += 1
+            rows.append({
+                "tool": f.tool, "url": f.url, "method": f.method, "param": f.param,
+                "cwe": list(f.cwe), "name": f.name, "severity": f.severity,
+                "confidence": f.confidence, "app": app,
+                "host": f.host, "host_observed": f.host_observed,
+                "host_match": host_match,
+                "verdict": VERDICT_OUT_OF_CATALOG, "matched_vuln": None,
+                "out_of_catalog_kind": unscoreable_kind,
+                "reason": f"unscoreable, not wrong: {why}",
+                "fp_basis": None, "inventory_status": None,
+            })
+            continue
+
         fp_basis: str | None = None
         inventory_status: str | None = None
         if verdict == VERDICT_FP:
@@ -399,6 +517,7 @@ def classify_findings(
     tp = by_verdict.get(VERDICT_TP, 0)
     fp = by_verdict.get(VERDICT_FP, 0)
     dup = by_verdict.get(VERDICT_DUP, 0)
+    out_of_catalog = by_verdict.get(VERDICT_OUT_OF_CATALOG, 0)
     ambiguous = sum(by_verdict.get(v, 0) for v in AMBIGUOUS_VERDICTS)
 
     def ratio(num: int, den: int) -> float | None:
@@ -414,6 +533,8 @@ def classify_findings(
             "reported_not_triggered": sorted(set(reported) - triggered),
         }
 
+    # Confirmable means the inventory contradicts the finding at that exact path:
+    # a literal row we declared. A pattern row, or no row at all, is our gap.
     confirmed_fp = sum(
         1 for r in rows
         if r["verdict"] == VERDICT_FP
@@ -429,16 +550,29 @@ def classify_findings(
         "false_positives": fp,
         "false_positives_confirmed": confirmed_fp,
         "false_positives_unknown_route": unknown_fp,
+        "out_of_catalog": out_of_catalog,
+        "out_of_catalog_by_kind": {
+            kind: sum(1 for r in rows if r.get("out_of_catalog_kind") == kind)
+            for kind in ("unplanted-class", "unplanted-in-scope")
+        },
+        # The reason travels per CWE: "no class plants it" and "planted, but not in
+        # the apps this run scanned" are different statements about the corpus.
+        "out_of_catalog_by_cwe": {
+            str(cwe): dict(hit) for cwe, hit in sorted(out_of_catalog_hits.items())
+        },
         "duplicates": dup,
         "ambiguous": ambiguous,
         "ambiguous_breakdown": {v: by_verdict.get(v, 0) for v in AMBIGUOUS_VERDICTS},
+        # The headline is the strictest claim we can defend finding by finding.
+        "precision_basis": "precision_confirmed",
+        "precision_confirmed": ratio(tp, tp + confirmed_fp) if inventories else None,
         "precision": ratio(tp, tp + fp),
         "precision_conservative": ratio(tp, tp + fp + ambiguous),
-        "precision_confirmed": ratio(tp, tp + confirmed_fp) if inventories else None,
         "duplicate_ratio": ratio(dup, len(rows)),
         "vulns_reported": reported,
         **cross,
         "false_positive_list": [r for r in rows if r["verdict"] == VERDICT_FP],
+        "out_of_catalog_list": [r for r in rows if r["verdict"] == VERDICT_OUT_OF_CATALOG],
         "ambiguous_list": [r for r in rows if r["verdict"] in AMBIGUOUS_VERDICTS],
         "findings": rows,
     }

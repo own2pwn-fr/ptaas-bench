@@ -219,7 +219,7 @@ def test_score_document_with_crawl_and_weak_attribution_matches_the_schema(make_
     )
     schema = json.loads((REPO_ROOT / "results" / "schema" / "score.schema.json").read_text())
     assert sorted(e.message for e in Draft202012Validator(schema).iter_errors(doc)) == []
-    assert doc["schema_version"] == "1.1.0"
+    assert doc["schema_version"] == "1.2.0"
     assert doc["low_confidence_triggers"]["count"] == 1
     assert len(doc["low_confidence_triggers"]["unattributed_callbacks"]) == 1
 
