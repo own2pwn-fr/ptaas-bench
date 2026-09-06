@@ -167,6 +167,20 @@ def inspect_apps(docker: Any, apps: list[AppSpec]) -> dict[str, AppTopology]:
     return {app.key: inspect_app(docker, app) for app in apps}
 
 
+def address_owner(topologies: dict[str, AppTopology]) -> dict[str, str]:
+    """address -> the application that answers on it.
+
+    The map an out-of-band callback is resolved through: the sinkhole sees a source
+    address and nothing else, and inferring the application from the octets is wrong
+    for every dual-homed target.
+    """
+    owners: dict[str, str] = {}
+    for app, topology in topologies.items():
+        for address in topology.addresses:
+            owners.setdefault(address, app)
+    return owners
+
+
 def address_payload(topologies: dict[str, AppTopology]) -> dict[str, Any]:
     """The map as sent to the collector with ``POST /v1/runs``.
 

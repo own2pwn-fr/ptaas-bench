@@ -75,6 +75,14 @@ class ZapDriver(BaseDriver):
             )
         return invocations
 
+    def performs_active_scanning(self, ctx, invocations):
+        # The baseline profile crawls and runs the passive rules; it never sends an
+        # attack. Its exploitation score is structurally zero and must not be read as
+        # a statement about ZAP.
+        if ctx.profile == "baseline":
+            return False, "baseline profile: spider and passive rules only, no activeScan job"
+        return True, "activeScan job present"
+
     def drives_a_browser(self, ctx, invocations):
         # Every plan includes spiderAjax with runOnlyIfModern false, so the browser
         # runs on every profile, baseline included.

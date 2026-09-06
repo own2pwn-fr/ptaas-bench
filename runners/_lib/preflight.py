@@ -64,6 +64,7 @@ from typing import Any
 import yaml
 
 from .config import REPO_ROOT, AppSpec, BenchConfig
+from .config import expand_vars as _expand
 
 log = logging.getLogger("bench.runners.preflight")
 
@@ -181,11 +182,18 @@ def check_live_credentials(
 
     doc, detail = emit_credentials(docker, app)
     if doc is None:
+        # Not fatal, and deliberately so: the login itself is the backstop. Every
+        # app with credentials has a session established and verified before the run
+        # opens, and a file from the wrong seed fails that verification, which IS
+        # fatal. This check is the earlier, friendlier version of the same signal.
         return Check(
             name,
             False,
-            f"{app.reset_command} --emit-credentials did not answer ({detail}); the "
-            "committed file is being trusted, and it belongs to one DEPLOY_SEED",
+            f"{app.reset_command} --emit-credentials did not answer with a users block "
+            f"({detail}). The committed file is being trusted and it belongs to one "
+            "DEPLOY_SEED; if it is the wrong one, the session verification before the "
+            "run will fail and stop the run there instead. Note that a target which "
+            "does not implement the flag has just been reset by this call.",
             indeterminate=True,
         )
 
@@ -475,14 +483,29 @@ def check_internal_name_is_platform_side(
         for key, attachment in (spec.get("networks") or {}).items():
             network = resolved.get(key, key)
             for alias in [service, *((attachment or {}).get("aliases") or [])]:
-                names.setdefault(str(alias), set()).add(network)
+                # `docker compose config` expands ${VAR:-default} already, but this
+                # check is now fatal, so it does not rest on that: an unexpanded
+                # literal would fail it on a false premise.
+                names.setdefault(str(_expand(alias)), set()).add(network)
         per_service[service] = names
 
     host = app.internal_host
     owner = next((svc for svc, names in per_service.items() if host in names), None)
     if owner is None:
+        known = sorted({alias for names in per_service.values() for alias in names})
+        # Fatal, not a warning. It means the name the harness connects by is not a
+        # name this application answers to: either a typo in apps.yaml or an alias
+        # the target renamed. Either way the check cannot verify the one property it
+        # exists for, and the failure mode downstream -- our traffic arriving over
+        # the tool's network, or not arriving at all -- is silent.
         return Check(
-            name, True, f"{host!r} is not an alias of any service of this app", indeterminate=True
+            name,
+            False,
+            f"internal_url names {host!r}, which is not an alias of any service of this "
+            f"app. {app.services} answer to {known}. A name that does not resolve to "
+            "this application cannot be checked for which network it arrives over, and "
+            "the harness's own traffic then either misses the target or is credited to "
+            "the tool.",
         )
 
     nets = per_service[owner].get(host, set())

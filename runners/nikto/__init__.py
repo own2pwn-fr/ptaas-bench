@@ -84,6 +84,12 @@ class NiktoDriver(BaseDriver):
             )
         return invocations
 
+    def performs_active_scanning(self, ctx, invocations):
+        # It requests known-interesting paths, which is attack traffic in the sense
+        # that matters here, but it never fuzzes a parameter. The distinction belongs
+        # in the record next to its score.
+        return True, "requests known-interesting paths; does not fuzz parameters"
+
     def _auth_args(self, ctx: RunContext, app: Any) -> list[str]:
         creds = ctx.creds_for(app.key)
         if creds is not None and creds.kind == "basic":

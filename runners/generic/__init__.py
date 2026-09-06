@@ -92,6 +92,11 @@ class GenericDriver(BaseDriver):
             )
         ]
 
+    def performs_active_scanning(self, ctx, invocations):
+        # We did not drive this tool and cannot claim what it did. The collector's
+        # event stream shows what actually reached the targets.
+        return True, "externally driven: mode not observable from here"
+
     def _wait(self, ctx: RunContext, watch: BudgetWatch) -> StopReason:
         sentinel = ctx.run_dir / SENTINEL
         while True:

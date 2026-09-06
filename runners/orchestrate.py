@@ -85,6 +85,7 @@ from runners._lib.preflight import PreflightError, js_dependent_entries, preflig
 from runners._lib.reset import ResetError, TargetResetter, reset_targets
 from runners._lib.topology import (
     AppTopology,
+    address_owner,
     address_payload,
     duplicate_addresses,
     inspect_apps,
@@ -196,6 +197,7 @@ class Orchestrator:
         self.topology: dict[str, AppTopology] = {}
         self.preflight_report: Any = None
         self.browser: dict[str, Any] = {}
+        self.scan_mode: dict[str, Any] = {}
         # The target owns its address: the base URL comes from the file the target
         # writes at seed time, because a hostname derived from DEPLOY_SEED is correct
         # for exactly one deployment and silently wrong for the next.
@@ -372,7 +374,14 @@ class Orchestrator:
         try:
             # Planned once here so the record can state what the run was capable of
             # before it starts; BaseDriver.run plans again, which is cheap and pure.
-            self.browser = self._browser_capability(ctx, self.driver.plan(ctx))
+            planned = self.driver.plan(ctx)
+            self.browser = self._browser_capability(ctx, planned)
+            active, active_reason = self.driver.performs_active_scanning(ctx, planned)
+            self.scan_mode = {
+                "active": active,
+                "reason": active_reason,
+                "mode": "active" if active else "passive-only",
+            }
             results = self.driver.run(ctx)
         except KeyboardInterrupt:
             run_error = "interrupted by the operator"
@@ -385,6 +394,20 @@ class Orchestrator:
             #    next tool's events land in this one's bucket.
             closed = self.collector.close_run(run.run_id)
             requests_observed = self.collector.count_http_requests(run.run_id)
+            # Then export the stream. The events are the ground truth, and the
+            # scorer cannot fetch them itself: the collector answers only to its own
+            # loopback, which is the property that keeps the answer key away from the
+            # tool. A run directory without them cannot be re-scored by anyone.
+            export = self.collector.export_events(
+                run.run_id,
+                ctx.run_dir / "events.jsonl",
+                in_scope=self._scope_filter(),
+                out_of_scope_path=ctx.run_dir / "events-out-of-scope.jsonl",
+            )
+            log.info(
+                "exported %d events (%d out of scope) to %s",
+                export["events"], export["out_of_scope"], ctx.run_dir / "events.jsonl",
+            )
 
         # 10. Reset again, and normalise. The second reset leaves the target clean for
         #    whoever runs next and proves the reset command is deterministic: a
@@ -395,6 +418,23 @@ class Orchestrator:
 
         # 11. Normalise, and keep the audit trail of what could not be mapped.
         normalised = self._normalise(ctx)
+
+        out_of_catalog: dict[str, Any] = {}
+        for finding in normalised.findings:
+            if finding.cwe is not None and finding.cwe in self.table.out_of_catalog:
+                entry = out_of_catalog.setdefault(
+                    str(finding.cwe),
+                    {"reason": self.table.out_of_catalog[finding.cwe], "findings": 0},
+                )
+                entry["findings"] += 1
+        unscoreable = sum(e["findings"] for e in out_of_catalog.values())
+        if unscoreable:
+            log.warning(
+                "%d of %d findings map to CWEs this corpus does not plant (%s). They are "
+                "unscoreable, not false positives; counting them as false positives "
+                "publishes a precision the tool did not earn.",
+                unscoreable, len(normalised.findings), ", ".join(f"CWE-{c}" for c in out_of_catalog),
+            )
 
         self.record = self._build_record(
             run_id=run.run_id,
@@ -410,6 +450,10 @@ class Orchestrator:
             normalised=normalised,
             run_error=run_error,
             preparation=preparation,
+            export=export,
+            out_of_catalog=out_of_catalog,
+            unscoreable_findings=unscoreable,
+            scoreable_findings=len(normalised.findings) - unscoreable,
         )
 
         # 12. Write the record, then score, then record the scoring outcome. In that
@@ -420,6 +464,8 @@ class Orchestrator:
         self._write_record(run_dir)
         score_status = self.record["score"]
 
+        for caveat in self.record.get("caveats") or []:
+            log.warning("CAVEAT: %s", caveat)
         log.info(
             "run %s: %d findings (%d unmapped), %d requests, stop=%s -> %s",
             run.run_id,
@@ -533,6 +579,36 @@ class Orchestrator:
             )
             log.info("%s: session established (%s)", app.key, sessions[app.key].detail)
         return sessions
+
+    def _scope_filter(self) -> Any:
+        """Decide whether an event belongs to this run.
+
+        The resolver is shared between every target, so an application that is not in
+        scope can emit a DNS lookup while a run is open and land it in the record. It
+        scores as an orphan callback rather than crediting anyone, but a published
+        run should not contain another application's background traffic as though
+        the tool caused it.
+
+        Two signals, because out-of-band events have no `app`: the declared target
+        list, and the address map -- which is exactly what that map is for.
+        """
+        in_scope_apps = {a.key for a in self.apps}
+        owners = address_owner(self.topology)
+
+        def keep(event: dict[str, Any]) -> bool:
+            app = event.get("app")
+            if app:
+                return str(app) in in_scope_apps
+            for key in ("source_ip", "client_ip", "src_ip"):
+                address = event.get(key)
+                if address:
+                    owner = owners.get(str(address))
+                    # An address we cannot attribute is kept: it may be the tool's own
+                    # callback, which is the single most valuable event in the stream.
+                    return owner is None or owner in in_scope_apps
+            return True
+
+        return keep
 
     def _internal_address(self, app: Any) -> str | None:
         """The address to reach a target on so our traffic is the platform's own.
@@ -728,6 +804,56 @@ class Orchestrator:
             out.append(token)
         return out
 
+    def _caveats(self, kw: dict[str, Any]) -> list[str]:
+        """Everything that makes this run's numbers a lower bound, in one list.
+
+        A reader comparing two columns has to be able to see, without reconstructing
+        the run, why one of them is not what the tool can do. Every entry here is a
+        condition under which a zero means something other than "the tool missed it".
+        """
+        out: list[str] = []
+        if self.scan_mode and not self.scan_mode.get("active"):
+            out.append(
+                f"PASSIVE ONLY ({self.scan_mode.get('reason')}). This run sent no attack "
+                "traffic, so its exploitation score is structurally zero and says nothing "
+                "about the tool. Not comparable with an active run."
+            )
+        if self.browser and not self.browser.get("declared"):
+            needs = sum((self.browser.get("catalog_entries_requiring_js") or {}).values())
+            if needs:
+                out.append(
+                    f"NO BROWSER ({self.browser.get('reason')}), and {needs} catalog "
+                    "entries in scope require JavaScript execution. Those are expected "
+                    "misses for this tool rather than evidence the class is undetectable."
+                )
+        if StopReason(kw["stop_reason"]).exhausted:
+            out.append(
+                "BUDGET EXHAUSTED: the tool was stopped before it finished, so its "
+                "findings are a lower bound."
+            )
+        for prep in kw.get("preparation") or []:
+            if not prep.ok:
+                out.append(
+                    f"PREPARATION FAILED ({prep.name}): the tool ran with whatever content "
+                    "its image shipped with, which is not the same run as a prepared one."
+                )
+        for app, session in (kw.get("sessions") or {}).items():
+            if not session.verified:
+                out.append(f"UNVERIFIED SESSION on {app}: this scan may be anonymous.")
+        if self.args.skip_reset:
+            out.append(
+                "RESET SKIPPED: stored findings in this run may have been planted by the "
+                "previous tool. Not publishable."
+            )
+        unscoreable = kw.get("unscoreable_findings") or 0
+        if unscoreable:
+            out.append(
+                f"{unscoreable} of {len(kw['normalised'].findings)} findings map to CWEs "
+                "this corpus deliberately does not plant (see normalisation.out_of_catalog). "
+                "They are unscoreable, not false positives."
+            )
+        return out
+
     def _build_record(self, **kw: Any) -> dict[str, Any]:
         results = kw["results"]
         stop_reasons = [r.stop_reason for r in results]
@@ -764,7 +890,20 @@ class Orchestrator:
             "duration_s": kw["duration_s"],
             "stop_reason": stop_reason,
             "error": kw.get("run_error"),
+            "scan_mode": self.scan_mode,
+            # Read this before reading any number below it.
+            "caveats": self._caveats({**kw, "stop_reason": stop_reason}),
             "requests_observed": kw["requests_observed"],
+            # The same figure the log line reports, in the record, broken down by the
+            # application that answered. Non-synthetic http_request events only.
+            "requests": {
+                "total": kw["requests_observed"],
+                "by_app": (kw.get("export") or {}).get("requests_by_app") or {},
+                "counted_by": (
+                    "collector http_request events for this run, excluding traffic the "
+                    "platform generated itself (classified by source address)"
+                ),
+            },
             "collector": {
                 "run_id": kw["closed"].run_id,
                 "started_at": kw["closed"].started_at,
@@ -792,6 +931,9 @@ class Orchestrator:
             # for each target and the state digest either side of the run. Everything
             # here is captured at run open because container addresses are reassigned
             # on restart and the reset path restarts containers.
+            # The map exactly as it was handed to the collector, under the name the
+            # scorer looks for, plus the richer per-service view beside it.
+            "addresses": address_payload(self.topology),
             "target_topology": {app: t.to_dict() for app, t in self.topology.items()},
             "address_map_accepted_by_collector": self.collector.addresses_accepted,
             "preparation": [p.to_dict() for p in kw.get("preparation") or []],
@@ -816,12 +958,22 @@ class Orchestrator:
                 {**r.to_dict(), "argv": self._redact(r.to_dict().get("argv") or [])}
                 for r in results
             ],
+            # The event stream, exported at close because the collector answers only
+            # to its own loopback and the scorer cannot fetch it.
+            "events": kw.get("export") or {"error": "not exported"},
             "normalisation": {
                 "cwe_map_version": self.table.version,
                 "findings": len(kw["normalised"].findings),
                 "unmapped": len(kw["normalised"].unmapped),
                 "findings_file": "findings.json",
                 "unmapped_file": "unmapped.json",
+                # Findings whose CWE is real but which this corpus deliberately does
+                # not plant. They can never match ground truth, so counting them as
+                # false positives publishes a precision the tool did not earn --
+                # ZAP's "CSP header not set" is the standing example.
+                "scoreable_findings": kw.get("scoreable_findings"),
+                "unscoreable_findings": kw.get("unscoreable_findings"),
+                "out_of_catalog": kw.get("out_of_catalog") or {},
             },
         }
 

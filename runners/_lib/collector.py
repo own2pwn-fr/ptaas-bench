@@ -9,8 +9,11 @@ findings get attributed to the wrong scanner.
 
 from __future__ import annotations
 
+import json
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 from .internal_http import Http, HttpError, Response
@@ -185,6 +188,88 @@ class CollectorClient:
         """
         run = self.active_run()
         return run.event_count if run else 0
+
+    def export_events(
+        self,
+        run_id: str,
+        path: Path,
+        *,
+        in_scope: Callable[[dict[str, Any]], bool] | None = None,
+        out_of_scope_path: Path | None = None,
+        page: int = 5000,
+    ) -> dict[str, Any]:
+        """Write the run's whole event stream to disk as JSONL.
+
+        The events ARE the ground truth: reach, exercise and trigger are all derived
+        from them, and a run directory without them cannot be re-scored by anyone who
+        does not have the collector in front of them. Since the collector answers
+        only to its own loopback -- correctly, because it holds the answer key -- the
+        scorer cannot fetch them itself, so the harness exports them at close through
+        the same exec transport it uses for the control plane.
+
+        ``in_scope`` partitions the stream. The resolver is shared, so a target that
+        is not in this run's scope can emit a DNS lookup while a run is open and land
+        it in the record; those belong in a separate file, not in a published run as
+        though the tool caused them.
+        """
+        path.parent.mkdir(parents=True, exist_ok=True)
+        seq = 0
+        kept = dropped = 0
+        by_type: dict[str, int] = {}
+        by_app: dict[str, int] = {}
+        requests_by_app: dict[str, int] = {}
+        out_handle = out_of_scope_path.open("w", encoding="utf-8") if out_of_scope_path else None
+        try:
+            with path.open("w", encoding="utf-8") as handle:
+                while True:
+                    res = self._call(
+                        "GET", f"/v1/runs/{run_id}/events?after_seq={seq}&limit={page}"
+                    )
+                    if not res.ok:
+                        log.error(
+                            "event export failed at seq %s (HTTP %s). The run directory is "
+                            "incomplete and the run cannot be re-scored from it.",
+                            seq, res.status,
+                        )
+                        break
+                    payload = res.json()
+                    events = payload.get("events") or []
+                    for event in events:
+                        if isinstance(event.get("seq"), int):
+                            seq = max(seq, event["seq"])
+                        line = json.dumps(event, sort_keys=True)
+                        if in_scope is not None and not in_scope(event):
+                            dropped += 1
+                            if out_handle is not None:
+                                out_handle.write(line + "\n")
+                            continue
+                        handle.write(line + "\n")
+                        kept += 1
+                        kind = str(event.get("type", "unknown"))
+                        by_type[kind] = by_type.get(kind, 0) + 1
+                        app = str(event.get("app") or "")
+                        if app:
+                            by_app[app] = by_app.get(app, 0) + 1
+                            if kind == "http_request" and not event.get("synthetic"):
+                                requests_by_app[app] = requests_by_app.get(app, 0) + 1
+                    next_seq = payload.get("next_seq")
+                    if next_seq:
+                        seq = max(seq, int(next_seq))
+                    if not events or len(events) < page:
+                        break
+        finally:
+            if out_handle is not None:
+                out_handle.close()
+        return {
+            "file": path.name,
+            "events": kept,
+            "by_type": by_type,
+            "by_app": by_app,
+            "requests_by_app": requests_by_app,
+            "out_of_scope": dropped,
+            "out_of_scope_file": out_of_scope_path.name if out_of_scope_path else None,
+            "last_seq": seq,
+        }
 
     def count_http_requests(self, run_id: str, *, page: int = 5000) -> int:
         """Exact number of non-synthetic http_request events seen for this run.

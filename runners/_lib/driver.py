@@ -238,6 +238,18 @@ class BaseDriver:
         """What the preparation fetched, in one line, for the run record."""
         return None
 
+    def performs_active_scanning(
+        self, ctx: RunContext, invocations: list[Invocation]
+    ) -> tuple[bool, str]:
+        """Whether this run sends attack traffic, or only observes responses.
+
+        A passive run cannot exploit anything, so its zero exploitation score says
+        nothing whatsoever about the tool -- and a passive run's results document
+        looks exactly like an active run's unless something says so. This is what
+        makes the two impossible to confuse when they are read months later.
+        """
+        return True, "sends attack traffic"
+
     def drives_a_browser(self, ctx: RunContext, invocations: list[Invocation]) -> tuple[bool, str]:
         """Whether this run will execute JavaScript in a real browser.
 

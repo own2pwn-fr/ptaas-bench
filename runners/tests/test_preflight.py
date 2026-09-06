@@ -551,8 +551,13 @@ def test_every_landed_target_connects_by_a_platform_side_name():
         "bench-public": {"name": "bench-public"},
         "bench-internal": {"name": "bench-internal"},
     }
+    from runners._lib.config import expand_vars
+
     for fragment in sorted((REPO_ROOT / "compose").glob("*.yml")):
-        doc = yaml.safe_load(fragment.read_text()) or {}
+        # Expanded, because that is what `docker compose config` hands the real
+        # check: an alias written as `web01.${ADMIN_SITE_DOMAIN:-calderwood.example}`
+        # is `web01.calderwood.example` by the time anything resolves it.
+        doc = expand_vars(yaml.safe_load(fragment.read_text()) or {})
         services.update(doc.get("services") or {})
         for key, spec in (doc.get("networks") or {}).items():
             networks.setdefault(key, spec or {"name": key})

@@ -72,14 +72,25 @@ class ConfigError(RuntimeError):
     pass
 
 
-def _expand(value: Any) -> Any:
-    """Expand ``${VAR}`` / ``${VAR:-default}`` from the environment inside strings."""
+def expand_vars(value: Any) -> Any:
+    """Expand ``${VAR}`` and ``${VAR:-default}``, recursively through containers.
+
+    apps.yaml documents several fields as overridable per deployment and writes them
+    in shell syntax, but YAML expands nothing: without this the literal
+    ``${COMPOSE_PROJECT_NAME:-platform-edge}`` reached ``docker compose -p``, matched
+    no project, and every control-plane call failed with the collector apparently
+    unreachable -- a configuration bug wearing the costume of a network one.
+
+    Recursive on purpose: the values that need expanding are nested inside the app,
+    tool and credentials mappings, so a string-only version silently stops expanding
+    everything except the handful of scalars a caller remembers to pass individually.
+    """
     if isinstance(value, str):
         return _VAR_RE.sub(lambda m: os.environ.get(m.group(1)) or (m.group(2) or ""), value)
     if isinstance(value, dict):
-        return {k: _expand(v) for k, v in value.items()}
+        return {k: expand_vars(v) for k, v in value.items()}
     if isinstance(value, list):
-        return [_expand(v) for v in value]
+        return [expand_vars(v) for v in value]
     return value
 
 
@@ -148,7 +159,7 @@ class Credentials:
 
     @classmethod
     def from_dict(cls, app: str, data: dict[str, Any]) -> Credentials:
-        data = _expand(dict(data))
+        data = expand_vars(dict(data))
         known = set(cls.__dataclass_fields__)  # type: ignore[attr-defined]
         unknown = set(data) - known - {"app"}
         if unknown:
@@ -167,7 +178,7 @@ class Credentials:
         internal name: the file states the customer-facing URL, which is the tool's
         route, not ours.
         """
-        doc = _expand(yaml.safe_load(path.read_text(encoding="utf-8")) or {})
+        doc = expand_vars(yaml.safe_load(path.read_text(encoding="utf-8")) or {})
         return cls.from_target_doc(doc, path, role=role, base_url_override=base_url_override)
 
     @classmethod
@@ -284,25 +295,6 @@ class Credentials:
         return body
 
 
-def _expand(value: object) -> object:
-    """Expand ``${VAR}`` and ``${VAR:-default}`` in a configuration string.
-
-    apps.yaml documents several fields as overridable per deployment and writes them
-    in shell syntax, but YAML does not expand anything: without this the literal
-    ``${COMPOSE_PROJECT_NAME:-platform-edge}`` was passed to ``docker compose -p``,
-    matched no project, and every control-plane call failed with the collector
-    apparently unreachable -- a configuration bug wearing the costume of a network one.
-    """
-    if not isinstance(value, str) or "${" not in value:
-        return value
-
-    def sub(match: "re.Match[str]") -> str:
-        name, default = match.group(1), match.group(2)
-        return os.environ.get(name) or (default if default is not None else "")
-
-    return re.sub(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}", sub, value)
-
-
 def _resolve(base: str, path: Any) -> str | None:
     if not path:
         return None
@@ -334,7 +326,7 @@ class TargetCredentialsFile:
 
     @classmethod
     def load(cls, path: Path) -> TargetCredentialsFile:
-        doc = _expand(yaml.safe_load(path.read_text(encoding="utf-8")) or {})
+        doc = expand_vars(yaml.safe_load(path.read_text(encoding="utf-8")) or {})
         if not isinstance(doc, dict):
             raise ConfigError(f"{path}: expected a mapping at the top level")
         users = doc.get("users") or []
@@ -439,7 +431,7 @@ class AppSpec:
 
     @classmethod
     def from_dict(cls, key: str, data: dict[str, Any]) -> AppSpec:
-        data = _expand(dict(data))
+        data = expand_vars(dict(data))
         known = set(cls.__dataclass_fields__)  # type: ignore[attr-defined]
         unknown = set(data) - known - {"key"}
         if unknown:
@@ -527,7 +519,7 @@ class ToolSpec:
 
     @classmethod
     def from_dict(cls, key: str, data: dict[str, Any]) -> ToolSpec:
-        data = _expand(dict(data))
+        data = expand_vars(dict(data))
         known = set(cls.__dataclass_fields__)  # type: ignore[attr-defined]
         unknown = set(data) - known - {"key"}
         if unknown:
@@ -582,11 +574,11 @@ class BenchConfig:
                 k: Credentials.from_dict(k, v or {}) for k, v in (creds_doc.get("apps") or {}).items()
             },
             compose_file=Path(compose_file) if compose_file else (REPO_ROOT / "docker-compose.yml"),
-            compose_project=_expand(platform.get("compose_project", "platform-edge")),
-            collector_service=_expand(platform.get("collector_service", "otel-collector")),
-            collector_url=_expand(platform.get("collector_url", "http://127.0.0.1:8900")),
-            platform_client_service=_expand(platform.get("platform_client_service", "resolver")),
-            network=_expand(platform.get("network", PUBLIC_NETWORK)),
+            compose_project=expand_vars(platform.get("compose_project", "platform-edge")),
+            collector_service=expand_vars(platform.get("collector_service", "otel-collector")),
+            collector_url=expand_vars(platform.get("collector_url", "http://127.0.0.1:8900")),
+            platform_client_service=expand_vars(platform.get("platform_client_service", "resolver")),
+            network=expand_vars(platform.get("network", PUBLIC_NETWORK)),
             results_dir=Path(platform.get("results_dir", REPO_ROOT / "results" / "runs")),
         )
 
