@@ -240,7 +240,14 @@ def _is_weak(ev: OobEvent) -> bool:
     publish every genuine match as second-rate. It travels to the report as
     information instead.
     """
-    marker = (ev.attribution or "").strip().lower()
+    # The resolver reports attribution as a structured object ({app, mode}); older
+    # streams and the test fixtures carry a bare string. Both are read, because a
+    # scorer that raises on one shape would have made every out-of-band callback
+    # unscoreable while looking like a crash rather than a contract disagreement.
+    raw = ev.attribution
+    if isinstance(raw, dict):
+        raw = raw.get("mode") or raw.get("kind") or ""
+    marker = (raw or "").strip().lower()
     return (
         ev.low_confidence
         or (ev.confidence or "").strip().lower() in _WEAK_CONFIDENCE
