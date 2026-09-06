@@ -840,6 +840,34 @@ def score_run(
                 "without updating oracle.signal. Nobody can be credited for it."
             ),
         })
+    mode = record["scan_mode"] or {}
+    if not mode:
+        # Not inferred from the profile name: "baseline" means passive for one tool
+        # and nothing for the next. Unknown is stated as unknown.
+        warnings.append({
+            "code": "scan-mode-unknown",
+            "vuln_id": None,
+            "message": (
+                "the run record does not say whether the tool was permitted to attack, "
+                "so a trigger recall of 0% here cannot be read as a capability result: "
+                "it may mean the tool never tried."
+            ),
+        })
+    if mode and (mode.get("active") is False or (mode.get("mode") or "").lower() in
+                 {"passive", "baseline", "spider", "crawl"}):
+        warnings.append({
+            "code": "passive-scan-mode",
+            "vuln_id": None,
+            "message": (
+                f"the run was {mode.get('mode') or 'passive'}"
+                + (f" ({mode['reason']})" if mode.get("reason") else "")
+                + ": the tool was never permitted to attack, so trigger recall is "
+                "structurally zero and exercise recall is bounded by whatever the "
+                "crawler happened to submit. These are not capability results and "
+                "must not be compared with an active run."
+            ),
+        })
+
     if scope == "catalog" and len(catalog_apps) > 1:
         warnings.append({
             "code": "unscoped-run",
@@ -986,8 +1014,15 @@ def score_run(
             "container_map_available": record["container_map_available"],
             "containers": record["containers"],
             "images": record["images"],
+            "tool_image": record["tool_image"],
+            "tool_image_digest": record["tool_image_digest"],
             "reset_digests": record["reset_digests"],
             "reset_consistent": record["reset_consistent"],
+            # A reader who meets `trigger: 0.0%` has to learn on the same page
+            # whether the tool failed or was never allowed to attack.
+            "scan_mode": record["scan_mode"],
+            "caveats": record["caveats"],
+            "requests": record["requests"],
         },
         "scope": {
             "apps": list(scope_apps),

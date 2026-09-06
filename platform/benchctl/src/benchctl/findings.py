@@ -93,6 +93,8 @@ MATCHING RULES, in order:
      * ``inventory-known-route``  the route is in the inventory but nothing planted
        matches the finding's shape (wrong method, say). Also confirmed: we have
        ground truth for that location.
+     * ``finding-without-cwe``   the finding claims no class at all, so there is
+       nothing to contradict. Never confirmable.
      * ``inventory-pattern-route`` the only row that matched is a pattern (a SPA
        fallback such as ``/{full_path}`` accepts every path, 404s included), so it
        confirms nothing about this particular path. Not confirmable.
@@ -295,7 +297,17 @@ def _cwe_families(catalog: Catalog) -> dict[int, set[str]]:
     return out
 
 
-def _resolve_app(f: Finding, app_map: Mapping[str, str] | None) -> str | None:
+def _resolve_app(
+    f: Finding, app_map: Mapping[str, str] | None, default_app: str | None = None
+) -> str | None:
+    """Which target a finding is about: declared, mapped, or the only one scanned.
+
+    ``default_app`` is used when the run scanned exactly one target and nothing else
+    resolves the URL's authority -- a finding produced by a single-target run is
+    about that target. Without it, a hostname generated per deployment (``press01``)
+    matches no catalog or inventory name and every correct detection is stranded as
+    unmatched.
+    """
     if f.app:
         return f.app
     auth = f.authority
@@ -307,8 +319,9 @@ def _resolve_app(f: Finding, app_map: Mapping[str, str] | None) -> str | None:
             return app_map[host]
     if auth:
         host = auth.split(":", 1)[0]
-        return None if host in {"localhost", "127.0.0.1"} else host
-    return None
+        if host not in {"localhost", "127.0.0.1"}:
+            return default_app or host
+    return default_app
 
 
 def _judge(f: Finding, v: Vuln, cwe_fams: Mapping[int, set[str]]) -> tuple[str, str]:
@@ -337,6 +350,12 @@ def _fp_basis(
     inventories: Mapping[str, RouteInventory] | None,
 ) -> tuple[str, str | None]:
     """Why this non-matching finding is a false positive, and how firmly."""
+    if not f.cwe:
+        # A finding with no CWE makes no class claim we can check, and many of them
+        # are not vulnerability claims at all -- ZAP's "Modern Web Application" is a
+        # fingerprinting note. Confirming those as false positives published a
+        # passive baseline at 0% precision whose only "errors" were informational.
+        return "finding-without-cwe", None
     if not inventories:
         return "no-inventory", None
     candidates = (
@@ -404,8 +423,11 @@ def classify_findings(
 
     out_of_catalog_hits: dict[int, dict[str, Any]] = {}
 
+    # A single-target run leaves no ambiguity about which app a finding is about.
+    default_app = scope_apps[0] if len(scope_apps) == 1 else None
+
     for f in findings:
-        app = _resolve_app(f, app_map)
+        app = _resolve_app(f, app_map, default_app)
         # Is there any ground truth in this run that could confirm or contradict the
         # class this finding claims? Evaluated below, but only once we know the
         # finding did not actually match a planted flaw: a real detection is never

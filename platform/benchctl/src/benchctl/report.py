@@ -49,6 +49,7 @@ __all__ = [
 ]
 
 _AXES = ("reach", "exercise", "trigger")
+_PASSIVE_MODES = {"passive", "baseline", "spider", "crawl"}
 _COVERAGE_KEYS = ("surface", "planted_routes", "safe_routes")
 _DASH = "—"
 
@@ -71,6 +72,56 @@ def tool_name(doc: Mapping[str, Any]) -> str:
 # --------------------------------------------------------------------------- #
 # helpers
 # --------------------------------------------------------------------------- #
+
+def scan_mode_label(doc: Mapping[str, Any]) -> str:
+    mode = (doc.get("run") or {}).get("scan_mode") or {}
+    name = (mode.get("mode") or ("active" if mode.get("active") else None))
+    return str(name) if name else _DASH
+
+
+def is_passive(doc: Mapping[str, Any]) -> bool:
+    mode = (doc.get("run") or {}).get("scan_mode") or {}
+    if mode.get("active") is False:
+        return True
+    return str(mode.get("mode") or "").lower() in _PASSIVE_MODES
+
+
+def _conditions(docs: Sequence[Mapping[str, Any]]) -> list[tuple[str, str, list[str]]]:
+    """(tool, mode, lines) for every run that needs a word before its numbers.
+
+    A reader who meets `trigger: 0.0%` has to learn on the same page whether the
+    tool failed or was never allowed to attack. That cannot live in a footnote:
+    a passive baseline read as a capability result is the single easiest way to
+    publish a false conclusion from correct numbers.
+    """
+    out = []
+    for doc in docs:
+        run = doc.get("run") or {}
+        lines = list(run.get("caveats") or [])
+        mode = run.get("scan_mode") or {}
+        if is_passive(doc):
+            lines.insert(0, (
+                f"PASSIVE RUN ({scan_mode_label(doc)})"
+                + (f" — {mode['reason']}" if mode.get("reason") else "")
+                + ". The tool was never permitted to attack, so its trigger recall is "
+                "structurally zero and its exercise recall is bounded by whatever the "
+                "crawler submitted. Not comparable with an active run."))
+        elif mode.get("active"):
+            reason = f" ({mode['reason']})" if mode.get("reason") else ""
+            lines.insert(0, f"Active run{reason}.")
+        else:
+            lines.insert(0, (
+                "Scan mode not recorded for this run: whether the tool was permitted "
+                "to attack is unknown, so a trigger recall of 0% here may mean it "
+                "never tried."))
+        requests = run.get("requests") or {}
+        if requests.get("total"):
+            lines.append(f"{requests['total']:,} requests observed"
+                         + (f" — {requests['counted_by']}" if requests.get("counted_by") else ""))
+        if lines:
+            out.append((tool_name(doc), scan_mode_label(doc), lines))
+    return out
+
 
 def _cell(metric: Mapping[str, Any] | None, axis: str) -> tuple[float | None, int, int]:
     if not metric:
@@ -155,7 +206,7 @@ def _md_table(header: Sequence[str], rows: Sequence[Sequence[str]]) -> str:
 # --------------------------------------------------------------------------- #
 
 def _summary_rows(docs: Sequence[Mapping[str, Any]]) -> tuple[list[str], list[list[str]]]:
-    header = ["tool", "scope", "vulns", "reach", "exercise", "trigger", "trigger +weak oob",
+    header = ["tool", "mode", "scope", "vulns", "reach", "exercise", "trigger", "trigger +weak oob",
               "surface crawl", "precision (confirmed)", "FP confirmed", "outside corpus"]
     rows = []
     for doc in docs:
@@ -169,6 +220,7 @@ def _summary_rows(docs: Sequence[Mapping[str, Any]]) -> tuple[list[str], list[li
         scope = _node(doc, "scope", "apps") or (doc.get("run") or {}).get("targets") or []
         rows.append([
             tool_name(doc),
+            scan_mode_label(doc),
             ", ".join(scope) if scope else _DASH,
             str((doc.get("catalog") or {}).get("vulns_in_scope", overall.get("vulns", 0))),
             _fmt(overall, "reach"),
@@ -416,6 +468,11 @@ def markdown_report(docs: Sequence[Mapping[str, Any]]) -> str:
         f"`{_DASH}` means no planted vulnerability in that bucket."
     )
     parts.append("")
+    for tool, mode, lines in _conditions(docs):
+        parts.append(f"> **{tool} — {mode} run**")
+        for line in lines:
+            parts.append(f">  · {line}")
+        parts.append("")
     for _anchor, title, header, rows in _sections(docs):
         head, _, legend = title.partition("\n")
         parts.append(f"## {head}")
@@ -531,6 +588,10 @@ td.tool, th.tool { font-weight: 600; white-space: nowrap; }
 .good { color: var(--good); }
 .bad { color: var(--bad); }
 footer { margin-top: 3rem; color: var(--muted); font-size: .78rem; }
+.note { border: 1px solid var(--line); border-left: 4px solid var(--accent);
+  border-radius: 6px; padding: .55rem .8rem; margin: .6rem 0; font-size: .85rem; }
+.note.passive { border-left-color: var(--warn); }
+.note ul { margin: .35rem 0 0; padding-left: 1.1rem; }
 ul.warnings { font-size: .82rem; color: var(--muted); padding-left: 1.1rem; }
 """
 
@@ -576,6 +637,12 @@ def html_report(docs: Sequence[Mapping[str, Any]]) -> str:
         f"generated {html.escape(generated)} · cells show <code>recall% (hit/applicable)</code>; "
         "<span class=\"na\">—</span> means no planted vulnerability in that bucket.</p>",
     ]
+    for tool, mode, lines in _conditions(docs):
+        classes = "note passive" if mode in _PASSIVE_MODES else "note"
+        body.append(f'<div class="{classes}"><strong>{html.escape(tool)} — '
+                    f"{html.escape(mode)} run</strong><ul>"
+                    + "".join(f"<li>{html.escape(line)}</li>" for line in lines)
+                    + "</ul></div>")
     for _anchor, title, header, rows in _sections(docs):
         head, _, legend = title.partition("\n")
         body.append(f"<h2>{html.escape(head)}</h2>")

@@ -124,6 +124,33 @@
                   "string",
                   "null"
                 ]
+              },
+              "services": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "service": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "container_id": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "image_digest": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    }
+                  }
+                },
+                "description": "One app is several containers on several networks; the per-service detail is what makes an address resolve and an image auditable."
               }
             }
           }
@@ -158,6 +185,12 @@
                   "boolean",
                   "null"
                 ]
+              },
+              "ok": {
+                "type": [
+                  "boolean",
+                  "null"
+                ]
               }
             }
           }
@@ -168,6 +201,80 @@
             "null"
           ],
           "description": "False when any target failed to come back to its seeded state, which invalidates the comparability of whatever ran next. Null when no digest was reported."
+        },
+        "scan_mode": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "description": "Whether the tool was permitted to attack. `trigger: 0%` from a passive run means the tool was never allowed to try, not that it failed; the two must never be compared. Surfaced at the top of every rendered report for that reason.",
+          "properties": {
+            "mode": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "active": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "reason": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        },
+        "caveats": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Statements the harness attached to this run that a reader must see before the numbers."
+        },
+        "requests": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "description": "How much traffic the tool actually generated, as counted by the collector.",
+          "properties": {
+            "total": {
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "by_app": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "integer"
+              }
+            },
+            "counted_by": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        },
+        "tool_image": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tool_image_digest": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The image of the tool under test, kept apart from the target images in `images`."
         }
       }
     },
@@ -387,7 +494,9 @@
               "reset-digest-mismatch",
               "incomplete-run-record",
               "unscoped-run",
-              "scope-derived-from-events"
+              "scope-derived-from-events",
+              "passive-scan-mode",
+              "scan-mode-unknown"
             ]
           },
           "vuln_id": {
@@ -969,11 +1078,12 @@
             "inventory-safe-route",
             "inventory-known-route",
             "inventory-pattern-route",
+            "finding-without-cwe",
             "unknown-route",
             "no-inventory",
             null
           ],
-          "description": "Why a false positive is a false positive, so the verdict can be contested per finding. Only `inventory-safe-route` and `inventory-known-route` are confirmable: they name a literal row we declared. `inventory-pattern-route` means the only row that matched is a pattern (a SPA fallback such as /{full_path} accepts every path, 404s included) and confirms nothing about this path; `unknown-route` means we never declared it at all \u2014 our gap, not the tool's error."
+          "description": "Why a false positive is a false positive, so the verdict can be contested per finding. Only `inventory-safe-route` and `inventory-known-route` are confirmable: they name a literal row we declared. `inventory-pattern-route` means the only row that matched is a pattern (a SPA fallback such as /{full_path} accepts every path, 404s included) and confirms nothing about this path; `unknown-route` means we never declared it at all \u2014 our gap, not the tool's error. `finding-without-cwe` means the finding claims no class at all \u2014 many such alerts are informational notes rather than vulnerability claims \u2014 so there is nothing to contradict and it is never confirmable."
         },
         "inventory_status": {
           "type": [

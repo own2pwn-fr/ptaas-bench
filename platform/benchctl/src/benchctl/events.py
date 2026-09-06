@@ -60,6 +60,7 @@ __all__ = [
     "SIGNAL_EVENT_TYPES",
     "normalize_run_record",
     "address_index",
+    "host_app_index",
     "Param",
     "Event",
     "HttpRequestEvent",
@@ -213,7 +214,10 @@ class EventStream:
 # Where the orchestrator's container map may live on the run record. Several
 # spellings are accepted because the collector and the orchestrator ship
 # separately; a scorer that breaks when one of them is upgraded first is useless.
-_CONTAINER_MAP_KEYS = ("containers", "container_map", "target_containers", "targets_map")
+# `addresses` and `target_topology` are what the harness actually writes; the rest
+# are older spellings kept so an archived run stays re-scorable.
+_CONTAINER_MAP_KEYS = ("addresses", "target_topology", "containers", "container_map",
+                       "target_containers", "targets_map")
 _IMAGE_MAP_KEYS = ("images", "image_digests")
 _RESET_MAP_KEYS = ("reset", "reset_digests", "state_digests")
 
@@ -252,12 +256,37 @@ def normalize_run_record(meta: Mapping[str, Any] | None) -> dict[str, Any]:
     for app, entry in raw_map.items():
         if not isinstance(entry, Mapping):
             continue
-        addresses = entry.get("addresses") or entry.get("ips") or []
+        # An app is several containers on several networks, so an address list is
+        # flattened from every service and every network it is attached to. The
+        # per-service detail is kept: which image was actually running is provenance,
+        # and a callback's source address must resolve to the app whatever service
+        # inside it made the call.
+        services = [x for x in (entry.get("services") or []) if isinstance(x, Mapping)]
+        addresses: list[str] = [str(a) for a in (entry.get("addresses") or entry.get("ips") or [])]
+        for service in services:
+            for address in service.get("addresses") or ():
+                if isinstance(address, Mapping):
+                    ip = address.get("ip") or address.get("address")
+                    if ip:
+                        addresses.append(str(ip))
+                elif address:
+                    addresses.append(str(address))
         containers[str(app)] = {
-            "service": _as_str(entry.get("service")),
-            "container_id": _as_str(entry.get("container_id") or entry.get("id")),
-            "addresses": [str(a) for a in addresses],
-            "image_digest": _as_str(entry.get("image_digest") or entry.get("image")),
+            "service": _as_str(entry.get("service")) or (
+                _as_str(services[0].get("service")) if services else None),
+            "container_id": _as_str(entry.get("container_id") or entry.get("id")) or (
+                _as_str(services[0].get("container_id")) if services else None),
+            "addresses": list(dict.fromkeys(addresses)),
+            "image_digest": _as_str(entry.get("image_digest") or entry.get("image")) or (
+                _as_str(services[0].get("image_digest")) if services else None),
+            "services": [
+                {
+                    "service": _as_str(x.get("service") or x.get("container_name")),
+                    "container_id": _as_str(x.get("container_id")),
+                    "image_digest": _as_str(x.get("image_digest") or x.get("image")),
+                }
+                for x in services
+            ],
             "reset_digest_before": _as_str(entry.get("reset_digest_before")),
             "reset_digest_after": _as_str(entry.get("reset_digest_after")),
         }
@@ -273,19 +302,32 @@ def normalize_run_record(meta: Mapping[str, Any] | None) -> dict[str, Any]:
 
     reset: dict[str, dict[str, Any]] = {}
 
-    def _record(app: str, before: Any, after: Any) -> None:
+    def _record(app: str, before: Any, after: Any, ok: Any = None) -> None:
         before, after = _as_str(before), _as_str(after)
-        if before is None and after is None:
+        if before is None and after is None and ok is None:
             return
         reset[app] = {
             "before": before,
             "after": after,
             # None, not False, when one side is missing: unknown is not a mismatch.
             "match": (before == after) if (before and after) else None,
+            "ok": None if ok is None else bool(ok),
         }
 
     for key in _RESET_MAP_KEYS:
         candidate = meta.get(key)
+        if isinstance(candidate, (list, tuple)):
+            # What the harness writes: one entry per app, comparing the digest it
+            # read after resetting against the seeded reference. Same question as
+            # before/after -- did the target come back to its seeded state -- asked
+            # in the other direction.
+            for entry in candidate:
+                if isinstance(entry, Mapping) and entry.get("app"):
+                    _record(str(entry["app"]),
+                            entry.get("reference_digest") or entry.get("before"),
+                            entry.get("state_digest") or entry.get("after"),
+                            ok=entry.get("ok"))
+            continue
         if not isinstance(candidate, Mapping):
             continue
         if any(k in candidate for k in ("before", "after")):
@@ -293,18 +335,51 @@ def normalize_run_record(meta: Mapping[str, Any] | None) -> dict[str, Any]:
         else:
             for app, entry in candidate.items():
                 if isinstance(entry, Mapping):
-                    _record(str(app), entry.get("before"), entry.get("after"))
+                    _record(str(app), entry.get("before"), entry.get("after"),
+                            ok=entry.get("ok"))
     _record("*", meta.get("reset_digest_before"), meta.get("reset_digest_after"))
     for app, entry in containers.items():
         _record(app, entry["reset_digest_before"], entry["reset_digest_after"])
 
     matches = [r["match"] for r in reset.values() if r["match"] is not None]
+    matches += [r["ok"] for r in reset.values() if r["match"] is None and r["ok"] is not None]
+
+    raw_mode = meta.get("scan_mode")
+    scan_mode: dict[str, Any] | None = None
+    if isinstance(raw_mode, Mapping):
+        scan_mode = {
+            "mode": _as_str(raw_mode.get("mode")),
+            "active": (None if raw_mode.get("active") is None else bool(raw_mode["active"])),
+            "reason": _as_str(raw_mode.get("reason")),
+        }
+    elif raw_mode:
+        scan_mode = {"mode": _as_str(raw_mode), "active": None, "reason": None}
+
+    caveats = [str(c) for c in (meta.get("caveats") or []) if c]
+
+    requests = meta.get("requests")
+    requests_block = None
+    if isinstance(requests, Mapping):
+        requests_block = {
+            "total": requests.get("total"),
+            "by_app": dict(requests.get("by_app") or {}),
+            "counted_by": _as_str(requests.get("counted_by")),
+        }
+    elif meta.get("requests_observed") is not None:
+        requests_block = {"total": meta["requests_observed"], "by_app": {}, "counted_by": None}
+
     return {
         "containers": containers,
         "container_map_available": bool(containers),
         "images": dict(sorted(images.items())),
+        # The tool's own image, which is not a target image and must not be mixed in.
+        "tool_image": _as_str(meta.get("image")),
+        "tool_image_digest": _as_str(meta.get("image_digest")),
         "reset_digests": dict(sorted(reset.items())),
         "reset_consistent": (all(matches) if matches else None),
+        "scan_mode": scan_mode,
+        "caveats": caveats,
+        "requests": requests_block,
     }
 
 
@@ -349,6 +424,29 @@ def _as_text(value: Any, *keys: str) -> str | None:
         return _as_text(value[0], *keys) if value else None
     text = str(value).strip()
     return text or None
+
+
+def host_app_index(stream: "EventStream") -> dict[str, str]:
+    """Host header -> app, observed on the wire.
+
+    A tool's findings carry the hostname it was pointed at (``press01:8000``), which
+    is generated per deployment from BENCH_DEPLOY_SEED and appears in no catalog or
+    inventory. The collector, however, saw both the Host header and the app that
+    served it, so the mapping is a fact of the run rather than a convention: without
+    it a scanner's correct detection cannot be matched to the flaw it found, which
+    is the difference between a true positive and a published false one.
+
+    A host serving two apps is dropped rather than guessed at.
+    """
+    seen: dict[str, set[str]] = {}
+    for ev in stream.events:
+        if not isinstance(ev, HttpRequestEvent) or ev.synthetic or not ev.app or not ev.host:
+            continue
+        host = str(ev.host).strip().lower()
+        for key in {host, host.split(":", 1)[0]}:
+            if key:
+                seen.setdefault(key, set()).add(ev.app)
+    return {host: next(iter(apps)) for host, apps in seen.items() if len(apps) == 1}
 
 
 def _as_bool(value: Any) -> bool:

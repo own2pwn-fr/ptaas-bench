@@ -1,0 +1,445 @@
+{
+  "schema": "ptaas-bench/run-record/1",
+  "run_id": "24e8683856e04100971860e406acfe41",
+  "tool": "zap",
+  "tool_version": "Found Java version 17.0.20",
+  "profile": "full",
+  "image": "ghcr.io/zaproxy/zaproxy:stable",
+  "image_digest": "ghcr.io/zaproxy/zaproxy@sha256:781a2bdaea47324e7bab583e2263f21d257b0aee61ed51521a5be45f5f5081ef",
+  "targets": [
+    "blog"
+  ],
+  "budget": {
+    "wall_clock_s": 2400,
+    "max_requests": null,
+    "grace_s": 30,
+    "poll_interval_s": 5.0
+  },
+  "budget_note": "The tool finished within its budget.",
+  "started_at": "2026-09-06T06:59:58+00:00",
+  "ended_at": "2026-09-06T07:07:30+00:00",
+  "duration_s": 451.76,
+  "stop_reason": "completed",
+  "error": null,
+  "scan_mode": {
+    "active": true,
+    "reason": "activeScan job present",
+    "mode": "active"
+  },
+  "caveats": [
+    "10 of 28 findings map to CWEs this corpus deliberately does not plant (see normalisation.out_of_catalog). They are unscoreable, not false positives."
+  ],
+  "requests_observed": 14328,
+  "requests": {
+    "total": 14328,
+    "by_app": {
+      "blog": 14215
+    },
+    "counted_by": "collector http_request events for this run, excluding traffic the platform generated itself (classified by source address)"
+  },
+  "collector": {
+    "run_id": "24e8683856e04100971860e406acfe41",
+    "started_at": "2026-09-06T07:00:35.022589+00:00",
+    "closed_at": "2026-09-06T07:07:22.183970+00:00",
+    "event_count": 14381
+  },
+  "harness": {
+    "commit": "047767558d601ee1896738f690b66fec5aedf617",
+    "python": "3.14.2",
+    "host": "Linux-6.17.11-300.fc43.x86_64-x86_64-with-glibc2.42",
+    "argv": [
+      "runners/orchestrate.py",
+      "--tool",
+      "zap",
+      "--app",
+      "blog",
+      "--profile",
+      "full",
+      "--budget",
+      "2400"
+    ],
+    "user": "me"
+  },
+  "preflight": [
+    {
+      "name": "dev-profile",
+      "ok": true,
+      "indeterminate": false,
+      "detail": "none of ['admin-devtap', 'blog-devtap', 'corp-devtap', 'edge-devtap', 'intranet-devtap', 'legacy-devtap'] are running"
+    },
+    {
+      "name": "published-ports",
+      "ok": true,
+      "indeterminate": false,
+      "detail": "nothing on bench-public publishes a host port"
+    },
+    {
+      "name": "credentials-live:blog",
+      "ok": false,
+      "indeterminate": true,
+      "detail": "/usr/local/bin/state-reset --emit-credentials did not answer with a users block (no users block in the output: 'state 594de9ba276e7b6b documents=295 accounts=12 articles=28 assets=60 authors=8 comments=86 drafts=18 issues=6 plugins=6 stats=28 subscribers=36 topics=7'). The committed file is being trusted and it belongs to one DEPLOY_SEED; if it is the wrong one, the session verification before the run will fail and stop the run there instead. Note that a target which does not implement the flag has just been reset by this call."
+    },
+    {
+      "name": "credentials:blog",
+      "ok": true,
+      "indeterminate": false,
+      "detail": "/home/me/own2pwn/ptaas-bench/targets/blog/bench-credentials.yaml"
+    },
+    {
+      "name": "credentials-users:blog",
+      "ok": true,
+      "indeterminate": false,
+      "detail": "roles: user, other-user, admin"
+    },
+    {
+      "name": "internal-name:blog",
+      "ok": true,
+      "indeterminate": false,
+      "detail": "'press01' resolves on both networks and blog-web offers no platform-side-only alias; the harness pins its connections to the internal address instead."
+    },
+    {
+      "name": "name-ambiguity:blog",
+      "ok": true,
+      "indeterminate": false,
+      "detail": "['press01'] resolve on both bench-public and bench-internal; the harness pins its own connections to the internal address, but anything connecting by name gets whichever interface the resolver returns, and the interface decides whether the traffic is scored as the tool's."
+    },
+    {
+      "name": "dns:blog",
+      "ok": true,
+      "indeterminate": false,
+      "detail": "press01 -> ['10.88.0.2']"
+    },
+    {
+      "name": "reachable:blog",
+      "ok": true,
+      "indeterminate": false,
+      "detail": "http://press01:8000 answered HTTP 200"
+    }
+  ],
+  "url_source": {
+    "blog": "/home/me/own2pwn/ptaas-bench/targets/blog/bench-credentials.yaml"
+  },
+  "reset": [
+    {
+      "app": "blog",
+      "ok": true,
+      "state_digest": "state 594de9ba276e7b6b documents=295 accounts=12 articles=28 assets=60 authors=8 comments=86 drafts=18 issues=6 plugins=6 stats=28 subscribers=36 topics=7",
+      "reference_digest": "state 594de9ba276e7b6b documents=295 accounts=12 articles=28 assets=60 authors=8 comments=86 drafts=18 issues=6 plugins=6 stats=28 subscribers=36 topics=7",
+      "duration_s": 11.39,
+      "checks": [
+        {
+          "name": "restarted:blog-web",
+          "ok": true,
+          "detail": "StartedAt '2026-09-06T06:57:59.498588307Z' -> '2026-09-06T07:00:01.074074906Z'"
+        },
+        {
+          "name": "restarted:blog-documents",
+          "ok": true,
+          "detail": "StartedAt '2026-09-06T06:57:58.782008927Z' -> '2026-09-06T07:00:00.64376308Z'"
+        },
+        {
+          "name": "restarted:blog-cache",
+          "ok": true,
+          "detail": "StartedAt '2026-09-06T06:57:58.731037766Z' -> '2026-09-06T07:00:00.724368046Z'"
+        },
+        {
+          "name": "health",
+          "ok": true,
+          "detail": "blog-web=healthy, blog-documents=healthy, blog-cache=healthy"
+        },
+        {
+          "name": "reset_command",
+          "ok": true,
+          "detail": "exit 0"
+        },
+        {
+          "name": "digest_printed",
+          "ok": true,
+          "detail": "stdout 'state 594de9ba276e7b6b documents=295 accounts=12 articles=28 assets=60 authors=8 comments=86 drafts=18 issues=6 plugins=6 stats=28 subscribers=36 topics=7'"
+        },
+        {
+          "name": "digest_matches_reference",
+          "ok": true,
+          "detail": "expected 'state 594de9ba276e7b6b documents=295 accounts=12 articles=28 assets=60 authors=8 comments=86 drafts=18 issues=6 plugins=6 stats=28 subscribers=36 topics=7', got 'state 594de9ba276e7b6b documents=295 accounts=12 articles=28 assets=60 authors=8 comments=86 drafts=18 issues=6 plugins=6 stats=28 subscribers=36 topics=7'"
+        }
+      ]
+    }
+  ],
+  "addresses": {
+    "blog": {
+      "app": "blog",
+      "addresses": [
+        "10.77.0.7",
+        "10.88.0.2",
+        "10.77.0.4",
+        "10.77.0.6"
+      ],
+      "services": [
+        {
+          "service": "blog-web",
+          "container_id": "2c444a40fe58710c581fd14831033ecdc90d5f69d73b9c5592627b14eea6668e",
+          "container_name": "blog-web",
+          "image": "platform-edge-blog-web",
+          "image_id": "sha256:0b377f8be5e5a82896e4cf3872ed48c28b02751fa12b39821f1da1f815d38603",
+          "image_digest": "platform-edge-blog-web@sha256:0b377f8be5e5a82896e4cf3872ed48c28b02751fa12b39821f1da1f815d38603",
+          "addresses": [
+            {
+              "network": "bench-internal",
+              "ip": "10.77.0.7"
+            },
+            {
+              "network": "bench-public",
+              "ip": "10.88.0.2"
+            }
+          ],
+          "started_at": "2026-09-06T07:00:01.074074906Z"
+        },
+        {
+          "service": "blog-documents",
+          "container_id": "25361ddb5b308ca01bbe3768ceebb2e814cc1695b97d20f1eac6763be54668be",
+          "container_name": "blog-documents",
+          "image": "mongo:7.0.14",
+          "image_id": "sha256:0032d2ca20db5fa34926f196c8a43b74e34ed239a7f2453ff1505b6f12ba8ea6",
+          "image_digest": "mongo@sha256:0032d2ca20db5fa34926f196c8a43b74e34ed239a7f2453ff1505b6f12ba8ea6",
+          "addresses": [
+            {
+              "network": "bench-internal",
+              "ip": "10.77.0.4"
+            }
+          ],
+          "started_at": "2026-09-06T07:00:00.64376308Z"
+        },
+        {
+          "service": "blog-cache",
+          "container_id": "a535889f7e11224f13c55789289d0f82b804cf5ab1d2266bfe9915b885da3bdf",
+          "container_name": "blog-cache",
+          "image": "redis:7.4.1-alpine",
+          "image_id": "sha256:c1e88455c85225310bbea54816e9c3f4b5295815e6dbf80c34d40afc6df28275",
+          "image_digest": "redis@sha256:c1e88455c85225310bbea54816e9c3f4b5295815e6dbf80c34d40afc6df28275",
+          "addresses": [
+            {
+              "network": "bench-internal",
+              "ip": "10.77.0.6"
+            }
+          ],
+          "started_at": "2026-09-06T07:00:00.724368046Z"
+        }
+      ],
+      "state_digest_before": "state 594de9ba276e7b6b documents=295 accounts=12 articles=28 assets=60 authors=8 comments=86 drafts=18 issues=6 plugins=6 stats=28 subscribers=36 topics=7",
+      "state_digest_after": "state 594de9ba276e7b6b documents=295 accounts=12 articles=28 assets=60 authors=8 comments=86 drafts=18 issues=6 plugins=6 stats=28 subscribers=36 topics=7"
+    }
+  },
+  "target_topology": {
+    "blog": {
+      "app": "blog",
+      "addresses": [
+        "10.77.0.7",
+        "10.88.0.2",
+        "10.77.0.4",
+        "10.77.0.6"
+      ],
+      "services": [
+        {
+          "service": "blog-web",
+          "container_id": "2c444a40fe58710c581fd14831033ecdc90d5f69d73b9c5592627b14eea6668e",
+          "container_name": "blog-web",
+          "image": "platform-edge-blog-web",
+          "image_id": "sha256:0b377f8be5e5a82896e4cf3872ed48c28b02751fa12b39821f1da1f815d38603",
+          "image_digest": "platform-edge-blog-web@sha256:0b377f8be5e5a82896e4cf3872ed48c28b02751fa12b39821f1da1f815d38603",
+          "addresses": [
+            {
+              "network": "bench-internal",
+              "ip": "10.77.0.7"
+            },
+            {
+              "network": "bench-public",
+              "ip": "10.88.0.2"
+            }
+          ],
+          "started_at": "2026-09-06T07:00:01.074074906Z"
+        },
+        {
+          "service": "blog-documents",
+          "container_id": "25361ddb5b308ca01bbe3768ceebb2e814cc1695b97d20f1eac6763be54668be",
+          "container_name": "blog-documents",
+          "image": "mongo:7.0.14",
+          "image_id": "sha256:0032d2ca20db5fa34926f196c8a43b74e34ed239a7f2453ff1505b6f12ba8ea6",
+          "image_digest": "mongo@sha256:0032d2ca20db5fa34926f196c8a43b74e34ed239a7f2453ff1505b6f12ba8ea6",
+          "addresses": [
+            {
+              "network": "bench-internal",
+              "ip": "10.77.0.4"
+            }
+          ],
+          "started_at": "2026-09-06T07:00:00.64376308Z"
+        },
+        {
+          "service": "blog-cache",
+          "container_id": "a535889f7e11224f13c55789289d0f82b804cf5ab1d2266bfe9915b885da3bdf",
+          "container_name": "blog-cache",
+          "image": "redis:7.4.1-alpine",
+          "image_id": "sha256:c1e88455c85225310bbea54816e9c3f4b5295815e6dbf80c34d40afc6df28275",
+          "image_digest": "redis@sha256:c1e88455c85225310bbea54816e9c3f4b5295815e6dbf80c34d40afc6df28275",
+          "addresses": [
+            {
+              "network": "bench-internal",
+              "ip": "10.77.0.6"
+            }
+          ],
+          "started_at": "2026-09-06T07:00:00.724368046Z"
+        }
+      ],
+      "state_digest_before": "state 594de9ba276e7b6b documents=295 accounts=12 articles=28 assets=60 authors=8 comments=86 drafts=18 issues=6 plugins=6 stats=28 subscribers=36 topics=7",
+      "state_digest_after": "state 594de9ba276e7b6b documents=295 accounts=12 articles=28 assets=60 authors=8 comments=86 drafts=18 issues=6 plugins=6 stats=28 subscribers=36 topics=7"
+    }
+  },
+  "address_map_accepted_by_collector": true,
+  "preparation": [],
+  "browser": {
+    "declared": true,
+    "reason": "spiderAjax runs firefox-headless on every profile",
+    "binary_detected": "/usr/bin/firefox",
+    "probe": "ok",
+    "catalog_entries_requiring_js": {
+      "blog": 20
+    }
+  },
+  "synthetic_traffic": {
+    "rule": "classified by socket peer address, never by a header",
+    "harness_client_service": "resolver",
+    "harness_transport": "exec",
+    "note": "An implausibly low event count for the tool is most often traffic being classified as the platform's own. Check the collector's TELEMETRY_SYNTHETIC_CIDRS against the addresses in target_topology, and /v1/stats discarded_idle for events that arrived with no run open.",
+    "collector_stats": {
+      "active_run": null,
+      "runs": 43,
+      "events_by_type": {
+        "signal": 729,
+        "oob": 299,
+        "http_request": 17580,
+        "correlation": 52
+      },
+      "events_total": 18660,
+      "synthetic_events": 2937,
+      "dropped": 438,
+      "dropped_detail": {
+        "invalid": 10,
+        "over_batch": 0,
+        "queue_overflow": 0,
+        "write_error": 428
+      },
+      "synthetic_by_source": 0,
+      "signals_without_peer": 16,
+      "synthetic_cidrs": [
+        "10.77.0.5/32"
+      ],
+      "correlations": {
+        "pending": 0,
+        "registered": 53,
+        "expired": 53,
+        "overflowed": 0,
+        "ttl": 120.0
+      },
+      "discarded_idle": 17898,
+      "received": 36986,
+      "written": 18660,
+      "queue_depth": 0
+    }
+  },
+  "auth": {
+    "blog": {
+      "app": "blog",
+      "verified": true,
+      "cookie_names": [
+        "ng_session"
+      ],
+      "header_names": [],
+      "detail": "json login at http://press01:8000/api/auth/session; verified against the login response -> HTTP 200"
+    }
+  },
+  "invocations": [
+    {
+      "name": "blog",
+      "app": "blog",
+      "argv": [
+        "docker",
+        "run",
+        "-d",
+        "--name",
+        "scan-zap-blog-24e86838",
+        "--network",
+        "bench-public",
+        "-v",
+        "/home/me/own2pwn/ptaas-bench/results/runs/24e8683856e04100971860e406acfe41/raw:/work/raw",
+        "-v",
+        "/home/me/own2pwn/ptaas-bench/results/runs/24e8683856e04100971860e406acfe41/conf:/work/conf:ro",
+        "-e",
+        "ZAP_USER=c.duchesne@cranleighobserver.com",
+        "-e",
+        "ZAP_PASS=<redacted>",
+        "ghcr.io/zaproxy/zaproxy:stable",
+        "zap.sh",
+        "-cmd",
+        "-silent",
+        "-autorun",
+        "/work/conf/zap-blog.yaml"
+      ],
+      "image": "ghcr.io/zaproxy/zaproxy:stable",
+      "image_digest": "ghcr.io/zaproxy/zaproxy@sha256:781a2bdaea47324e7bab583e2263f21d257b0aee61ed51521a5be45f5f5081ef",
+      "container_id": "e52857b657505cece5b40d037313d23f2a02dd1ed0c16bf240939e3ee9d0113c",
+      "started_at": "2026-09-06T07:00:36+00:00",
+      "ended_at": "2026-09-06T07:07:21+00:00",
+      "elapsed_s": 404.26,
+      "exit_code": 0,
+      "stop_reason": "completed",
+      "requests_at_start": 0,
+      "requests_at_end": 14380,
+      "budget_share_s": 2399.99999472301,
+      "artifacts_present": {
+        "zap-blog.json": true
+      },
+      "error": null,
+      "requests": 14380
+    }
+  ],
+  "events": {
+    "file": "events.jsonl",
+    "events": 14216,
+    "by_type": {
+      "http_request": 14215,
+      "signal": 1
+    },
+    "by_app": {
+      "blog": 14216
+    },
+    "requests_by_app": {
+      "blog": 14215
+    },
+    "out_of_scope": 165,
+    "out_of_scope_file": "events-out-of-scope.jsonl",
+    "last_seq": 14809
+  },
+  "normalisation": {
+    "cwe_map_version": 1,
+    "findings": 28,
+    "unmapped": 3,
+    "findings_file": "findings.json",
+    "unmapped_file": "unmapped.json",
+    "scoreable_findings": 18,
+    "unscoreable_findings": 10,
+    "out_of_catalog": {
+      "693": {
+        "reason": "Protection mechanism failure -- missing X-Content-Type-Options / CSP / charset. Real, but no catalog class plants it; the corpus tests exploitation, not header hygiene.",
+        "findings": 10
+      }
+    }
+  },
+  "score": {
+    "skipped": "bench not on PATH",
+    "command": [
+      "bench",
+      "score",
+      "--run",
+      "/home/me/own2pwn/ptaas-bench/results/runs/24e8683856e04100971860e406acfe41"
+    ]
+  }
+}

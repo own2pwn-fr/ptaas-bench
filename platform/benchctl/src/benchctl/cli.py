@@ -24,6 +24,7 @@ from .catalog import Catalog, Issue, coverage_stats, find_repo_root, load_catalo
 from .events import (
     EventStream,
     address_index,
+    host_app_index,
     fetch_events,
     load_events,
     normalize_run_record,
@@ -104,6 +105,26 @@ def cmd_validate(args: argparse.Namespace) -> int:
 # bench score
 # --------------------------------------------------------------------------- #
 
+_EVENT_FILE_NAMES = ("events.jsonl", "events.ndjson", "events.json")
+
+
+def _run_directory(run: str, root: Path) -> Path | None:
+    """`bench score --run` accepts a run directory as well as a run id.
+
+    That is how the harness invokes it -- it passes the directory it just wrote --
+    and a run directory already holds everything scoring needs, so making the reader
+    look for run.json, events.jsonl and findings.json itself removes three chances
+    for the two sides to disagree about where a file lives.
+    """
+    candidate = Path(run)
+    if candidate.is_dir():
+        return candidate
+    for parent in (root / "results" / "runs", root / "results"):
+        if (parent / run).is_dir():
+            return parent / run
+    return None
+
+
 def cmd_score(args: argparse.Namespace) -> int:
     catalog, inventories = _load_with_inventories(args)
     if catalog.errors and not args.ignore_catalog_errors:
@@ -114,19 +135,35 @@ def cmd_score(args: argparse.Namespace) -> int:
         )
         return 2
 
-    if args.events:
-        stream, meta = load_events(args.events)
+    run_dir = _run_directory(args.run, _root(args))
+    run_id = run_dir.name if run_dir is not None else args.run
+    events_path = args.events
+    record_path = args.run_record
+    findings_path = args.findings
+    if run_dir is not None:
+        if not events_path:
+            events_path = next(
+                (str(run_dir / name) for name in _EVENT_FILE_NAMES if (run_dir / name).is_file()),
+                None,
+            )
+        if not record_path and (run_dir / "run.json").is_file():
+            record_path = str(run_dir / "run.json")
+        if not findings_path and (run_dir / "findings.json").is_file():
+            findings_path = str(run_dir / "findings.json")
+
+    if events_path:
+        stream, meta = load_events(events_path)
     else:
-        stream, meta = fetch_events(args.collector, args.run)
+        stream, meta = fetch_events(args.collector, run_id)
     meta = dict(meta)
-    if args.run_record:
+    if record_path:
         # The collector's Run object, saved next to the events. It carries the tool,
         # the targets and the provenance an events-only export loses, and a score
         # document that cannot say what produced it is not much use to anyone.
-        record = json.loads(Path(args.run_record).read_text(encoding="utf-8"))
+        record = json.loads(Path(record_path).read_text(encoding="utf-8"))
         if isinstance(record, dict):
             meta.update(record.get("run") if isinstance(record.get("run"), dict) else record)
-    meta.setdefault("run_id", args.run)
+    meta.setdefault("run_id", run_id)
     if args.tool:
         meta["tool"] = args.tool
     if args.tool_version:
@@ -145,19 +182,23 @@ def cmd_score(args: argparse.Namespace) -> int:
     # else: score_run derives the scope from the events and says so.
 
     findings_block = None
-    if args.findings:
+    if findings_path:
         # The run's container map already says which address and service name belong
         # to which app, so findings that cite a container IP resolve without anyone
         # writing a mapping by hand. An explicit --app-map still wins.
         record = normalize_run_record(meta)
+        # Three sources, weakest first: the containers' addresses, the Host headers
+        # the collector actually saw (which is the only thing that knows the
+        # per-deployment hostname a tool was pointed at), then the operator's map.
         app_map = dict(address_index(record["containers"]))
+        app_map.update(host_app_index(stream.scored()))
         if args.app_map:
             app_map.update(json.loads(Path(args.app_map).read_text(encoding="utf-8")))
         preliminary = score_run(catalog, stream, run=meta, apps=apps,
                                 scope_source=scope_source, inventories=inventories)
         findings_block = classify_findings(
             catalog,
-            load_findings(args.findings),
+            load_findings(findings_path),
             outcomes=preliminary["vulns"],
             app_map=app_map,
             apps=preliminary["scope"]["apps"],
@@ -168,7 +209,10 @@ def cmd_score(args: argparse.Namespace) -> int:
     doc = score_run(catalog, stream, run=meta, findings=findings_block, apps=apps,
                     scope_source=scope_source, inventories=inventories)
 
-    written = _write_score(doc, args.out, _root(args), str(args.run))
+    # Default output is the run directory itself when there is one: the score
+    # belongs next to the evidence it was computed from.
+    out_target = args.out or (str(run_dir) if run_dir is not None else None)
+    written = _write_score(doc, out_target, _root(args), str(run_id))
     out = written[0]
 
     if args.json:
@@ -246,7 +290,9 @@ def _write_score(doc: dict[str, Any], out: str | None, root: Path, run_id: str) 
 def _resolve_run(token: str, root: Path, results_dir: Path) -> Path:
     candidates = [
         Path(token),
+        Path(token) / "score.json",          # a run directory, as the harness passes it
         results_dir / token,
+        results_dir / token / "score.json",
         results_dir / "runs" / token / "score.json",
         root / "results" / "runs" / token / "score.json",
     ]
@@ -343,7 +389,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_validate.set_defaults(func=cmd_validate)
 
     p_score = sub.add_parser("score", help="score one run against the catalog")
-    p_score.add_argument("--run", required=True, help="run id")
+    p_score.add_argument("--run", required=True,
+                         help="run id, or a run directory holding run.json / events.jsonl / findings.json")
     source = p_score.add_mutually_exclusive_group()
     source.add_argument("--collector", default=_DEFAULT_COLLECTOR, help="collector base URL")
     source.add_argument("--events", help="events JSON export instead of the collector")
