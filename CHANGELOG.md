@@ -38,9 +38,11 @@ no benchmark run has been executed yet, and no baseline is published.
 
 ### Fixed — first bring-up
 
-Seven of the eight targets have now been built, started and replayed against the
-collector. 150 of the 169 entries fire their own counter exactly once, each carrying a
-peer address, and every reset returns the same digest before and after a full replay.
+All eight targets have now been built, started and replayed against the collector. 166
+of the 169 entries fire their own counter exactly once, each carrying a peer address,
+and every reset returns the same digest before and after a full replay. The three that
+do not are recorded under Known limitations below.
+
 What that first run turned up, beyond the per-target defects recorded in the commit
 history, was three faults that would have corrupted a published comparison rather than
 merely breaking a target:
@@ -86,10 +88,6 @@ merely breaking a target:
 
 ### Known limitations
 
-- `intranet` has not been brought up. Its image injects the observability package
-  through a second build context, which requires BuildKit, and the build plugin is
-  unavailable on the machine used for this bring-up. Nothing about the target is known
-  to be wrong; it is simply unbuilt, and its 16 entries are unverified.
 - **BENCH-EDGE-0003** (stream-downgrade desync) does not reproduce on the pinned stack
   and is left unfired rather than propped up. Neither hop capable of the downgrade will
   forward a declared length that contradicts the payload; the measurements are in the
@@ -98,6 +96,6 @@ merely breaking a target:
   violation, so the replay cannot prove them from the container it runs in. The sinks
   are wired and correctly gated; a tool that drives a browser can score them.
 - `crlf_injection` is planted nowhere, so taxonomy coverage is 115/116. See the
-  withdrawal below.
+  withdrawal recorded under Removed above.
 - No tool has been benchmarked, so `results/` is empty and the comparison tables in the
   README are placeholders.
