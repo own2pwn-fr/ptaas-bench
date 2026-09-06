@@ -17,11 +17,12 @@ run arbitrary commands by a crafted app name is not a benchmark harness.
 from __future__ import annotations
 
 import json
+import os
 import logging
 import shlex
 import subprocess
 import time
-from collections.abc import Sequence
+from collections.abc import Sequence, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -90,7 +91,14 @@ class DockerClient:
 
     # -- seam -------------------------------------------------------------------
 
-    def _exec(self, argv: Sequence[str], *, timeout: float | None = 300, stdin: str | None = None) -> ExecResult:
+    def _exec(
+        self,
+        argv: Sequence[str],
+        *,
+        timeout: float | None = 300,
+        stdin: str | None = None,
+        env: Mapping[str, str] | None = None,
+    ) -> ExecResult:
         argv = list(argv)
         if self.dry_run:
             log.info("[dry-run] %s", shlex.join(argv))
@@ -99,6 +107,7 @@ class DockerClient:
         try:
             proc = subprocess.run(
                 argv,
+                env=({**os.environ, **env} if env else None),
                 input=stdin,
                 capture_output=True,
                 text=True,
@@ -139,8 +148,24 @@ class DockerClient:
         return first[0].strip() if first else None
 
     def compose_config_json(self) -> str | None:
-        """`docker compose config --format json`, or None when it cannot be read."""
-        res = self._exec(self._compose_argv("config", "--format", "json"), timeout=120)
+        """`docker compose config --format json`, or None when it cannot be read.
+
+        Resolved with every profile enabled. Compose omits profiled services entirely
+        from an unprofiled `config`, so without this the merged model contains only the
+        platform and every question asked of it about a target is answered from a
+        document the target does not appear in. That produced a preflight refusal
+        stating a target's alias did not exist while the alias resolved and answered
+        200 -- a check that is wrong and fatal is worse than the advisory it replaced,
+        because it stops every run rather than merely misinforming one.
+
+        Enabling profiles here changes nothing about what runs: this reads the model,
+        it does not start anything.
+        """
+        res = self._exec(
+            self._compose_argv("config", "--format", "json"),
+            timeout=120,
+            env={"COMPOSE_PROFILES": "*"},
+        )
         return res.stdout if res.ok else None
 
     def compose_config(self) -> dict[str, Any] | None:
